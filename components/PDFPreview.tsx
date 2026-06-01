@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { AgreementData } from '../types';
 import { ShieldCheck, Printer, X, Download } from 'lucide-react';
@@ -16,29 +15,49 @@ interface AgreementContentProps {
 }
 
 const AgreementContent: React.FC<AgreementContentProps> = ({ agreement, id }) => (
-  <div className="px-10 pb-12 text-slate-900 bg-white leading-[1.5] text-[12pt] font-sans text-left w-[1024px] box-border" id={id} style={{ fontFamily: 'Arial, Helvetica, sans-serif', whiteSpace: 'normal', wordSpacing: 'normal' }}>
+  <div 
+    className="px-10 pb-12 leading-[1.5] text-[12pt] text-left w-[1024px] box-border" 
+    id={id} 
+    style={{ 
+      fontFamily: 'Arial, Helvetica, sans-serif', 
+      whiteSpace: 'normal', 
+      wordSpacing: 'normal',
+      backgroundColor: '#ffffff',
+      color: '#0f172a'
+    }}
+  >
     {/* Header */}
-    <div className="flex flex-col items-center text-center mb-8 pt-0 break-inside-avoid">
+    <div className="flex flex-col items-center text-center mb-8 pt-6 break-inside-avoid" style={{ borderBottom: '2px solid #0f172a', paddingBottom: '16px' }}>
       <div className="space-y-1 w-full flex flex-col items-center justify-center text-center">
-        <h1 className="text-2xl font-bold uppercase tracking-tight text-center w-full">KENYA DAIRY BOARD - KERICHO</h1>
-        <p className="text-lg font-bold text-center w-full">Ardhi House (Huduma Centre) 5th Floor, Wing B.</p>
-        <p className="text-lg font-bold text-center w-full">Tel: 0717997465 / 0734026367</p>
+        <h1 className="text-2xl font-bold uppercase tracking-tight text-center w-full" style={{ color: '#1e293b' }}>
+          KENYA DAIRY BOARD - KERICHO
+        </h1>
+        <p className="text-sm font-bold text-center w-full" style={{ color: '#475569' }}>
+          Ardhi House (Huduma Centre) 5th Floor, Wing B.
+        </p>
+        <p className="text-xs font-bold text-center w-full" style={{ color: '#94a3b8' }}>
+          Tel: 0717997465 / 0734026367
+        </p>
       </div>
-      <div className="w-full border-b border-slate-900 mt-4"></div>
-      <div className="w-full flex justify-center text-center">
-        <h2 className="text-lg font-bold mt-6 uppercase underline underline-offset-4 text-center">Payment Agreement Form – Consumer Safety Levy Arrears</h2>
-      </div>
+      <div className="w-full mt-4"></div>
+    </div>
+
+    {/* Document Title */}
+    <div className="w-full flex justify-center text-center mb-6">
+      <h2 className="text-lg font-bold mt-6 uppercase underline underline-offset-4 text-center" style={{ color: '#0f172a' }}>
+        Payment Agreement Form – Consumer Safety Levy Arrears
+      </h2>
     </div>
 
     <div className="space-y-4">
-      <p className="text-left">
+      <p className="text-left" style={{ color: '#1e293b' }}>
         This Payment Agreement is entered into on this <strong>{new Date(agreement.date).getDate()}</strong> day of 
         <strong> {new Date(agreement.date).toLocaleString('default', { month: 'long' })}</strong> 20<strong>{new Date(agreement.date).getFullYear().toString().slice(-2)}</strong> between:
       </p>
 
-      <div className="space-y-2 text-left">
+      <div className="space-y-2 text-left" style={{ color: '#1e293b' }}>
         <p><strong>The Kenya Dairy Board (hereafter referred to as “KDB”)</strong>, a state corporation established through an Act of Parliament; The Dairy Industry Act (Cap 336) Laws of Kenya and;</p>
-        <div className="pl-4 space-y-1">
+        <div className="pl-4 space-y-1" style={{ borderLeft: '2px solid #cbd5e1' }}>
           <p><strong>Dairy Business Operator (DBO) Name:</strong> {agreement.dboName}</p>
           <p><strong>Premise Name:</strong> {agreement.premiseName}</p>
           <p><strong>Regulatory Permit No:</strong> {agreement.permitNo}</p>
@@ -48,45 +67,58 @@ const AgreementContent: React.FC<AgreementContentProps> = ({ agreement, id }) =>
       </div>
 
       <section className="text-left">
-        <h3 className="font-bold uppercase mb-1">1. Purpose of Agreement</h3>
-        <p className="text-left">This agreement outlines the payment schedule for outstanding, undisputed levy arrears amounting to Kenya Shillings <strong>{agreement.totalArrearsWords}</strong> (KES <strong>{agreement.totalArrears.toLocaleString()}</strong>) owed by the above-named operator for the period of <strong>{agreement.arrearsPeriod}</strong>.</p>
-        <p className="mt-1"><strong>Debit Note No:</strong> {agreement.debitNoteNo}</p>
+        <h3 className="font-bold uppercase mb-1" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+          1. Purpose of Agreement
+        </h3>
+        <p className="text-left" style={{ color: '#1e293b', marginTop: '6px' }}>
+          This agreement outlines the payment schedule for outstanding, undisputed levy arrears amounting to Kenya Shillings <strong>{agreement.totalArrearsWords}</strong> (KES <strong>{agreement.totalArrears.toLocaleString()}</strong>) owed by the above-named operator for the period of <strong>{agreement.arrearsPeriod}</strong>.
+        </p>
+        <p className="mt-1" style={{ color: '#475569' }}><strong>Debit Note No:</strong> {agreement.debitNoteNo}</p>
       </section>
 
       <section className="text-left">
-        <h3 className="font-bold uppercase mb-2">2. Payment Schedule</h3>
-        <table className="w-full border-collapse border border-slate-900 text-left">
+        <h3 className="font-bold uppercase mb-2" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+          2. Payment Schedule
+        </h3>
+        <table 
+          className="w-full border-collapse text-left" 
+          style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid #475569', marginTop: '8px' }}
+        >
           <thead>
-            <tr className="bg-slate-50">
-              <th className="border border-slate-900 p-2 w-[10%] font-bold text-center">No.</th>
-              <th className="border border-slate-900 p-2 w-[40%] font-bold">CSL Period</th>
-              <th className="border border-slate-900 p-2 w-[25%] font-bold">Due Date</th>
-              <th className="border border-slate-900 p-2 w-[25%] font-bold text-right">Amount (KES)</th>
+            <tr style={{ backgroundColor: '#f8fafc' }}>
+              <th className="p-2 w-[10%] font-bold text-center" style={{ border: '1px solid #475569', color: '#0f172a' }}>No.</th>
+              <th className="p-2 w-[40%] font-bold" style={{ border: '1px solid #475569', color: '#0f172a' }}>CSL Period</th>
+              <th className="p-2 w-[25%] font-bold" style={{ border: '1px solid #475569', color: '#0f172a' }}>Due Date</th>
+              <th className="p-2 w-[25%] font-bold text-right" style={{ border: '1px solid #475569', color: '#0f172a' }}>Amount (KES)</th>
             </tr>
           </thead>
           <tbody>
             {agreement.installments.map((inst) => (
               <tr key={inst.no}>
-                <td className="border border-slate-900 p-2 text-center">{inst.no}</td>
-                <td className="border border-slate-900 p-2">{inst.period}</td>
-                <td className="border border-slate-900 p-2 font-bold">{inst.dueDate}</td>
-                <td className="border border-slate-900 p-2 text-right font-bold">{Number(inst.amount).toLocaleString()}</td>
+                <td className="p-2 text-center" style={{ border: '1px solid #475569', color: '#1e293b' }}>{inst.no}</td>
+                <td className="p-2" style={{ border: '1px solid #475569', color: '#1e293b' }}>{inst.period}</td>
+                <td className="p-2 font-bold" style={{ border: '1px solid #475569', color: '#1e293b' }}>{inst.dueDate}</td>
+                <td className="p-2 text-right font-bold" style={{ border: '1px solid #475569', color: '#1e293b' }}>{Number(inst.amount).toLocaleString()}</td>
               </tr>
             ))}
-            <tr className="bg-slate-50 font-bold">
-              <td colSpan={3} className="border border-slate-900 p-2 text-right">TOTAL ARREARS DUE:</td>
-              <td className="border border-slate-900 p-2 text-right underline underline-offset-2">KES {Number(agreement.totalArrears).toLocaleString()}</td>
+            <tr style={{ backgroundColor: '#f8fafc', fontWeight: 'bold' }}>
+              <td colSpan={3} className="p-2 text-right" style={{ border: '1px solid #475569', color: '#0f172a' }}>TOTAL ARREARS DUE:</td>
+              <td className="p-2 text-right underline underline-offset-2" style={{ border: '1px solid #475569', color: '#0f172a' }}>
+                KES {Number(agreement.totalArrears).toLocaleString()}
+              </td>
             </tr>
           </tbody>
         </table>
       </section>
 
-      <section className="space-y-1 text-left">
-        <h3 className="font-bold uppercase mb-1">3. Terms and Conditions</h3>
-        <p>a) The DBO acknowledges, agrees to, and does not dispute the levy amount indicated herein.</p>
+      <section className="space-y-1 text-left" style={{ fontSize: '10pt', color: '#334155', marginTop: '12px' }}>
+        <h3 className="font-bold uppercase mb-1 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+          3. Terms and Conditions
+        </h3>
+        <p style={{ marginTop: '6px' }}>a) The DBO acknowledges, agrees to, and does not dispute the levy amount indicated herein.</p>
         <p>b) Payments shall be made to the designated KDB Bank Account or via the E-Citizen Collection account as directed by KDB.</p>
         <p>c) The DBO shall submit proof of each payment immediately upon settlement.</p>
-        <p className="font-bold">d) Failure by the DBO to honor ANY installment within seven (7) days of its due date shall void this agreement and the entire outstanding balance shall become immediately due and payable in full.</p>
+        <p style={{ fontWeight: 'bold', color: '#0f172a' }}>d) Failure by the DBO to honor ANY installment within seven (7) days of its due date shall void this agreement and the entire outstanding balance shall become immediately due and payable in full.</p>
         <p>e) KDB reserves the right to initiate legal or enforcement action upon breach of this agreement.</p>
         <p>f) Applications for the renewal of any KDB-issued permit shall not be processed or approved while any part of this agreed-upon debt remains outstanding.</p>
         <p>g) This Agreement pertains only to the outstanding levy amount specified herein and does not constitute a waiver of any other regulatory requirements or obligations imposed on the DBO by KDB.</p>
@@ -99,25 +131,29 @@ const AgreementContent: React.FC<AgreementContentProps> = ({ agreement, id }) =>
       {/* Execution Blocks */}
       <div className="pt-6 flex justify-between space-x-8 text-left">
         <div className="flex-1 space-y-2">
-          <p className="font-bold border-b border-slate-900 pb-1">FOR: KENYA DAIRY BOARD</p>
-          <div className="space-y-1 min-h-[100px]">
-            <p><span className="text-[9px] font-bold uppercase text-slate-500">Name:</span> <span className="font-bold">{agreement.officialName || ''}</span></p>
-            <p><span className="text-[9px] font-bold uppercase text-slate-500">Title:</span> <span className="font-bold">Accounts Assistant</span></p>
+          <p className="font-bold pb-1" style={{ borderBottom: '1px solid #0f172a', color: '#0f172a' }}>
+            FOR: KENYA DAIRY BOARD
+          </p>
+          <div className="space-y-1.5 min-h-[100px]">
+            <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Name:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{agreement.officialName || ''}</span></p>
+            <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Title:</span> <span className="font-bold" style={{ color: '#0f172a' }}>Accounts Assistant</span></p>
             <div className="py-1 h-16 flex items-center">
               {agreement.officialSignature ? (
                 <img src={agreement.officialSignature} className="max-h-full" alt="KDB Signature" crossOrigin="anonymous" />
               ) : (
-                <div className="text-slate-300 italic text-xs">Awaiting Approval</div>
+                <div style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '12px' }}>Awaiting Approval</div>
               )}
             </div>
           </div>
         </div>
 
         <div className="flex-1 space-y-2">
-          <p className="font-bold border-b border-slate-900 pb-1">FOR DBO: {agreement.dboName}</p>
-          <div className="space-y-1 min-h-[100px]">
-            <p><span className="text-[9px] font-bold uppercase text-slate-500">Name:</span> <span className="font-bold">{agreement.clientName}</span></p>
-            <p><span className="text-[9px] font-bold uppercase text-slate-500">Title:</span> <span className="font-bold">{agreement.clientTitle}</span></p>
+          <p className="font-bold pb-1" style={{ borderBottom: '1px solid #0f172a', color: '#0f172a' }}>
+            FOR DBO: {agreement.dboName}
+          </p>
+          <div className="space-y-1.5 min-h-[100px]">
+            <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Name:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{agreement.clientName}</span></p>
+            <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Title:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{agreement.clientTitle}</span></p>
             <div className="py-1 h-16 flex items-center">
               <img src={agreement.clientSignature} className="max-h-full" alt="Operator Signature" crossOrigin="anonymous" />
             </div>
@@ -125,9 +161,13 @@ const AgreementContent: React.FC<AgreementContentProps> = ({ agreement, id }) =>
         </div>
       </div>
 
-      <div className="pt-8 flex justify-between items-end opacity-40">
-        <div className="text-[7px] font-mono">DOC_ID: {agreement.id.toUpperCase()} | GEN_TIME: {new Date().toISOString()}</div>
-        <div className="text-[9px] font-bold uppercase">Official Document</div>
+      <div className="pt-8 flex justify-between items-end" style={{ opacity: 0.5 }}>
+        <div className="text-[7.5px] font-mono" style={{ color: '#64748b' }}>
+          DOC_ID: {agreement.id.toUpperCase()} | GEN_TIME: {new Date().toISOString()}
+        </div>
+        <div className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>
+          Official Document
+        </div>
       </div>
     </div>
   </div>
