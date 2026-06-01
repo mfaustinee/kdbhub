@@ -25,8 +25,8 @@ export const PortalHub: React.FC<PortalHubProps> = ({
           Regulatory Compliance & Client Portal
         </p>
         <p className="max-w-xl mx-auto text-sm text-slate-500 font-medium leading-relaxed">
-          Welcome to the official digital service portal of the Kenya Dairy Board. 
-          Select a simplified regulatory pathway below to execute a legal levy payment agreement or formally submit a business cessation notice.
+          Welcome to the Kenya Dairy Board compliance support platform. 
+          Select a simplified regulatory pathway below to execute a structured levy payment agreement or formally submit a business cessation notice.
         </p>
       </div>
 
@@ -101,7 +101,7 @@ export const PortalHub: React.FC<PortalHubProps> = ({
         <div className="text-left">
           <span className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Security Certified</span>
           <p className="text-xs text-slate-500 font-semibold leading-relaxed">
-            All data transmissions are fully encrypted and securely logged. Access is audited under the provisions of the Kenya Dairy Industry Act (Cap 336).
+            All data transmissions are fully encrypted and securely logged.
           </p>
         </div>
       </div>

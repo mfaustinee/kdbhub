@@ -266,7 +266,7 @@ const App: React.FC = () => {
               </div>
               <div className="hidden sm:block">
                 <div className="flex items-center space-x-2">
-                  <span className="font-black text-xs uppercase tracking-widest text-slate-800">KDB Payments</span>
+                  <span className="font-black text-xs uppercase tracking-widest text-slate-800">KDB Hub</span>
                   <div className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full border ${isSyncing ? 'bg-amber-50 border-amber-100' : 'bg-emerald-50 border-emerald-100'}`}>
                     {isSyncing ? (
                       <Loader2 className="w-2.5 h-2.5 text-amber-500 animate-spin" />

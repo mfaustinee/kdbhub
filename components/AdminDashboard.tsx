@@ -256,7 +256,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const steps = [
       'Authenticating Credentials...',
       'Applying Digital Signature...',
-      'Generating Execution Certificate...',
+      'Generating Execution PDF...',
       'Finalizing Approval...'
     ];
 
@@ -792,7 +792,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
                   <button onClick={() => setShowClosurePreview(true)} className="flex items-center text-slate-600 font-black bg-slate-50 px-5 py-3 rounded-2xl text-[10px] uppercase tracking-widest hover:bg-slate-100">
-                    <FileSearch className="w-4 h-4 mr-2" /> View Certificate
+                    <FileSearch className="w-4 h-4 mr-2" /> View Notice PDF
                   </button>
                 </div>
 
@@ -893,7 +893,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               onClick={() => downloadClosurePDF(selectedClosure, 'closure-certificate-hidden')}
                               className="w-full py-4 bg-slate-900 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl shadow-lg hover:bg-slate-800 transition-all flex items-center justify-center"
                             >
-                              <Download className="w-4 h-4 mr-2" /> Download Certificate
+                              <Download className="w-4 h-4 mr-2" /> Download Notification PDF
                             </button>
                           )}
                         </div>
