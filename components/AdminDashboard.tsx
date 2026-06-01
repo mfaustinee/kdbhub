@@ -1093,13 +1093,39 @@ CREATE TABLE IF NOT EXISTS staff_config (
   officialsignature TEXT
 );
 
+CREATE TABLE IF NOT EXISTS closures (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  submittedat TEXT,
+  approvedat TEXT,
+  dboname TEXT,
+  permitno TEXT,
+  premisename TEXT,
+  permittype TEXT,
+  county TEXT,
+  subcounty TEXT,
+  location TEXT,
+  tel TEXT,
+  closuredate TEXT,
+  closurereason TEXT,
+  permitstatusintent TEXT,
+  declarationagreed BOOLEAN,
+  clientsignature TEXT,
+  clientname TEXT,
+  officialsignature TEXT,
+  officialname TEXT,
+  rejectionreason TEXT
+);
+
 -- Enable RLS and add policies for anonymous access if needed
 ALTER TABLE agreements ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON agreements FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE debtors ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON debtors FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE staff_config ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);`}
+CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);
+ALTER TABLE closures ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);`}
                               </pre>
                             </div>
                             <button 
@@ -1158,12 +1184,38 @@ CREATE TABLE IF NOT EXISTS staff_config (
   officialsignature TEXT
 );
 
+CREATE TABLE IF NOT EXISTS closures (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  submittedat TEXT,
+  approvedat TEXT,
+  dboname TEXT,
+  permitno TEXT,
+  premisename TEXT,
+  permittype TEXT,
+  county TEXT,
+  subcounty TEXT,
+  location TEXT,
+  tel TEXT,
+  closuredate TEXT,
+  closurereason TEXT,
+  permitstatusintent TEXT,
+  declarationagreed BOOLEAN,
+  clientsignature TEXT,
+  clientname TEXT,
+  officialsignature TEXT,
+  officialname TEXT,
+  rejectionreason TEXT
+);
+
 ALTER TABLE agreements ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON agreements FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE debtors ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON debtors FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE staff_config ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);`;
+CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);
+ALTER TABLE closures ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);`;
                                 navigator.clipboard.writeText(sql);
                                 alert("SQL copied to clipboard!");
                               }}
