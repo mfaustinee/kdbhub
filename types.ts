@@ -68,8 +68,11 @@ export interface ClosureNotificationData {
   declarationAgreed: boolean;
   clientSignature: string;
   clientName: string;
+  clientTitle?: string;
   officialSignature?: string;
   officialName?: string;
+  officialTitle?: string;
+  officialComments?: string;
   rejectionReason?: string;
 }
 

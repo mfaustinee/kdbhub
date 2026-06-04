@@ -322,8 +322,8 @@ export const DBService = {
         permitNo: '', premiseName: '', permitType: '', county: '',
         subCounty: '', location: '', tel: '', closureDate: '',
         closureReason: '', permitStatusIntent: '', declarationAgreed: false,
-        clientSignature: '', clientName: '', officialSignature: '',
-        officialName: '', rejectionReason: ''
+        clientSignature: '', clientName: '', clientTitle: '', officialSignature: '',
+        officialName: '', officialTitle: '', officialComments: '', rejectionReason: ''
       })) as ClosureNotificationData[];
       
       localStorage.setItem('kdb_closures_cache', JSON.stringify(closures));

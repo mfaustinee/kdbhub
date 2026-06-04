@@ -1,6 +1,32 @@
-
 import { jsPDF } from 'jspdf';
 import { AgreementData, ClosureNotificationData } from '../types';
+
+const sanitizeOklch = () => {
+  const stylesBackup: { element: HTMLStyleElement; text: string }[] = [];
+  try {
+    const styleElements = document.querySelectorAll('style');
+    styleElements.forEach((styleEl) => {
+      if (styleEl.textContent && styleEl.textContent.includes('oklch')) {
+        stylesBackup.push({ element: styleEl, text: styleEl.textContent });
+        // Replace oklch(...) with a standard color
+        const sanitized = styleEl.textContent.replace(/oklch\([^)]+\)/g, 'rgb(15, 23, 42)');
+        styleEl.textContent = sanitized;
+      }
+    });
+  } catch (e) {
+    console.warn("Failed to sanitize oklch styles:", e);
+  }
+
+  return () => {
+    stylesBackup.forEach(({ element, text }) => {
+      try {
+        element.textContent = text;
+      } catch (e) {
+        console.warn("Failed to restore oklch style:", e);
+      }
+    });
+  };
+};
 
 export const downloadAgreementPDF = async (agreement: AgreementData, elementId: string = 'formal-agreement') => {
   const element = document.getElementById(elementId);
@@ -8,6 +34,8 @@ export const downloadAgreementPDF = async (agreement: AgreementData, elementId: 
     console.error("Element not found for PDF generation");
     return;
   }
+
+  const restoreStyles = sanitizeOklch();
 
   try {
     // Scroll to top to ensure full capture
@@ -27,6 +55,7 @@ export const downloadAgreementPDF = async (agreement: AgreementData, elementId: 
     await pdf.html(element, {
       callback: function (doc) {
         doc.save(`KDB_Agreement_${agreement.dboName.replace(/\s+/g, '_')}.pdf`);
+        restoreStyles();
       },
       x: 5,
       y: 2,
@@ -48,6 +77,7 @@ export const downloadAgreementPDF = async (agreement: AgreementData, elementId: 
     });
 
   } catch (error) {
+    restoreStyles();
     console.error("Detailed PDF Error:", error);
     alert(`Failed to generate PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -59,6 +89,8 @@ export const downloadClosurePDF = async (closure: ClosureNotificationData, eleme
     console.error("Element not found for PDF generation");
     return;
   }
+
+  const restoreStyles = sanitizeOklch();
 
   try {
     window.scrollTo(0, 0);
@@ -77,6 +109,7 @@ export const downloadClosurePDF = async (closure: ClosureNotificationData, eleme
     await pdf.html(element, {
       callback: function (doc) {
         doc.save(`KDB_Cessation_Notice_${closure.permitNo.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
+        restoreStyles();
       },
       x: 5,
       y: 2,
@@ -98,6 +131,7 @@ export const downloadClosurePDF = async (closure: ClosureNotificationData, eleme
     });
 
   } catch (error) {
+    restoreStyles();
     console.error("Detailed closure PDF Error:", error);
     alert(`Failed to generate PDF: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
