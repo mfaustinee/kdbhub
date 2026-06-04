@@ -149,7 +149,7 @@ const App: React.FC = () => {
   const handleClosureSubmit = async (data: ClosureNotificationData) => {
     setIsSyncing(true);
     try {
-      const submission = { ...data, submittedAt: new Date().toISOString() };
+      const submission = { ...data, submittedAt: data.submittedAt || new Date().toISOString() };
       await DBService.saveClosure(submission);
       
       const updated = await DBService.getClosures();
@@ -187,10 +187,17 @@ const App: React.FC = () => {
     setIsSyncing(false);
   };
 
-  const handleClosureAction = async (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string }) => {
+  const handleClosureAction = async (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string; title?: string; comments?: string }) => {
     setIsSyncing(true);
     const updates: Partial<ClosureNotificationData> = action === 'approve'
-      ? { status: 'approved', officialSignature: adminData?.signature, officialName: adminData?.name, approvedAt: new Date().toISOString() }
+      ? { 
+          status: 'approved', 
+          officialSignature: adminData?.signature, 
+          officialName: adminData?.name, 
+          officialTitle: adminData?.title,
+          officialComments: adminData?.comments,
+          approvedAt: new Date().toISOString() 
+        }
       : { status: 'rejected', rejectionReason: adminData?.reason };
 
     await DBService.updateClosure(id, updates);

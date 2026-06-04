@@ -12,7 +12,7 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
   const [formData, setFormData] = useState<Partial<ClosureNotificationData>>({
     id: 'CLO-' + Math.random().toString(36).substring(2, 11).toUpperCase(),
     status: 'submitted',
-    submittedAt: new Date().toISOString(),
+    submittedAt: new Date().toISOString().split('T')[0],
     dboName: '',
     permitNo: '',
     premiseName: '',
@@ -26,7 +26,8 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
     permitStatusIntent: 'Cancellation',
     declarationAgreed: false,
     clientSignature: '',
-    clientName: ''
+    clientName: '',
+    clientTitle: ''
   });
 
   const [customIntent, setCustomIntent] = useState('');
@@ -51,10 +52,9 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
     if (!formData.location?.trim()) return setFormError('Physical Location is required');
     if (!formData.tel?.trim()) return setFormError('Phone Number is required');
     if (!formData.closureDate) return setFormError('Closure Date is required');
-    if (!formData.closureReason?.trim()) return setFormError('Reason for closure is required');
     if (!formData.clientSignature) return setFormError('Signature of Permit Holder is required');
     if (!formData.clientName?.trim()) return setFormError('Form Signatory Name is required');
-    if (!formData.declarationAgreed) return setFormError('You must agree to the declaration statement');
+    if (!formData.clientTitle?.trim()) return setFormError('Title of Signatory is required');
 
     setIsSubmitting(true);
     const statuses = [
@@ -71,11 +71,12 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
     }
 
     try {
-      const finalIntent = formData.permitStatusIntent === 'Other' ? (customIntent || 'Other') : formData.permitStatusIntent;
       const submission: ClosureNotificationData = {
         ...(formData as ClosureNotificationData),
-        permitStatusIntent: finalIntent || 'Cancellation',
-        submittedAt: new Date().toISOString()
+        closureReason: '',
+        permitStatusIntent: 'Cancellation',
+        declarationAgreed: true,
+        submittedAt: formData.submittedAt ? new Date(formData.submittedAt).toISOString() : new Date().toISOString()
       };
 
       await onSubmit(submission);
@@ -193,7 +194,7 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-1.5 md:col-span-2">
+              <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Full Name of Permit Holder *</label>
                 <input 
                   required 
@@ -203,6 +204,20 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
                   onChange={e => updateField('dboName', e.target.value)} 
                   className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800" 
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Notification / Notice Date *</label>
+                <div className="relative">
+                  <Calendar className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input 
+                    required 
+                    type="date"
+                    value={formData.submittedAt} 
+                    onChange={e => updateField('submittedAt', e.target.value)} 
+                    className="w-full pl-12 pr-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800" 
+                  />
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -301,8 +316,8 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
               <h3 className="font-black text-xs text-slate-800 uppercase tracking-wider">Closure Details</h3>
             </div>
 
-            <div className="grid grid-cols-1 gap-6">
-              <div className="space-y-1.5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-1.5 md:col-span-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Date of Official Business Closure / Cessation *</label>
                 <div className="relative">
                   <Calendar className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -315,130 +330,41 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
                   />
                 </div>
               </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Reason for Closure *</label>
-                <textarea 
-                  required 
-                  rows={4}
-                  placeholder="Kindly explain your reasons for closing the dairy business premise..." 
-                  value={formData.closureReason} 
-                  onChange={e => updateField('closureReason', e.target.value)} 
-                  className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-medium text-slate-800" 
-                />
-              </div>
             </div>
           </div>
 
-          {/* Section 3: Future Intent and Permit Status */}
+          {/* Section 3: Authorization */}
           <div className="space-y-6">
             <div className="flex items-center space-x-2 border-b pb-3 border-slate-100">
               <div className="w-6 h-6 rounded-lg bg-red-100 text-red-600 flex items-center justify-center font-bold text-xs">3</div>
-              <h3 className="font-black text-xs text-slate-800 uppercase tracking-wider">Future Intent & Permit Status</h3>
-            </div>
-
-            <div className="space-y-4">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Intended Status of the Permit *</label>
-              
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <label className={`p-5 rounded-2xl border-2 flex items-center space-x-3 cursor-pointer transition-all ${formData.permitStatusIntent === 'Cancellation' ? 'border-red-500 bg-red-50/20' : 'border-slate-100 bg-slate-50/50 hover:border-slate-200'}`}>
-                  <input 
-                    type="radio" 
-                    name="permitStatusIntent" 
-                    value="Cancellation"
-                    checked={formData.permitStatusIntent === 'Cancellation'}
-                    onChange={() => updateField('permitStatusIntent', 'Cancellation')}
-                    className="h-4 w-4 text-red-600 border-gray-300 focus:ring-red-500" 
-                  />
-                  <div>
-                    <span className="block font-bold text-xs text-slate-800">Cancellation</span>
-                    <span className="block text-[10px] text-slate-400 font-semibold mt-0.5">No intent to re-open the premise</span>
-                  </div>
-                </label>
-
-                <label className={`p-5 rounded-2xl border-2 flex items-center space-x-3 cursor-pointer transition-all ${formData.permitStatusIntent === 'Temporary Suspension' ? 'border-red-500 bg-red-50/20' : 'border-slate-100 bg-slate-50/50 hover:border-slate-200'}`}>
-                  <input 
-                    type="radio" 
-                    name="permitStatusIntent" 
-                    value="Temporary Suspension"
-                    checked={formData.permitStatusIntent === 'Temporary Suspension'}
-                    onChange={() => updateField('permitStatusIntent', 'Temporary Suspension')}
-                    className="h-4 w-4 text-red-600 border-gray-300 focus:ring-red-500" 
-                  />
-                  <div>
-                    <span className="block font-bold text-xs text-slate-800">Temporary Suspension</span>
-                    <span className="block text-[10px] text-slate-400 font-semibold mt-0.5">Intent to re-apply / resume later</span>
-                  </div>
-                </label>
-
-                <label className={`p-5 rounded-2xl border-2 flex items-center space-x-3 cursor-pointer transition-all ${formData.permitStatusIntent === 'Other' ? 'border-red-500 bg-red-50/20' : 'border-slate-100 bg-slate-50/50 hover:border-slate-200'}`}>
-                  <input 
-                    type="radio" 
-                    name="permitStatusIntent" 
-                    value="Other"
-                    checked={formData.permitStatusIntent === 'Other'}
-                    onChange={() => updateField('permitStatusIntent', 'Other')}
-                    className="h-4 w-4 text-red-600 border-gray-300 focus:ring-red-500" 
-                  />
-                  <div>
-                    <span className="block font-bold text-xs text-slate-800">Other Intent</span>
-                    <span className="block text-[10px] text-slate-400 font-semibold mt-0.5">Specify in field below</span>
-                  </div>
-                </label>
-              </div>
-
-              {formData.permitStatusIntent === 'Other' && (
-                <div className="space-y-1.5 pt-2 animate-in fade-in duration-200">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Kindly Specify Your Permit Intent *</label>
-                  <input 
-                    required={formData.permitStatusIntent === 'Other'}
-                    type="text"
-                    placeholder="e.g. Relocating to a different County under a new license" 
-                    value={customIntent} 
-                    onChange={e => setCustomIntent(e.target.value)} 
-                    className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800" 
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Section 4: Declaration and Submission */}
-          <div className="space-y-6">
-            <div className="flex items-center space-x-2 border-b pb-3 border-slate-100">
-              <div className="w-6 h-6 rounded-lg bg-red-100 text-red-600 flex items-center justify-center font-bold text-xs">4</div>
-              <h3 className="font-black text-xs text-slate-800 uppercase tracking-wider">Declaration & Submission</h3>
-            </div>
-
-            <div className="bg-slate-50 p-6 rounded-3xl border space-y-4">
-              <div className="text-xs font-bold text-slate-600 leading-relaxed space-y-2">
-                <span className="block uppercase tracking-wider font-extrabold text-[10px] text-slate-400 mb-1">Legal Declaration</span>
-                &quot;I, the undersigned Permit Holder, hereby declare that the information provided in this Business Closure Notification Form is true and accurate. I understand that providing false information may result in regulatory action.&quot;
-              </div>
-
-              <label className="flex items-center space-x-3 cursor-pointer pt-2 select-none">
-                <input 
-                  required
-                  type="checkbox" 
-                  checked={formData.declarationAgreed}
-                  onChange={e => updateField('declarationAgreed', e.target.checked)}
-                  className="rounded-lg h-5 w-5 text-red-600 border-slate-300 focus:ring-red-500/20" 
-                />
-                <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wider">I Agree to Declaration</span>
-              </label>
+              <h3 className="font-black text-xs text-slate-800 uppercase tracking-wider">Authorized Operator Signature</h3>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Full Name of Signatory (Permit Holder) *</label>
-                <input 
-                  required 
-                  type="text"
-                  placeholder="Enter full name for validation" 
-                  value={formData.clientName} 
-                  onChange={e => updateField('clientName', e.target.value)} 
-                  className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800" 
-                />
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Full Name of Signatory (Permit Holder) *</label>
+                  <input 
+                    required 
+                    type="text"
+                    placeholder="Enter full name for validation" 
+                    value={formData.clientName} 
+                    onChange={e => updateField('clientName', e.target.value)} 
+                    className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800" 
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Title of Signatory (e.g. Director, Owner, Manager) *</label>
+                  <input 
+                    required 
+                    type="text"
+                    placeholder="e.g. Director / Business Owner" 
+                    value={formData.clientTitle} 
+                    onChange={e => updateField('clientTitle', e.target.value)} 
+                    className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800" 
+                  />
+                </div>
               </div>
 
               <div>

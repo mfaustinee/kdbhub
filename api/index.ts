@@ -483,7 +483,7 @@ async function startServer() {
 
     logToFile("[Server] Setting up SPA fallback...");
     // Catch-all for /api routes to prevent them from falling through to Vite's HTML fallback
-    app.all("/api/*", (req, res) => {
+    app.all("/api/*all", (req, res) => {
       logToFile(`[API] 404 Not Found: ${req.method} ${req.url}`);
       res.status(404).json({ error: "API route not found" });
     });
@@ -508,7 +508,7 @@ async function startServer() {
     console.log("[Server] Serving static files from dist...");
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*all", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

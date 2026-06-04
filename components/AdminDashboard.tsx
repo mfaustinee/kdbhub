@@ -17,7 +17,7 @@ interface AdminDashboardProps {
   onRefresh?: () => void;
   onAction: (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string }) => void;
   onDeleteAgreement?: (id: string) => void;
-  onClosureAction: (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string }) => void;
+  onClosureAction: (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string; title?: string; comments?: string }) => void;
   onDeleteClosure?: (id: string) => void;
   onDebtorUpdate: (updated: DebtorRecord[]) => void;
   onStaffUpdate: (config: StaffConfig) => void;
@@ -52,6 +52,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [rejectionReason, setRejectionReason] = useState('');
   const [closureRejectionReason, setClosureRejectionReason] = useState('');
   const [adminName, setAdminName] = useState('');
+  const [closureOfficerTitle, setClosureOfficerTitle] = useState('');
+  const [closureOfficerComments, setClosureOfficerComments] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddingDebtor, setIsAddingDebtor] = useState(false);
   const [editingDebtorId, setEditingDebtorId] = useState<string | null>(null);
@@ -209,6 +211,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleApproveClosure = async () => {
     if (!adminName) return alert("Please enter your name for authorization.");
+    if (!closureOfficerTitle) return alert("Please enter your official title for authorization.");
     if (!staffConfig.officialSignature) return alert("Please upload an official signature in Staff Setup first.");
     
     setIsApprovingClosure(true);
@@ -225,9 +228,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     if (!selectedClosure) return;
-    onClosureAction(selectedClosure.id, 'approve', { signature: staffConfig.officialSignature, name: adminName });
+    onClosureAction(selectedClosure.id, 'approve', { 
+      signature: staffConfig.officialSignature, 
+      name: adminName,
+      title: closureOfficerTitle,
+      comments: closureOfficerComments
+    });
     setIsApprovingClosure(false);
     setAdminName('');
+    setClosureOfficerTitle('');
+    setClosureOfficerComments('');
   };
 
   const handleRejectClosure = () => {
@@ -811,15 +821,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center"><AlertCircle className="w-3 h-3 mr-2" /> Cessation Specifics</h4>
                       <div className="space-y-3">
                         <div className="flex justify-between items-center"><span className="text-xs text-slate-400 font-medium">Official Closure Date</span><span className="text-xs font-bold text-slate-700">{selectedClosure.closureDate}</span></div>
-                        <div className="flex justify-between items-center"><span className="text-xs text-slate-400 font-medium font-bold text-slate-700">Action Ordered</span><span className="text-xs font-black text-red-600 uppercase tracking-wider">{selectedClosure.permitStatusIntent}</span></div>
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Reason for Cessation</h4>
-                    <div className="p-6 bg-slate-50 border rounded-3xl text-sm text-slate-600 italic leading-relaxed">
-                      &quot;{selectedClosure.closureReason}&quot;
                     </div>
                   </div>
 
@@ -848,7 +850,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       {selectedClosure.status === 'submitted' ? (
                         <div className="space-y-4 bg-red-50/60 p-8 rounded-[40px] border border-red-100 shadow-xl">
                           <h4 className="text-[10px] font-black text-red-700 uppercase tracking-widest">
-                            {isRejectingClosure ? 'Provide Rejection Reason' : 'Countersign Cessation & Decommit'}
+                            {isRejectingClosure ? 'Provide Rejection Reason' : 'Countersign notice'}
                           </h4>
                           {isRejectingClosure ? (
                             <div className="space-y-3">
@@ -864,13 +866,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </div>
                             </div>
                           ) : (
-                            <>
-                              <input placeholder="Enter Authorized Name *" className="w-full px-6 py-4 border rounded-2xl text-xs bg-white font-bold outline-none shadow-sm" value={adminName} onChange={e => setAdminName(e.target.value)} />
-                              <div className="flex gap-3">
+                            <div className="space-y-3">
+                              <input 
+                                placeholder="Enter Authorized Name *" 
+                                className="w-full px-6 py-4 border rounded-2xl text-xs bg-white font-bold outline-none shadow-sm" 
+                                value={adminName} 
+                                onChange={e => setAdminName(e.target.value)} 
+                              />
+                              <input 
+                                placeholder="Enter Official Title (e.g. Compliance Officer) *" 
+                                className="w-full px-6 py-4 border rounded-2xl text-xs bg-white font-bold outline-none shadow-sm" 
+                                value={closureOfficerTitle} 
+                                onChange={e => setClosureOfficerTitle(e.target.value)} 
+                              />
+                              <textarea 
+                                placeholder="Enter Receipt Comments (Optional)" 
+                                className="w-full px-6 py-3 border rounded-2xl text-xs bg-white font-bold outline-none shadow-sm h-20 resize-none" 
+                                value={closureOfficerComments} 
+                                onChange={e => setClosureOfficerComments(e.target.value)} 
+                              />
+                              <div className="flex gap-3 pt-2">
                                 <button onClick={() => setIsRejectingClosure(true)} className="flex-1 py-4 text-rose-600 font-bold text-[10px] uppercase tracking-widest bg-white border border-rose-100 rounded-2xl hover:bg-rose-50 transition-all">Reject</button>
-                                <button onClick={handleApproveClosure} className="flex-2 py-4 bg-red-600 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl shadow-lg hover:bg-red-700 transition-all">Sign & Decommission</button>
+                                <button onClick={handleApproveClosure} className="flex-2 py-4 bg-red-600 text-white font-black text-[10px] uppercase tracking-[0.1em] rounded-2xl shadow-lg hover:bg-red-700 transition-all">Countersign notice</button>
                               </div>
-                            </>
+                            </div>
                           )}
                         </div>
                       ) : (
@@ -879,12 +898,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <div className="space-y-4">
                               <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">KDB Authorized Execution</h4>
                               <div className="flex items-center space-x-5 bg-emerald-50/50 p-6 rounded-[32px] border border-emerald-100">
-                                <img src={selectedClosure.officialSignature} className="h-20 w-32 object-contain" />
+                                <img src={selectedClosure.officialSignature} className="h-20 w-32 object-contain font-bold" />
                                 <div>
                                   <div className="text-sm font-black text-slate-800">{selectedClosure.officialName}</div>
-                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-emerald-600">Deregistered & Filed</div>
+                                  {selectedClosure.officialTitle && (
+                                    <div className="text-xs font-bold text-slate-500">{selectedClosure.officialTitle}</div>
+                                  )}
+                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-emerald-600 mt-0.5">Deregistered & Filed</div>
                                 </div>
                               </div>
+                              {selectedClosure.officialComments && (
+                                <div className="p-5 bg-amber-50/70 border border-amber-100 rounded-3xl text-xs text-amber-800 italic leading-relaxed font-bold">
+                                  <strong className="not-italic font-black text-[9px] uppercase tracking-wider text-amber-500 block mb-1">Receipt Comments:</strong>
+                                  &quot;{selectedClosure.officialComments}&quot;
+                                </div>
+                              )}
                             </div>
                           )}
                           
