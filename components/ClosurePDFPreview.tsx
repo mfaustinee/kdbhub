@@ -79,6 +79,12 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
         <p>
           The business, operating under License/Permit No. <strong className="font-mono">{closure.permitNo}</strong>, officially ceased all operations effective <strong>{closure.closureDate || '[Closure Date]'}</strong>.
         </p>
+
+        {closure.closureReason && (
+          <p>
+            <strong>Reason for Business Closure:</strong> {closure.closureReason}
+          </p>
+        )}
       </div>
 
       {/* Yours faithfully, signature and signatories */}

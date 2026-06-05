@@ -73,7 +73,7 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
     try {
       const submission: ClosureNotificationData = {
         ...(formData as ClosureNotificationData),
-        closureReason: '',
+        closureReason: formData.closureReason || '',
         permitStatusIntent: 'Cancellation',
         declarationAgreed: true,
         submittedAt: formData.submittedAt ? new Date(formData.submittedAt).toISOString() : new Date().toISOString()
@@ -327,6 +327,19 @@ export const ClosureForm: React.FC<ClosureFormProps> = ({ onSubmit, onBack }) =>
                     value={formData.closureDate} 
                     onChange={e => updateField('closureDate', e.target.value)} 
                     className="w-full pl-12 pr-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800" 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Reason for Closure (Optional)</label>
+                <div className="relative">
+                  <FileText className="absolute left-5 top-5 w-4 h-4 text-slate-400" />
+                  <textarea 
+                    placeholder="e.g. Relocating operations, high overhead costs, scaling down, etc." 
+                    value={formData.closureReason || ''} 
+                    onChange={e => updateField('closureReason', e.target.value)} 
+                    className="w-full pl-12 pr-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-red-500/10 outline-none transition-all font-bold text-slate-800 min-h-[100px] resize-none" 
                   />
                 </div>
               </div>

@@ -70,23 +70,24 @@ const sanitizeOklch = () => {
       const originalStyle = originalGetComputedStyle.call(this, el, pseudoElt);
       
       return new Proxy(originalStyle, {
-        get(target, prop, receiver) {
-          const val = Reflect.get(target, prop, receiver);
+        get(target, prop) {
+          if (prop === 'getPropertyValue') {
+            return function (propertyName: string) {
+              const originalVal = target.getPropertyValue(propertyName);
+              if (typeof originalVal === 'string' && (originalVal.toLowerCase().includes('oklch') || originalVal.toLowerCase().includes('oklab'))) {
+                return originalVal
+                  .replace(/oklch\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
+                  .replace(/oklab\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
+                  .replace(/oklch\([^)]+\)/gi, 'rgb(15, 23, 42)')
+                  .replace(/oklab\([^)]+\)/gi, 'rgb(15, 23, 42)');
+              }
+              return originalVal;
+            };
+          }
+          
+          const val = (target as any)[prop];
           
           if (typeof val === 'function') {
-            if (prop === 'getPropertyValue') {
-              return function (propertyName: string) {
-                const originalVal = target.getPropertyValue(propertyName);
-                if (typeof originalVal === 'string' && (originalVal.toLowerCase().includes('oklch') || originalVal.toLowerCase().includes('oklab'))) {
-                  return originalVal
-                    .replace(/oklch\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
-                    .replace(/oklab\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
-                    .replace(/oklch\([^)]+\)/gi, 'rgb(15, 23, 42)')
-                    .replace(/oklab\([^)]+\)/gi, 'rgb(15, 23, 42)');
-                }
-                return originalVal;
-              };
-            }
             return val.bind(target);
           }
           
