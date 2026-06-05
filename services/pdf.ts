@@ -8,6 +8,8 @@ const sanitizeOklch = () => {
   tempStyleEl.id = 'temp-pdf-sanitized-styles';
   let combinedCssText = '';
 
+  const originalGetComputedStyle = window.getComputedStyle;
+
   try {
     // 1. Process style tags textContent directly
     const styleElements = document.querySelectorAll('style');
@@ -62,11 +64,54 @@ const sanitizeOklch = () => {
       tempStyleEl.textContent = combinedCssText;
       document.head.appendChild(tempStyleEl);
     }
+
+    // 3. Override window.getComputedStyle to intercept oklch/oklab dynamically
+    window.getComputedStyle = function (el, pseudoElt) {
+      const originalStyle = originalGetComputedStyle.call(this, el, pseudoElt);
+      
+      return new Proxy(originalStyle, {
+        get(target, prop, receiver) {
+          const val = Reflect.get(target, prop, receiver);
+          
+          if (typeof val === 'function') {
+            if (prop === 'getPropertyValue') {
+              return function (propertyName: string) {
+                const originalVal = target.getPropertyValue(propertyName);
+                if (typeof originalVal === 'string' && (originalVal.toLowerCase().includes('oklch') || originalVal.toLowerCase().includes('oklab'))) {
+                  return originalVal
+                    .replace(/oklch\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
+                    .replace(/oklab\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
+                    .replace(/oklch\([^)]+\)/gi, 'rgb(15, 23, 42)')
+                    .replace(/oklab\([^)]+\)/gi, 'rgb(15, 23, 42)');
+                }
+                return originalVal;
+              };
+            }
+            return val.bind(target);
+          }
+          
+          if (typeof val === 'string') {
+            if (val.toLowerCase().includes('oklch') || val.toLowerCase().includes('oklab')) {
+              return val
+                .replace(/oklch\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
+                .replace(/oklab\([^()]*(\([^()]*\)[^()]*)*\)/gi, 'rgb(15, 23, 42)')
+                .replace(/oklch\([^)]+\)/gi, 'rgb(15, 23, 42)')
+                .replace(/oklab\([^)]+\)/gi, 'rgb(15, 23, 42)');
+            }
+          }
+          
+          return val;
+        }
+      });
+    };
   } catch (e) {
     console.warn("Failed to sanitize oklch/oklab styles:", e);
   }
 
   return () => {
+    // Restore original window.getComputedStyle
+    window.getComputedStyle = originalGetComputedStyle;
+
     // Restore text content backups of style tags
     stylesBackup.forEach(({ element, text }) => {
       try {

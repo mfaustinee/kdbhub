@@ -69,7 +69,7 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
         <p>Dear Sir/Madam,</p>
         
         <p className="font-black text-slate-950 uppercase underline underline-offset-4 tracking-wide font-sans text-sm">
-          RE: NOTIFICATION OF BUSINESS CLOSURE AND CESSATION OF OPERATIONS – {closure.premiseName.toUpperCase()}
+          RE: NOTIFICATION OF BUSINESS CLOSURE AND CESSATION OF OPERATIONS
         </p>
 
         <p>
