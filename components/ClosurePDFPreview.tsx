@@ -23,7 +23,7 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
 
   return (
     <div 
-      className="px-12 py-12 leading-[1.65] text-[11.5pt] text-left w-[1024px] box-border relative" 
+      className="px-12 py-12 leading-[1.7] text-[12.5pt] text-left w-[1024px] box-border relative" 
       id={id} 
       style={{ 
         fontFamily: 'Georgia, Cambria, "Times New Roman", Times, serif', 
@@ -45,38 +45,40 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
       {/* Recipient Address Info & Repositioned Stamp */}
       <div className="flex justify-between items-start mb-6">
         <div className="space-y-1 text-left font-sans" style={{ color: '#0f172a' }}>
-          <p className="font-extrabold text-slate-900 text-[12pt] leading-tight">The Compliance Officer</p>
-          <p className="font-bold leading-tight text-[11.5pt]">Kenya Dairy Board</p>
+          <p className="font-extrabold text-slate-900 text-[13.5pt] leading-tight">The Compliance Officer</p>
+          <p className="font-bold leading-tight text-[12.5pt]">Kenya Dairy Board</p>
           <p className="text-slate-700 leading-tight">P.O Box 30406 -00100</p>
           <p className="font-extrabold text-slate-800 leading-tight">Nairobi .</p>
           <div className="pt-3 font-sans">
-            <p className="font-bold text-slate-600 text-[11pt] leading-tight">Cc. KDB- Kericho</p>
-            <p className="text-slate-500 text-[10pt] leading-tight">P.O Box 159-20200</p>
-            <p className="font-bold text-slate-600 text-[10pt] leading-tight">Kericho .</p>
+            <p className="font-bold text-slate-600 text-[12pt] leading-tight">Cc. KDB- Kericho</p>
+            <p className="text-slate-500 text-[11pt] leading-tight">P.O Box 159-20200</p>
+            <p className="font-bold text-slate-600 text-[11pt] leading-tight">Kericho .</p>
           </div>
         </div>
 
         {/* Dynamic Stamped Badging visual on the right far side of the address details, shifted to the left */}
-        {closure.status === 'approved' && (
-          <div className="pr-16 pt-2 select-none">
+        {(closure.status === 'approved' || closure.status === 'submitted') && (
+          <div className="pr-36 pt-4 select-none flex-shrink-0">
             <div 
               style={{ 
-                fontFamily: '"Arial Black", Arial, sans-serif',
-                borderWidth: '3.5px',
+                fontFamily: '"Arial Black", Impact, Arial, sans-serif',
+                borderWidth: '5px',
                 borderStyle: 'solid',
-                borderColor: '#059669', // Emerald green
-                color: '#059669', // Emerald green
-                borderRadius: '8px',
-                transform: 'rotate(-6deg) translateX(-15px)', // Tilted and shifted slightly to the left
+                borderColor: '#059669', // Emerald green border
+                color: '#059669', // Emerald green text
+                borderRadius: '10px',
+                transform: 'rotate(-5deg) translateX(-20px)', // Tilted and shifted slightly to the left
                 backgroundColor: '#ffffff', // Clean white background
-                padding: '8px 20px',
+                padding: '14px 36px',
                 display: 'inline-block',
-                fontWeight: 'heavy',
-                letterSpacing: '0.15em',
-                lineHeight: '1.1',
-                boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                fontWeight: 900,
+                fontSize: '34px', // Increased size
+                letterSpacing: '0.18em',
+                lineHeight: '1',
+                whiteSpace: 'nowrap', // Prevent text wrapping
+                boxShadow: '0 6px 15px rgba(5, 150, 105, 0.15)',
               }}
-              className="uppercase text-xl font-black"
+              className="uppercase text-center text-emerald-600 border-emerald-600 font-extrabold"
             >
               RECEIVED
             </div>
@@ -85,12 +87,12 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
       </div>
 
       {/* Date */}
-      <div className="text-left mb-6 font-sans font-bold text-slate-900 text-[11.5pt]">
+      <div className="text-left mb-6 font-sans font-bold text-slate-900 text-[12.5pt]">
         {formattedDate}.
       </div>
 
       {/* Letter Body */}
-      <div className="space-y-4 text-left mb-8 text-[11.5pt] leading-[1.65]">
+      <div className="space-y-4 text-left mb-8 text-[12.5pt] leading-[1.7]">
         <p>Dear Sir/Madam,</p>
         
         <p className="font-black text-slate-950 uppercase underline underline-offset-4 tracking-wide font-sans text-sm mb-4">
@@ -124,7 +126,7 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
           </div>
           
           <div>
-            <p className="font-extrabold text-slate-900 text-[11.5pt]">{closure.clientName}</p>
+            <p className="font-extrabold text-slate-900 text-[12.5pt]">{closure.clientName}</p>
             <p className="text-[10px] uppercase font-black text-slate-400 tracking-wider">
               {closure.clientTitle || 'Registered DBO Operator'}
             </p>
@@ -142,21 +144,21 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
               {closure.officialSignature ? (
                 <img src={closure.officialSignature} className="max-h-full object-contain" alt="KDB Official Signature" crossOrigin="anonymous" />
               ) : (
-                <div className="italic text-rose-500 font-bold block py-2 text-[10px] uppercase">
+                <div className="italic text-rose-500 font-bold block py-2 text-xs uppercase">
                   Awaiting Countersign
                 </div>
               )}
             </div>
 
             <div>
-              <p className="font-extrabold text-slate-900 text-[11.5pt]">{closure.officialName || '______________________'}</p>
+              <p className="font-extrabold text-slate-900 text-[12.5pt]">{closure.officialName || '______________________'}</p>
               <p className="text-[10px] uppercase font-black text-slate-400 tracking-wider">
                 {closure.officialTitle || 'Authorized KDB Official'}
               </p>
             </div>
 
             {closure.approvedAt && (
-              <p className="text-[9pt] text-slate-400 font-bold uppercase tracking-widest">
+              <p className="text-[10pt] text-slate-400 font-bold uppercase tracking-widest">
                 Receipt Date: {new Date(closure.approvedAt).toLocaleDateString('en-GB')}
               </p>
             )}
@@ -166,7 +168,7 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
 
       {/* Stamp comments docket if present and approved */}
       {closure.status === 'approved' && closure.officialComments && (
-        <div className="mt-6 p-5 bg-amber-50/50 border border-amber-100 rounded-2xl font-sans text-left text-xs text-slate-700 leading-relaxed font-bold">
+        <div className="mt-6 p-5 bg-amber-50/50 border border-amber-100 rounded-2xl font-sans text-left text-sm text-slate-700 leading-relaxed font-bold">
           <span className="not-italic font-black text-[9px] uppercase tracking-wider text-amber-700 block mb-1">KDB Assessment Remarks:</span>
           &quot;{closure.officialComments}&quot;
         </div>
