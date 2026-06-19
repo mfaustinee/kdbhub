@@ -58,27 +58,25 @@ const ClosurePDFContent: React.FC<ClosurePDFContentProps> = ({ closure, id }) =>
 
         {/* Dynamic Stamped Badging visual on the right far side of the address details, shifted to the left */}
         {(closure.status === 'approved' || closure.status === 'submitted') && (
-          <div className="pr-36 pt-4 select-none flex-shrink-0">
+          <div className="pt-4 select-none flex-shrink-0" style={{ marginRight: '60px' }}>
             <div 
               style={{ 
-                fontFamily: '"Arial Black", Impact, Arial, sans-serif',
-                borderWidth: '5px',
-                borderStyle: 'solid',
-                borderColor: '#059669', // Emerald green border
-                color: '#059669', // Emerald green text
-                borderRadius: '10px',
-                transform: 'rotate(-5deg) translateX(-20px)', // Tilted and shifted slightly to the left
-                backgroundColor: '#ffffff', // Clean white background
-                padding: '14px 36px',
+                fontFamily: 'Impact, "Arial Black", Arial, sans-serif',
+                border: '6px solid #059669', // Strong emerald green border
+                color: '#059669', // Bright emerald green text color
+                borderRadius: '12px',
+                transform: 'rotate(-6deg) translateX(-40px)', // Shifted further left and rotated visually
+                backgroundColor: '#ffffff', // Clean opaque white background
+                padding: '16px 42px',
                 display: 'inline-block',
                 fontWeight: 900,
-                fontSize: '34px', // Increased size
-                letterSpacing: '0.18em',
+                fontSize: '42px', // Increased size
+                letterSpacing: '0.2em',
                 lineHeight: '1',
                 whiteSpace: 'nowrap', // Prevent text wrapping
-                boxShadow: '0 6px 15px rgba(5, 150, 105, 0.15)',
+                boxShadow: '0 8px 24px rgba(5, 150, 105, 0.2)',
               }}
-              className="uppercase text-center text-emerald-600 border-emerald-600 font-extrabold"
+              className="uppercase text-center"
             >
               RECEIVED
             </div>
