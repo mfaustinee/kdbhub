@@ -942,98 +942,170 @@ async function startServer() {
     }
   });
 
+  // Service Account Auth Helper for Google Sheets
+  const getSheetsClient = () => {
+    const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+
+    if (!clientEmail || !privateKey) {
+      throw new Error("Service Account credentials (EMAIL/PRIVATE_KEY) are missing.");
+    }
+
+    // Clean the private key:
+    // 1. Remove any surrounding quotes that might have been pasted accidentally
+    privateKey = privateKey.trim().replace(/^["']|["']$/g, '');
+    // 2. Convert literal \n strings into actual newlines
+    privateKey = privateKey.replace(/\\n/g, '\n');
+
+    if (!privateKey.includes("-----BEGIN PRIVATE KEY-----")) {
+      throw new Error("Invalid Private Key format. It must start with '-----BEGIN PRIVATE KEY-----'. Check your environment variables.");
+    }
+
+    const auth = new google.auth.JWT({
+      email: clientEmail,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
+
+    return google.sheets({ version: "v4", auth });
+  };
+
   app.post("/api/submit", async (req, res) => {
+    logToFile("[API] Received /api/submit request for detailed Google Sheets sync");
+    const { data } = req.body;
+    
+    if (!data) {
+      logToFile("[API] Submit failed: Missing 'data' object in request body");
+      return res.status(400).json({ error: "Missing 'data' object" });
+    }
+
+    const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID || req.body.spreadsheetId;
+    if (!spreadsheetId) {
+      logToFile("[API] Submit failed: Spreadsheet ID missing");
+      return res.status(400).json({ error: "Spreadsheet ID missing. Please set GOOGLE_SPREADSHEET_ID environment variable." });
+    }
+
     try {
-      logToFile("[API] Received /api/submit request");
-      const { data: formData, pdf, isAmendment } = req.body;
-      
-      if (!formData) {
-        logToFile("[API] Submit failed: Missing form data in request body");
-        return res.status(400).json({ error: "Missing form data" });
+      const sheets = getSheetsClient();
+
+      // Mapping logic
+      const allRows: { sheet: string, rows: any[][] }[] = [];
+
+      if (data.category === 'Mini Dairy' || data.category === 'Cottage Industry' || data.category === 'Milk Bar' || data.category === 'Dispenser') {
+        const sheet = (data.category === 'Mini Dairy' || data.category === 'Cottage Industry') 
+          ? "MD & CI - Distribution" 
+          : "Dispensers & Milk Bars";
+          
+        const isMiniOrCottage = data.category === 'Mini Dairy' || data.category === 'Cottage Industry';
+        
+        let distNameFormatted = "";
+        let distContactsFormatted = "";
+        let distVolPerDayFormatted = "";
+        let distPermitNoFormatted = "";
+        let distAreaOfSaleFormatted = "";
+        let distOutletsFormatted = "";
+        let distNatureOfProduceFormatted = "";
+        let distPriceFormatted = "";
+
+        if (isMiniOrCottage) {
+          const distributors = Array.isArray(data.distributors) && data.distributors.length > 0
+            ? data.distributors
+            : [{
+                name: data.distName,
+                contacts: data.distContacts,
+                volPerDay: data.distVolPerDay,
+                permitNo: data.distPermitNo,
+                areaOfSale: data.distAreaOfSale,
+                outlets: data.distOutlets || [],
+                natureOfProduce: data.distNatureOfProduce || [],
+                prices: { [data.distNatureOfProduce?.[0] || 'Produce']: data.distPrice }
+              }];
+
+          distNameFormatted = distributors.map((d: any) => d.name || "").join(' | ');
+          distContactsFormatted = distributors.map((d: any) => d.contacts || "").join(' | ');
+          distVolPerDayFormatted = distributors.map((d: any) => d.volPerDay || "").join(' | ');
+          distPermitNoFormatted = distributors.map((d: any) => d.permitNo || "").join(' | ');
+          distAreaOfSaleFormatted = distributors.map((d: any) => d.areaOfSale || "").join(' | ');
+          
+          distOutletsFormatted = distributors.map((d: any, dIdx: number) => {
+            const outletsStr = Array.isArray(d.outlets)
+              ? d.outlets.map((o: any) => `${o.location} (Vol: ${o.volPerDay}, Permit: ${o.permitStatus}, Levy: ${o.levyInfo})`).join(', ')
+              : "";
+            return `Distributor #${dIdx + 1}: ${outletsStr}`;
+          }).join(' | ');
+
+          distNatureOfProduceFormatted = distributors.map((d: any, dIdx: number) => {
+            const prodStr = Array.isArray(d.natureOfProduce) ? d.natureOfProduce.join(', ') : "";
+            return `Distributor #${dIdx + 1}: ${prodStr}`;
+          }).join(' | ');
+
+          distPriceFormatted = distributors.map((d: any, dIdx: number) => {
+            const priceStr = d.prices && Object.keys(d.prices).length > 0
+              ? Object.entries(d.prices).map(([prod, price]) => `${prod}: ${price}`).join(', ')
+              : "";
+            return `Distributor #${dIdx + 1}: ${priceStr}`;
+          }).join(' | ');
+        }
+
+        const rows = data.sales.map((sale: any) => [
+          data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
+          sale.avgVolPerDay || "", sale.buyingPrice || "", sale.sellingPrice || "", data.traceability,
+          `${sale.month} ${sale.year}`, sale.qtyDeclared, sale.verifiedQty, sale.underDeclared,
+          data.date, data.startTime, data.endTime,
+          Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : data.natureOfProduce,
+          // Appended Option A Columns (for MD & CI - Distribution sheet)
+          distNameFormatted,
+          distContactsFormatted,
+          distVolPerDayFormatted,
+          distPermitNoFormatted,
+          distAreaOfSaleFormatted,
+          distOutletsFormatted,
+          distNatureOfProduceFormatted,
+          distPriceFormatted
+        ]);
+        allRows.push({ sheet, rows });
+      } else if (data.category === 'CP<5,000 L/D' || data.category === 'CP>5,000 L/D' || data.category === 'Processor') {
+        const sheet = "Cooling Plants";
+        // Capture Intakes
+        const intakeRows = data.intakes.map((intake: any) => [
+          data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
+          intake.avgVolPerDay || "", intake.farmerPrice || "", intake.processorPrice || "", data.traceability,
+          `${intake.month} ${intake.year}`, intake.quantity, "TOTAL INTAKE", "", "",
+          data.date, data.startTime, data.endTime
+        ]);
+        allRows.push({ sheet, rows: intakeRows });
+        
+        // Capture Sales for Cooling Plants
+        const salesRows = data.sales
+          .filter((s: any) => s.qtyDeclared || s.verifiedQty)
+          .map((sale: any) => [
+            data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
+            sale.avgVolPerDay || "", sale.buyingPrice || "", sale.sellingPrice || "", data.traceability,
+            `${sale.month} ${sale.year}`, sale.qtyDeclared, "LOCAL SALES", sale.verifiedQty, sale.underDeclared,
+            data.date, data.startTime, data.endTime
+          ]);
+        if (salesRows.length > 0) {
+          allRows.push({ sheet, rows: salesRows });
+        }
       }
 
-      const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-      const privateKeyRaw = process.env.GOOGLE_PRIVATE_KEY;
-      const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-
-      if (!email || !privateKeyRaw || !spreadsheetId) {
-        logToFile("[API] Submit failed: Google Sheets environment variables are not fully configured");
-        return res.status(500).json({ 
-          error: "Google Sheets integration is not configured. Please verify GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY, and GOOGLE_SPREADSHEET_ID in your environment." 
-        });
+      for (const item of allRows) {
+        if (item.rows.length > 0) {
+          logToFile(`[API] Appending ${item.rows.length} rows to sheet "${item.sheet}"`);
+          await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: `${item.sheet}!A:Z`,
+            valueInputOption: "USER_ENTERED",
+            requestBody: { values: item.rows },
+          });
+        }
       }
 
-      // Clean private key
-      let privateKey = privateKeyRaw.trim();
-      if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
-        privateKey = privateKey.substring(1, privateKey.length - 1);
-      }
-      privateKey = privateKey.replace(/\\n/g, "\n");
-
-      // Category-based spreadsheet routing
-      const category = (formData.category || "").trim().toLowerCase();
-      let targetSheet = "MD & CI";
-      if (category.includes("dispenser") || category.includes("milk bar")) {
-        targetSheet = "Dispensers";
-      } else if (category.includes("cottage") || category.includes("mini dairy")) {
-        targetSheet = "MD & CI";
-      } else if (category.includes("cp") || category.includes("processor") || category.includes("cooling")) {
-        targetSheet = "Cooling Plants";
-      }
-
-      logToFile(`[API] Routing submission to sheet: ${targetSheet} for category: ${formData.category}`);
-
-      // Aggregate sales figures
-      const sales = formData.sales || [];
-      const totalQtyDeclared = sales.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0), 0);
-      const totalVerifiedQty = sales.reduce((sum: number, s: any) => sum + (parseFloat(s.verifiedQty) || 0), 0);
-      const totalUnderDeclared = sales.reduce((sum: number, s: any) => sum + (parseFloat(s.underDeclared) || 0), 0);
-
-      // Prepare row values matching sheets pattern
-      const formattedRows = [
-        [
-          formData.date || new Date().toISOString().split('T')[0],
-          formData.dboName || "",
-          formData.premiseName || "",
-          formData.permitNo || "",
-          formData.category || "",
-          formData.location || "",
-          formData.county || "",
-          formData.contacts || "",
-          formData.validationPeriod || "",
-          totalQtyDeclared,
-          totalVerifiedQty,
-          totalUnderDeclared,
-          formData.comments || "",
-          formData.complianceOfficer || "",
-          isAmendment ? "Yes" : "No",
-          pdf ? "[PDF Attached]" : "No PDF"
-        ]
-      ];
-
-      // Authenticate with Google
-      const auth = new google.auth.JWT({
-        email,
-        key: privateKey,
-        scopes: ["https://www.googleapis.com/auth/spreadsheets"]
-      });
-
-      const sheets = google.sheets({ version: "v4", auth });
-
-      // Append row to target sheet
-      logToFile(`[API] Appending row to sheet ${targetSheet} on spreadsheet ${spreadsheetId}`);
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: `${targetSheet}!A:Z`,
-        valueInputOption: "USER_ENTERED",
-        requestBody: { values: formattedRows },
-      });
-
-      logToFile("[API] Google Sheets sync completed successfully");
-      res.json({ success: true, message: "Sync successful" });
+      logToFile("[API] Detailed Google Sheets sync completed successfully");
+      res.json({ success: true });
     } catch (error: any) {
-      logToFile(`[API] Google Sheets sync failed: ${error.message}\nStack: ${error.stack}`);
-      res.status(500).json({ error: `Google Sheets Sync failed: ${error.message}` });
+      logToFile(`[API] Google Sheets submit error: ${error.message}\nStack: ${error.stack}`);
+      res.status(500).json({ error: error.message });
     }
   });
 
