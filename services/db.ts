@@ -176,12 +176,43 @@ const safeParseError = async (response: Response, defaultMessage: string): Promi
     if (!text || text.trim() === '') return defaultMessage;
     try {
       const parsed = JSON.parse(text);
-      return parsed.error || parsed.message || text || defaultMessage;
+      return parsed.error || parsed.message || defaultMessage;
     } catch {
+      if (text.includes("<!DOCTYPE") || text.includes("<html") || text.includes("<head")) {
+        return defaultMessage;
+      }
       return text || defaultMessage;
     }
   } catch (e: any) {
-    return `${defaultMessage} (Failed to parse error: ${e.message})`;
+    return `${defaultMessage} (${e.message})`;
+  }
+};
+
+const updateLocalStorageCollection = <T extends Record<string, any>>(key: string, item: T, idField: string = 'id') => {
+  try {
+    const raw = localStorage.getItem(key);
+    let items: T[] = raw ? JSON.parse(raw) : [];
+    const itemId = item[idField] || item.id || item.referenceNumber;
+    const idx = items.findIndex(i => (i[idField] || i.id || i.referenceNumber) === itemId);
+    if (idx >= 0) {
+      items[idx] = { ...items[idx], ...item };
+    } else {
+      items.unshift(item);
+    }
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch (e) {
+    console.error(`[DBService] Error updating localStorage collection ${key}:`, e);
+  }
+};
+
+const removeFromLocalStorageCollection = <T extends Record<string, any>>(key: string, id: string, idField: string = 'id') => {
+  try {
+    const raw = localStorage.getItem(key);
+    let items: T[] = raw ? JSON.parse(raw) : [];
+    items = items.filter(i => (i[idField] || i.id || i.referenceNumber) !== id);
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch (e) {
+    console.error(`[DBService] Error removing from localStorage collection ${key}:`, e);
   }
 };
 
@@ -251,20 +282,22 @@ export const DBService = {
 
   async saveAgreement(agreement: AgreementData): Promise<void> {
     const saveLocal = async () => {
-      console.log("[DBService] Saving agreement to local API...");
-      const response = await fetch('/api/agreements', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(agreement)
-      });
-      if (response.ok) {
-        // Update local cache
-        const current = await this.getAgreements();
-        localStorage.setItem('kdb_agreements_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Saving agreement to local API / storage...");
+      try {
+        const response = await fetch('/api/agreements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(agreement)
+        });
+        if (response.ok) {
+          const current = await this.getAgreements();
+          localStorage.setItem('kdb_agreements_cache', JSON.stringify(current));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API saveAgreement error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to save to local API");
+      updateLocalStorageCollection('kdb_agreements_cache', agreement);
     };
 
     const client = await getSupabase();
@@ -313,19 +346,28 @@ export const DBService = {
 
   async updateAgreement(id: string, updates: Partial<AgreementData>): Promise<void> {
     const updateLocal = async () => {
-      console.log("[DBService] Updating agreement via local API...");
-      const response = await fetch(`/api/agreements/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-      if (response.ok) {
-        const current = await this.getAgreements();
-        localStorage.setItem('kdb_agreements_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Updating agreement via local API / storage...");
+      try {
+        const response = await fetch(`/api/agreements/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates)
+        });
+        if (response.ok) {
+          const current = await this.getAgreements();
+          localStorage.setItem('kdb_agreements_cache', JSON.stringify(current));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API updateAgreement error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to update via local API");
+      const raw = localStorage.getItem('kdb_agreements_cache');
+      let items: AgreementData[] = raw ? JSON.parse(raw) : [];
+      const idx = items.findIndex(i => i.id === id);
+      if (idx >= 0) {
+        items[idx] = { ...items[idx], ...updates };
+        localStorage.setItem('kdb_agreements_cache', JSON.stringify(items));
+      }
     };
 
     const client = await getSupabase();
@@ -533,19 +575,22 @@ export const DBService = {
     };
 
     const saveLocal = async () => {
-      console.log("[DBService] Saving closure to local API...");
-      const response = await fetch('/api/closures', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formattedClosure)
-      });
-      if (response.ok) {
-        const current = await this.getClosures();
-        localStorage.setItem('kdb_closures_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Saving closure to local API / storage...");
+      try {
+        const response = await fetch('/api/closures', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formattedClosure)
+        });
+        if (response.ok) {
+          const current = await this.getClosures();
+          localStorage.setItem('kdb_closures_cache', JSON.stringify(current));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API saveClosure fetch error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to save to local API");
+      updateLocalStorageCollection('kdb_closures_cache', formattedClosure);
     };
 
     const client = await getSupabase();
@@ -609,19 +654,28 @@ export const DBService = {
     }
 
     const updateLocal = async () => {
-      console.log("[DBService] Updating closure via local API...");
-      const response = await fetch(`/api/closures/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatesCopy)
-      });
-      if (response.ok) {
-        const current = await this.getClosures();
-        localStorage.setItem('kdb_closures_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Updating closure via local API / storage...");
+      try {
+        const response = await fetch(`/api/closures/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatesCopy)
+        });
+        if (response.ok) {
+          const current = await this.getClosures();
+          localStorage.setItem('kdb_closures_cache', JSON.stringify(current));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API updateClosure fetch error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to update via local API");
+      const raw = localStorage.getItem('kdb_closures_cache');
+      let items: ClosureNotificationData[] = raw ? JSON.parse(raw) : [];
+      const idx = items.findIndex(i => i.id === id);
+      if (idx >= 0) {
+        items[idx] = { ...items[idx], ...updatesCopy };
+        localStorage.setItem('kdb_closures_cache', JSON.stringify(items));
+      }
     };
 
     const client = await getSupabase();
@@ -794,18 +848,24 @@ export const DBService = {
     };
 
     const saveLocal = async () => {
-      const response = await fetch('/api/complaints', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(populatedComplaint)
-      });
-      if (response.ok) {
-        const current = await this.getComplaints();
-        localStorage.setItem('kdb_complaints_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Saving complaint to local API / storage...");
+      try {
+        const response = await fetch('/api/complaints', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(populatedComplaint)
+        });
+        if (response.ok) {
+          const data = await safeJson(response);
+          if (Array.isArray(data)) {
+            localStorage.setItem('kdb_complaints_cache', JSON.stringify(data));
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API saveComplaint fetch error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to save to local API");
+      updateLocalStorageCollection('kdb_complaints_cache', populatedComplaint, 'id');
     };
 
     const client = await getSupabase();
@@ -845,18 +905,28 @@ export const DBService = {
     if (updates.id) populatedUpdates.referenceNumber = updates.id;
 
     const updateLocal = async () => {
-      const response = await fetch(`/api/complaints/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(populatedUpdates)
-      });
-      if (response.ok) {
-        const current = await this.getComplaints();
-        localStorage.setItem('kdb_complaints_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Updating complaint via local API / storage...");
+      try {
+        const response = await fetch(`/api/complaints/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(populatedUpdates)
+        });
+        if (response.ok) {
+          const current = await this.getComplaints();
+          localStorage.setItem('kdb_complaints_cache', JSON.stringify(current));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API updateComplaint fetch error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to update via local API");
+      const raw = localStorage.getItem('kdb_complaints_cache');
+      let items: ComplaintData[] = raw ? JSON.parse(raw) : [];
+      const idx = items.findIndex(i => i.id === id);
+      if (idx >= 0) {
+        items[idx] = { ...items[idx], ...populatedUpdates };
+        localStorage.setItem('kdb_complaints_cache', JSON.stringify(items));
+      }
     };
 
     const client = await getSupabase();
@@ -998,18 +1068,24 @@ export const DBService = {
     };
 
     const saveLocal = async () => {
-      const response = await fetch('/api/inquiries', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(populatedInquiry)
-      });
-      if (response.ok) {
-        const current = await this.getInquiries();
-        localStorage.setItem('kdb_inquiries_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Saving inquiry to local API / storage...");
+      try {
+        const response = await fetch('/api/inquiries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(populatedInquiry)
+        });
+        if (response.ok) {
+          const data = await safeJson(response);
+          if (Array.isArray(data)) {
+            localStorage.setItem('kdb_inquiries_cache', JSON.stringify(data));
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API saveInquiry fetch error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to save to local API");
+      updateLocalStorageCollection('kdb_inquiries_cache', populatedInquiry, 'id');
     };
 
     const client = await getSupabase();
@@ -1051,18 +1127,28 @@ export const DBService = {
     if (updates.id) populatedUpdates.referenceNumber = updates.id;
 
     const updateLocal = async () => {
-      const response = await fetch(`/api/inquiries/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(populatedUpdates)
-      });
-      if (response.ok) {
-        const current = await this.getInquiries();
-        localStorage.setItem('kdb_inquiries_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Updating inquiry via local API / storage...");
+      try {
+        const response = await fetch(`/api/inquiries/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(populatedUpdates)
+        });
+        if (response.ok) {
+          const current = await this.getInquiries();
+          localStorage.setItem('kdb_inquiries_cache', JSON.stringify(current));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API updateInquiry fetch error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to update via local API");
+      const raw = localStorage.getItem('kdb_inquiries_cache');
+      let items: InquiryData[] = raw ? JSON.parse(raw) : [];
+      const idx = items.findIndex(i => (i.id || i.referenceNumber) === id);
+      if (idx >= 0) {
+        items[idx] = { ...items[idx], ...populatedUpdates };
+        localStorage.setItem('kdb_inquiries_cache', JSON.stringify(items));
+      }
     };
 
     const client = await getSupabase();
@@ -1407,19 +1493,24 @@ export const DBService = {
 
   async saveClient(clientRecord: LicensedClient): Promise<void> {
     const saveLocal = async () => {
-      console.log("[DBService] Saving client to local API...");
-      const response = await fetch('/api/clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(clientRecord)
-      });
-      if (response.ok) {
-        const current = await this.getClients();
-        localStorage.setItem('kdb_clients_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Saving client to local API / storage...");
+      try {
+        const response = await fetch('/api/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(clientRecord)
+        });
+        if (response.ok) {
+          const data = await safeJson(response);
+          if (Array.isArray(data)) {
+            localStorage.setItem('kdb_clients_cache', JSON.stringify(data));
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API saveClient fetch error:", e);
       }
-      const errMessage = await safeParseError(response, "Failed to save client via local API");
-      throw new Error(errMessage);
+      updateLocalStorageCollection('kdb_clients_cache', clientRecord, 'id');
     };
 
     const client = await getSupabase();
@@ -1452,21 +1543,25 @@ export const DBService = {
 
   async deleteClient(id: string): Promise<void> {
     const deleteLocal = async () => {
-      console.log("[DBService] Deleting client via local API...");
-      const response = await fetch(`/api/clients/${id}`, {
-        method: 'DELETE'
-      });
-      if (response.ok) {
-        const current = await this.getClients();
-        localStorage.setItem('kdb_clients_cache', JSON.stringify(current));
-        return;
+      console.log("[DBService] Deleting client via local API / storage...");
+      try {
+        const response = await fetch(`/api/clients/${id}`, {
+          method: 'DELETE'
+        });
+        if (response.ok) {
+          const current = await this.getClients();
+          localStorage.setItem('kdb_clients_cache', JSON.stringify(current));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API deleteClient error:", e);
       }
-      throw new Error("Failed to delete client via local API");
+      removeFromLocalStorageCollection('kdb_clients_cache', id, 'id');
     };
 
     const client = await getSupabase();
     if (!client) {
-      console.warn("[DBService] Supabase not initialized, trying local API");
+      console.warn("[DBService] Supabase not initialized, deleting from local storage");
       await deleteLocal();
       return;
     }
@@ -1478,7 +1573,7 @@ export const DBService = {
         .eq('id', id);
       
       if (error) {
-        console.warn("[DBService] Supabase deleteClient failed, falling back to local API. Error details:", error);
+        console.warn("[DBService] Supabase deleteClient failed, falling back to local storage. Error details:", error);
         await deleteLocal();
         return;
       }
@@ -1486,14 +1581,14 @@ export const DBService = {
       const current = await this.getClients();
       localStorage.setItem('kdb_clients_cache', JSON.stringify(current));
     } catch (error: any) {
-      console.warn("[DBService] Supabase deleteClient exception, falling back to local API. Error:", error);
+      console.warn("[DBService] Supabase deleteClient exception, falling back to local storage. Error:", error);
       await deleteLocal();
     }
   },
 
   async saveClientsBulk(clientsList: LicensedClient[]): Promise<void> {
     const saveLocal = async () => {
-      console.log("[DBService] Saving clients bulk to local API...");
+      console.log("[DBService] Saving clients bulk to local API / storage...");
       const currentClients = await this.getClients();
       
       const merged = [...currentClients];
@@ -1506,17 +1601,20 @@ export const DBService = {
         }
       });
 
-      const response = await fetch('/api/clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(merged)
-      });
-      if (response.ok) {
-        localStorage.setItem('kdb_clients_cache', JSON.stringify(merged));
-        return;
+      try {
+        const response = await fetch('/api/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(merged)
+        });
+        if (response.ok) {
+          localStorage.setItem('kdb_clients_cache', JSON.stringify(merged));
+          return;
+        }
+      } catch (e) {
+        console.warn("[DBService] Local API saveClientsBulk error:", e);
       }
-      const errData = await response.json();
-      throw new Error(errData.error || "Failed to save clients via local API");
+      localStorage.setItem('kdb_clients_cache', JSON.stringify(merged));
     };
 
     const client = await getSupabase();
@@ -1633,15 +1731,17 @@ export const DBService = {
 
   async saveReturn(clientReturn: ClientReturn): Promise<void> {
     const saveLocal = async () => {
-      const response = await fetch('/api/returns', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(clientReturn)
-      });
-      if (!response.ok) {
-        const errMessage = await safeParseError(response, "Failed to save return");
-        throw new Error(errMessage);
+      try {
+        const response = await fetch('/api/returns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(clientReturn)
+        });
+        if (response.ok) return;
+      } catch (e) {
+        console.warn("[DBService] Local API saveReturn error:", e);
       }
+      updateLocalStorageCollection('kdb_returns_cache', clientReturn, 'id');
     };
 
     const client = await getSupabase();
@@ -1669,13 +1769,15 @@ export const DBService = {
 
   async deleteReturn(id: string): Promise<void> {
     const deleteLocal = async () => {
-      const response = await fetch(`/api/returns/${id}`, {
-        method: 'DELETE'
-      });
-      if (!response.ok) {
-        const errMessage = await safeParseError(response, "Failed to delete return");
-        throw new Error(errMessage);
+      try {
+        const response = await fetch(`/api/returns/${id}`, {
+          method: 'DELETE'
+        });
+        if (response.ok) return;
+      } catch (e) {
+        console.warn("[DBService] Local API deleteReturn error:", e);
       }
+      removeFromLocalStorageCollection('kdb_returns_cache', id, 'id');
     };
 
     const client = await getSupabase();
@@ -1956,15 +2058,17 @@ export const DBService = {
 
   async saveValidation(validation: DataValidation): Promise<void> {
     const saveLocal = async () => {
-      const response = await fetch('/api/validations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validation)
-      });
-      if (!response.ok) {
-        const errMessage = await safeParseError(response, "Failed to save validation");
-        throw new Error(errMessage);
+      try {
+        const response = await fetch('/api/validations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(validation)
+        });
+        if (response.ok) return;
+      } catch (e) {
+        console.warn("[DBService] Local API saveValidation error:", e);
       }
+      updateLocalStorageCollection('kdb_validations_cache', validation, 'id');
     };
 
     // Update local validations cache immediately to prevent layout shifts or stale loads
@@ -2006,13 +2110,15 @@ export const DBService = {
 
   async deleteValidation(id: string): Promise<void> {
     const deleteLocal = async () => {
-      const response = await fetch(`/api/validations/${id}`, {
-        method: 'DELETE'
-      });
-      if (!response.ok) {
-        const errMessage = await safeParseError(response, "Failed to delete validation");
-        throw new Error(errMessage);
+      try {
+        const response = await fetch(`/api/validations/${id}`, {
+          method: 'DELETE'
+        });
+        if (response.ok) return;
+      } catch (e) {
+        console.warn("[DBService] Local API deleteValidation error:", e);
       }
+      removeFromLocalStorageCollection('kdb_validations_cache', id, 'id');
     };
 
     const client = await getSupabase();
