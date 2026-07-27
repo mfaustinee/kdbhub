@@ -1,6 +1,6 @@
 import React from 'react';
 import { InquiryData } from '../types';
-import { ShieldCheck, Printer, X, Download, HelpCircle } from 'lucide-react';
+import { Printer, X, Download, HelpCircle } from 'lucide-react';
 import { downloadInquiryPDF } from '../services/pdf.ts';
 
 interface InquiryPDFPreviewProps {
@@ -14,6 +14,45 @@ interface InquiryPDFContentProps {
   id?: string;
 }
 
+const clientTypesList = [
+  'Dairy Farmer',
+  'Milk Transporter',
+  'Milk Processor',
+  'Milk Vendor/Trader',
+  'Cooperative Society',
+  'Equipment Supplier',
+  'Exporter/Importer',
+  'Prospective Investor',
+  'Member of Public',
+  'Other'
+];
+
+const inquiryNaturesList = [
+  'Licensing & Registration',
+  'License Renewal',
+  'Compliance Requirements',
+  'Inspection & Certification',
+  'Dairy Imports/Exports',
+  'Market Information',
+  'Training & Capacity Building',
+  'Complaint Submission',
+  'Product Standards',
+  'Other'
+];
+
+const preferredModesList = [
+  'Email',
+  'Phone Call',
+  'In-person Appointment',
+  'Written Letter'
+];
+
+const docStatusesList = [
+  'Attached',
+  'To be submitted later',
+  'None'
+];
+
 const InquiryPDFContent: React.FC<InquiryPDFContentProps> = ({ inquiry, id }) => {
   const formattedDate = new Date(inquiry.submittedAt || Date.now()).toLocaleDateString('en-GB', {
     day: 'numeric',
@@ -23,197 +62,249 @@ const InquiryPDFContent: React.FC<InquiryPDFContentProps> = ({ inquiry, id }) =>
 
   return (
     <div 
-      className="px-12 py-12 leading-[1.6] text-[11.5pt] text-left w-[1024px] box-border relative" 
+      className="px-10 pb-12 leading-[1.5] text-[12pt] text-left w-[1024px] box-border" 
       id={id} 
       style={{ 
-        fontFamily: 'system-ui, -apple-system, sans-serif', 
+        fontFamily: 'Arial, Helvetica, sans-serif', 
         whiteSpace: 'normal', 
         wordSpacing: 'normal',
         backgroundColor: '#ffffff',
-        color: '#1e293b'
+        color: '#0f172a'
       }}
     >
       {/* Header */}
-      <div className="text-center border-b-2 border-sky-850 pb-4 mb-6">
-        <h1 className="font-extrabold text-2xl text-sky-850 tracking-tight">KENYA DAIRY BOARD</h1>
-        <h2 className="font-black text-lg text-slate-800 tracking-wider uppercase">CLIENT INQUIRY FORM</h2>
-      </div>
-
-      {/* Official Use Header Meta */}
-      <div className="grid grid-cols-2 gap-4 border p-4 bg-slate-50/50 rounded-xl mb-6 font-semibold text-xs">
-        <div>
-          <span className="text-slate-400 block uppercase tracking-wider text-[9px]">Reference No.</span>
-          <span className="text-sky-700 font-bold font-mono">{inquiry.id}</span>
-        </div>
-        <div>
-          <span className="text-slate-400 block uppercase tracking-wider text-[9px]">Date Received</span>
-          <span className="text-slate-700">{inquiry.dateReceived || formattedDate}</span>
+      <div className="flex flex-col items-center text-center mb-8 pt-6 break-inside-avoid" style={{ borderBottom: '2px solid #0f172a', paddingBottom: '16px' }}>
+        <div className="space-y-1 w-full flex flex-col items-center justify-center text-center">
+          <h1 className="text-2xl font-bold uppercase tracking-tight text-center w-full" style={{ color: '#1e293b' }}>
+            KENYA DAIRY BOARD
+          </h1>
         </div>
       </div>
 
-      {/* Section 1: Client Information */}
-      <div className="mb-6">
-        <h3 className="font-black text-xs text-sky-850 uppercase tracking-widest border-b pb-1.5 mb-3">1. Client Information</h3>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">Full Name / Company Name</span>
-            <span className="font-bold text-slate-800">{inquiry.clientName}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">Contact Person</span>
-            <span className="font-semibold text-slate-700">{inquiry.contactPerson || 'N/A'}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">ID / Passport No.</span>
-            <span className="font-semibold text-slate-700">{inquiry.idPassportNo || 'N/A'}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">KDB License Number</span>
-            <span className="font-mono font-semibold text-slate-700">{inquiry.kdbLicenseNo || 'N/A'}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">Postal Address</span>
-            <span className="font-semibold text-slate-700">{inquiry.postalAddress}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">City / Town</span>
-            <span className="font-bold text-slate-800">{inquiry.cityTown}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">Telephone Number</span>
-            <span className="font-bold text-slate-800">{inquiry.tel}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">Mobile Number</span>
-            <span className="font-bold text-slate-800">{inquiry.mobileNumber}</span>
-          </div>
-          <div className="col-span-2">
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">Email Address</span>
-            <span className="font-semibold text-slate-700">{inquiry.email}</span>
-          </div>
+      {/* Document Title */}
+      <div className="w-full flex justify-center text-center mb-6">
+        <h2 className="text-lg font-bold mt-2 uppercase underline underline-offset-4 text-center" style={{ color: '#0f172a' }}>
+          CLIENT INQUIRY FORM
+        </h2>
+      </div>
+
+      {/* Official Reference & Metadata Box */}
+      <div className="grid grid-cols-3 gap-4 p-3 bg-slate-50 rounded-lg border border-slate-300 mb-6 text-xs font-semibold">
+        <div>
+          <span className="text-slate-500 block uppercase text-[9px] font-bold">Inquiry Ref No.</span>
+          <span className="font-mono font-bold text-slate-800">{inquiry.id}</span>
+        </div>
+        <div>
+          <span className="text-slate-500 block uppercase text-[9px] font-bold">Submission Date</span>
+          <span className="font-bold text-slate-800">{formattedDate}</span>
+        </div>
+        <div>
+          <span className="text-slate-500 block uppercase text-[9px] font-bold">Processing Status</span>
+          <span className="font-bold uppercase text-slate-800">{inquiry.status || 'Submitted'}</span>
         </div>
       </div>
 
-      {/* Section 2 & 3: Client Type & Inquiry Nature */}
-      <div className="grid grid-cols-2 gap-6 mb-6">
-        <div>
-          <h3 className="font-black text-xs text-sky-850 uppercase tracking-widest border-b pb-1.5 mb-3">2. Type of Client</h3>
-          <span className="font-bold text-slate-800 text-sm">{inquiry.clientType === 'Other' ? `Other (${inquiry.otherClientType})` : inquiry.clientType}</span>
-        </div>
-        <div>
-          <h3 className="font-black text-xs text-sky-850 uppercase tracking-widest border-b pb-1.5 mb-3">3. Nature of Inquiry</h3>
-          <span className="font-bold text-slate-800 text-sm">{inquiry.natureOfInquiry === 'Other' ? `Other (${inquiry.otherNatureOfInquiry})` : inquiry.natureOfInquiry}</span>
-        </div>
-      </div>
+      <div className="space-y-5">
+        {/* Section 1: Client Information */}
+        <section className="text-left">
+          <h3 className="font-bold uppercase mb-2 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+            1. Client / Applicant Information
+          </h3>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[11pt]">
+            <p><strong>Full Name / Company Name:</strong> {inquiry.clientName}</p>
+            <p><strong>Contact Person:</strong> {inquiry.contactPerson || 'N/A'}</p>
+            <p><strong>ID / Passport No:</strong> {inquiry.idPassportNo || 'N/A'}</p>
+            <p><strong>KDB License Number:</strong> {inquiry.kdbLicenseNo || 'N/A'}</p>
+            <p><strong>Postal Address:</strong> {inquiry.postalAddress || 'N/A'}</p>
+            <p><strong>City / Town:</strong> {inquiry.cityTown || 'N/A'}</p>
+            <p><strong>Telephone Number:</strong> {inquiry.tel || 'N/A'}</p>
+            <p><strong>Mobile Number:</strong> {inquiry.mobileNumber || inquiry.tel || 'N/A'}</p>
+            <p className="col-span-2"><strong>Email Address:</strong> {inquiry.email}</p>
+          </div>
+        </section>
 
-      {/* Section 4: Details of Inquiry */}
-      <div className="mb-6">
-        <h3 className="font-black text-xs text-sky-850 uppercase tracking-widest border-b pb-1.5 mb-3">4. Details of Inquiry</h3>
-        <div className="p-4 bg-slate-50 rounded-xl border">
-          <p className="text-slate-700 text-sm whitespace-pre-wrap leading-relaxed font-serif italic">{inquiry.inquiryDetails}</p>
-        </div>
-      </div>
+        {/* Section 2: Type of Client (Tick where applicable) */}
+        <section className="text-left">
+          <h3 className="font-bold uppercase mb-2 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+            2. Type of Client (Tick where applicable)
+          </h3>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[10pt] border p-3 rounded-lg bg-slate-50/50">
+            {clientTypesList.map(type => {
+              const isSelected = inquiry.clientType === type;
+              const displayLabel = type === 'Other' && isSelected && inquiry.otherClientType 
+                ? `Other (${inquiry.otherClientType})` 
+                : type;
+              return (
+                <div key={type} className="flex items-center space-x-2">
+                  <span className={`inline-block text-base leading-none ${isSelected ? 'font-black text-sky-800' : 'text-slate-400'}`}>
+                    {isSelected ? '☑' : '☐'}
+                  </span>
+                  <span className={isSelected ? 'font-bold text-slate-900 underline' : 'text-slate-700'}>
+                    {displayLabel}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
 
-      {/* Section 5 & 6: Supporting Docs & Preferred Response */}
-      <div className="grid grid-cols-2 gap-6 mb-6">
-        <div>
-          <h3 className="font-black text-xs text-sky-850 uppercase tracking-widest border-b pb-1.5 mb-3">5. Supporting Documents</h3>
-          <div className="text-sm">
-            <span className="text-slate-400 font-bold text-[10px] uppercase block">Status</span>
-            <span className="font-bold text-slate-700">{inquiry.supportingDocsStatus}</span>
-            {inquiry.supportingDocsStatus === 'Attached' && (
-              <div className="mt-2">
-                <span className="text-slate-400 font-bold text-[10px] uppercase block">Attached Documents</span>
-                <span className="font-semibold text-slate-700">{inquiry.attachedDocsList}</span>
+        {/* Section 3: Nature of Inquiry (Tick where applicable) */}
+        <section className="text-left">
+          <h3 className="font-bold uppercase mb-2 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+            3. Nature of Inquiry (Tick where applicable)
+          </h3>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[10pt] border p-3 rounded-lg bg-slate-50/50">
+            {inquiryNaturesList.map(nature => {
+              const isSelected = inquiry.natureOfInquiry === nature;
+              const displayLabel = nature === 'Other' && isSelected && inquiry.otherNatureOfInquiry 
+                ? `Other (${inquiry.otherNatureOfInquiry})` 
+                : nature;
+              return (
+                <div key={nature} className="flex items-center space-x-2">
+                  <span className={`inline-block text-base leading-none ${isSelected ? 'font-black text-sky-800' : 'text-slate-400'}`}>
+                    {isSelected ? '☑' : '☐'}
+                  </span>
+                  <span className={isSelected ? 'font-bold text-slate-900 underline' : 'text-slate-700'}>
+                    {displayLabel}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Section 4: Details of Inquiry */}
+        <section className="text-left">
+          <h3 className="font-bold uppercase mb-2 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+            4. Details of Inquiry / Request
+          </h3>
+          <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 text-[11pt] font-serif italic whitespace-pre-wrap leading-relaxed">
+            {inquiry.inquiryDetails || inquiry.message || 'No detailed message provided.'}
+          </div>
+        </section>
+
+        {/* Section 5: Supporting Documents & Response Preference */}
+        <section className="text-left">
+          <h3 className="font-bold uppercase mb-2 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+            5. Supporting Documentation & Response Preference
+          </h3>
+          <div className="grid grid-cols-2 gap-6 text-[11pt]">
+            <div>
+              <p className="text-[9px] font-bold uppercase text-slate-500 mb-1.5">Supporting Documents (If Any)</p>
+              <div className="space-y-1 text-[10pt] border p-3 rounded-lg bg-slate-50/50">
+                {docStatusesList.map(status => {
+                  const isSelected = (inquiry.supportingDocsStatus || 'None') === status;
+                  return (
+                    <div key={status} className="flex items-center space-x-2">
+                      <span className={`inline-block text-base leading-none ${isSelected ? 'font-black text-sky-800' : 'text-slate-400'}`}>
+                        {isSelected ? '☑' : '☐'}
+                      </span>
+                      <span className={isSelected ? 'font-bold text-slate-900 underline' : 'text-slate-700'}>
+                        {status}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
-            )}
+              {inquiry.supportingDocsStatus === 'Attached' && inquiry.attachedDocsList && (
+                <p className="text-xs text-slate-600 mt-2 italic"><strong>List of attached documents:</strong> {inquiry.attachedDocsList}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[9px] font-bold uppercase text-slate-500 mb-1.5">Preferred Mode of Response</p>
+              <div className="space-y-1 text-[10pt] border p-3 rounded-lg bg-slate-50/50">
+                {preferredModesList.map(mode => {
+                  const isSelected = inquiry.preferredResponseMode === mode;
+                  return (
+                    <div key={mode} className="flex items-center space-x-2">
+                      <span className={`inline-block text-base leading-none ${isSelected ? 'font-black text-sky-800' : 'text-slate-400'}`}>
+                        {isSelected ? '☑' : '☐'}
+                      </span>
+                      <span className={isSelected ? 'font-bold text-slate-900 underline' : 'text-slate-700'}>
+                        {mode}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Section 6: Official KDB Assessment & Response */}
+        <section className="text-left">
+          <h3 className="font-bold uppercase mb-2 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+            6. Official KDB Response & Resolution Assessment
+          </h3>
+          <div className="p-4 bg-amber-50/50 rounded-lg border border-amber-200 text-[11pt] space-y-2">
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <p><strong>Department / Assigned Officer:</strong> {inquiry.departmentAssigned || inquiry.referredTo || 'KDB Compliance & Regulatory Unit'}</p>
+              <p><strong>Action Date:</strong> {inquiry.actionDate || inquiry.dateReplied || formattedDate}</p>
+            </div>
+            <div className="pt-2 border-t border-amber-200">
+              <p className="text-[9px] font-bold uppercase text-amber-800">Official Action / Response Remarks:</p>
+              <p className="font-serif italic font-semibold text-slate-800 mt-1">
+                {inquiry.officialComments || inquiry.responseDetails || inquiry.actionTaken || 'Pending official response and countersign.'}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Section 7: Terms & Declaration */}
+        <section className="space-y-1 text-left" style={{ fontSize: '10pt', color: '#334155' }}>
+          <h3 className="font-bold uppercase mb-1 text-[11pt]" style={{ color: '#0f172a', borderBottom: '1px solid #cbd5e1', paddingBottom: '2px' }}>
+            7. Terms and Declarations
+          </h3>
+          <p className="mt-1">a) The inquirer confirms that all particulars provided in this form are accurate and complete to the best of their knowledge.</p>
+          <p>b) The Kenya Dairy Board shall process inquiries in accordance with the Dairy Industry Act (Cap 336) and statutory service standards.</p>
+          <p>c) This record serves as an official acknowledgment of the inquiry and its official administrative disposition.</p>
+        </section>
+
+        {/* Execution Blocks (Side-by-Side) */}
+        <div className="pt-6 flex justify-between space-x-8 text-left">
+          <div className="flex-1 space-y-2">
+            <p className="font-bold pb-1" style={{ borderBottom: '1px solid #0f172a', color: '#0f172a' }}>
+              FOR: KENYA DAIRY BOARD
+            </p>
+            <div className="space-y-1.5 min-h-[100px]">
+              <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Name:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{inquiry.officialName || 'Authorized KDB Officer'}</span></p>
+              <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Title:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{inquiry.officialTitle || 'Compliance Officer'}</span></p>
+              <div className="py-1 h-16 flex items-center">
+                {inquiry.officialSignature ? (
+                  <img src={inquiry.officialSignature} className="max-h-full" alt="KDB Signature" crossOrigin="anonymous" />
+                ) : (
+                  <div style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '12px' }}>Awaiting Countersign</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-2">
+            <p className="font-bold pb-1" style={{ borderBottom: '1px solid #0f172a', color: '#0f172a' }}>
+              FOR CLIENT / INQUIRER: {inquiry.clientName}
+            </p>
+            <div className="space-y-1.5 min-h-[100px]">
+              <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Name:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{inquiry.clientName}</span></p>
+              <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Title:</span> <span className="font-bold" style={{ color: '#0f172a' }}>Applicant / Client</span></p>
+              <div className="py-1 h-16 flex items-center">
+                {inquiry.clientSignature ? (
+                  <img src={inquiry.clientSignature} className="max-h-full" alt="Client Signature" crossOrigin="anonymous" />
+                ) : (
+                  <div style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '12px' }}>Signed Digitally</div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
-        <div>
-          <h3 className="font-black text-xs text-sky-850 uppercase tracking-widest border-b pb-1.5 mb-3">6. Preferred Response Mode</h3>
-          <span className="font-bold text-slate-800 text-sm">{inquiry.preferredResponseMode}</span>
-        </div>
-      </div>
-
-      {/* Section 7: Declaration */}
-      <div className="mb-6 grid grid-cols-2 gap-6 border-t pt-4">
-        <div>
-          <h3 className="font-black text-xs text-slate-800 uppercase tracking-widest mb-3">7. Declaration</h3>
-          <p className="text-slate-500 text-[10px] leading-relaxed mb-3">
-            I hereby confirm that the information provided above is true and accurate to the best of my knowledge.
-          </p>
-          <div className="font-semibold text-xs text-slate-700 space-y-1">
-            <p><span className="text-slate-400 font-bold uppercase text-[9px]">Client Name:</span> {inquiry.clientName}</p>
-            <p><span className="text-slate-400 font-bold uppercase text-[9px]">Date Signed:</span> {formattedDate}</p>
+        {/* Document Footer Metadata */}
+        <div className="pt-8 flex justify-between items-end" style={{ opacity: 0.5 }}>
+          <div className="text-[7.5px] font-mono" style={{ color: '#64748b' }}>
+            DOC_ID: {inquiry.id.toUpperCase()} | GEN_TIME: {new Date().toISOString()}
           </div>
-        </div>
-
-        <div className="flex flex-col items-center justify-center border p-4 rounded-xl bg-slate-50/50">
-          <span className="text-slate-400 font-bold text-[10px] uppercase block mb-2">Digital Signature</span>
-          {inquiry.clientSignature ? (
-            <img 
-              src={inquiry.clientSignature} 
-              alt="Client Signature" 
-              className="max-h-[60px] object-contain border border-dashed rounded bg-white p-1" 
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <div className="text-slate-300 italic text-xs">No signature recorded</div>
-          )}
-        </div>
-      </div>
-
-      {/* Section 8: For Official Use Only */}
-      <div className="border-t-2 border-dashed border-slate-300 pt-6 mt-6 bg-slate-50 p-6 rounded-2xl border">
-        <h3 className="font-black text-xs text-slate-800 uppercase tracking-widest border-b pb-2 mb-4">8. For Official Use Only (Kenya Dairy Board Office)</h3>
-        
-        <div className="grid grid-cols-3 gap-4 mb-4 text-xs font-semibold">
-          <div>
-            <span className="text-slate-400 block uppercase tracking-wider text-[9px]">Referred To</span>
-            <span className="text-slate-800 block min-h-[16px]">{inquiry.referredTo || '____________________'}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 block uppercase tracking-wider text-[9px]">Date of Action</span>
-            <span className="text-slate-700 block min-h-[16px]">{inquiry.actionDate || '____ / ____ / ______'}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 block uppercase tracking-wider text-[9px]">Status</span>
-            <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-              inquiry.status === 'resolved' ? 'bg-emerald-100 text-emerald-800' :
-              inquiry.status === 'closed' ? 'bg-slate-200 text-slate-700' : 'bg-sky-100 text-sky-800'
-            }`}>
-              {inquiry.status || 'Pending'}
-            </span>
-          </div>
-        </div>
-
-        <div className="border p-3 rounded-lg bg-white min-h-[60px] mb-4 text-xs">
-          <span className="text-slate-400 font-bold text-[9px] uppercase block mb-1">Response Details</span>
-          <p className="text-slate-700 italic font-semibold">{inquiry.responseDetails || 'Pending official response...'}</p>
-        </div>
-
-        <div className="grid grid-cols-3 gap-4 text-xs font-semibold items-end pt-2 border-t">
-          <div>
-            <span className="text-slate-400 block uppercase tracking-wider text-[9px]">Date Replied</span>
-            <span className="text-slate-700">{inquiry.dateReplied || '____ / ____ / ______'}</span>
-          </div>
-          <div>
-            <span className="text-slate-400 block uppercase tracking-wider text-[9px]">Officer Name</span>
-            <span className="text-slate-700">{inquiry.officialName || '____________________'}</span>
-          </div>
-          <div className="flex flex-col items-center">
-            <span className="text-slate-400 block uppercase tracking-wider text-[9px] mb-1">Officer Signature</span>
-            {inquiry.officialSignature ? (
-              <img 
-                src={inquiry.officialSignature} 
-                alt="Officer Signature" 
-                className="max-h-[40px] object-contain" 
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <span className="text-slate-300 italic">____________________</span>
-            )}
+          <div className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>
+            Official Document
           </div>
         </div>
       </div>
@@ -251,7 +342,7 @@ export const InquiryPDFPreview: React.FC<InquiryPDFPreviewProps> = ({ inquiry, o
               title="Download PDF Document"
             >
               <Download className="w-4 h-4" />
-              <span>Download PDF</span>
+              <span>Download Official PDF</span>
             </button>
             <button 
               onClick={() => window.print()}

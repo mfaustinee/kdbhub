@@ -28,8 +28,18 @@ export interface DebtorRecord {
   installments: Installment[];
 }
 
+export interface EnabledModules {
+  levyAgreement: boolean;
+  businessClosure: boolean;
+  clientInquiry: boolean;
+  stakeholderComplaint: boolean;
+}
+
 export interface StaffConfig {
   officialSignature: string; // Base64
+  officialName?: string;
+  officialTitle?: string;
+  enabledModules?: EnabledModules;
 }
 
 export interface AgreementData extends DebtorRecord {
@@ -163,7 +173,7 @@ export interface InquiryData {
   inquiryDetails: string;
   
   // 5. SUPPORTING DOCUMENTS
-  supportingDocsStatus: 'Attached' | 'To be submitted later';
+  supportingDocsStatus: 'Attached' | 'To be submitted later' | 'None';
   attachedDocsList?: string;
   
   // 6. PREFERRED MODE OF RESPONSE
@@ -360,5 +370,56 @@ export interface DataValidation {
   validatedAt: string;
   status: 'Approved' | 'Pending' | 'Action Required';
   remarks?: string;
+  monthsCount?: number; // Number of individual months / sales entries validated within this form
 }
+
+export const getIndividualValidationsCount = (v: DataValidation): number => {
+  if (typeof v.monthsCount === 'number' && v.monthsCount > 0) {
+    return v.monthsCount;
+  }
+  const raw = (v as any).raw_data || (v as any).rawData;
+  if (Array.isArray(raw?.sales) && raw.sales.length > 0) {
+    return raw.sales.length;
+  }
+  if (Array.isArray((v as any).sales) && (v as any).sales.length > 0) {
+    return (v as any).sales.length;
+  }
+  return 1;
+};
+
+export const ALL_PREMISE_CATEGORIES = [
+  'Milk Bar',
+  'Dispenser',
+  'Cooling Plant',
+  'Mini Dairy',
+  'Cottage Industry',
+  'Processor'
+] as const;
+
+export type PremiseCategoryType = typeof ALL_PREMISE_CATEGORIES[number];
+
+export const getClientCategory = (c: any): string => {
+  if (!c) return 'Milk Bar';
+  const val = c.premiseCategory ?? c.category ?? c.premise_category ?? c.premisecategory ?? c.client_category;
+  return typeof val === 'string' && val.trim() ? val.trim() : 'Milk Bar';
+};
+
+export const isSameCategory = (clientCategory: string | undefined | null, targetCategory: string): boolean => {
+  if (!clientCategory) return false;
+  const c = String(clientCategory).trim().toLowerCase();
+  const t = String(targetCategory).trim().toLowerCase();
+  
+  if (c === t) return true;
+  if (c === `${t}s` || `${c}s` === t) return true;
+  
+  if (t === 'milk bar' && (c === 'milkbar' || c === 'milk bars' || c === 'milk-bar')) return true;
+  if (t === 'cooling plant' && (c === 'coolingplant' || c === 'cooling plant' || c === 'cooling station' || c === 'cooling plants' || c === 'chilling center')) return true;
+  if (t === 'mini dairy' && (c === 'minidairy' || c === 'mini-dairy' || c === 'mini dairies')) return true;
+  if (t === 'cottage industry' && (c === 'cottage' || c === 'cottage-industry' || c === 'cottage industry')) return true;
+  if (t === 'dispenser' && (c === 'dispensers' || c === 'milk dispenser')) return true;
+  if (t === 'processor' && (c === 'processors' || c === 'processing plant')) return true;
+  
+  return false;
+};
+
 

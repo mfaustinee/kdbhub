@@ -151,7 +151,12 @@ const clientFromDb = (dbObj: any): LicensedClient => {
   if (dbObj.tel !== undefined) out.tel = dbObj.tel;
   if (dbObj.contacts !== undefined) out.contactPerson = dbObj.contacts;
   if (dbObj.location !== undefined) out.location = dbObj.location;
-  if (dbObj.category !== undefined) out.premiseCategory = dbObj.category;
+  const rawCat = dbObj.premiseCategory ?? dbObj.premise_category ?? dbObj.premisecategory ?? dbObj.category ?? dbObj.client_category ?? dbObj.clientCategory;
+  if (rawCat !== undefined && rawCat !== null) {
+    out.premiseCategory = String(rawCat).trim();
+  } else if (!out.premiseCategory) {
+    out.premiseCategory = 'Milk Bar';
+  }
   if (dbObj.county !== undefined) out.county = dbObj.county;
   if (dbObj.coolingcapacity !== undefined) out.coolingCapacity = dbObj.coolingcapacity ? Number(dbObj.coolingcapacity) : undefined;
   if (dbObj.permitstatus !== undefined) out.permitStatus = dbObj.permitstatus;
@@ -1348,21 +1353,53 @@ export const DBService = {
   },
 
   async getStaffConfig(): Promise<StaffConfig> {
+    const defaultModules = {
+      levyAgreement: true,
+      businessClosure: true,
+      clientInquiry: true,
+      stakeholderComplaint: true,
+    };
+
+    let cachedConfig: StaffConfig | null = null;
+    const local = localStorage.getItem('kdb_staff_cache');
+    if (local) {
+      try {
+        const parsed = JSON.parse(local);
+        cachedConfig = {
+          ...parsed,
+          enabledModules: {
+            ...defaultModules,
+            ...(parsed.enabledModules || {})
+          }
+        };
+      } catch (e) {
+        // fallback
+      }
+    }
+
+    try {
+      fetch('/api/staff')
+        .then(res => res.ok ? res.json() : null)
+        .then(apiData => {
+          if (apiData && apiData.enabledModules) {
+            const merged = {
+              ...apiData,
+              enabledModules: {
+                ...defaultModules,
+                ...apiData.enabledModules
+              }
+            };
+            localStorage.setItem('kdb_staff_cache', JSON.stringify(merged));
+          }
+        })
+        .catch(() => {});
+    } catch (e) {
+      // ignore
+    }
+
     const client = await getSupabase();
     if (!client) {
-      console.warn("[DBService] Supabase not initialized, trying local API");
-      try {
-        const response = await fetch('/api/staff');
-        if (response.ok) {
-          const data = await response.json();
-          localStorage.setItem('kdb_staff_cache', JSON.stringify(data));
-          return data;
-        }
-      } catch (e) {
-        console.error("[DBService] Local API error:", e);
-      }
-      const local = localStorage.getItem('kdb_staff_cache');
-      return local ? JSON.parse(local) : { officialSignature: '' };
+      return cachedConfig || { officialSignature: '', enabledModules: defaultModules };
     }
 
     try {
@@ -1376,48 +1413,78 @@ export const DBService = {
       
       if (data) {
         const config = fromDb(data, { officialSignature: '', officialName: '', officialTitle: '' }) as StaffConfig;
-        localStorage.setItem('kdb_staff_cache', JSON.stringify(config));
-        return config;
+        
+        let rawModules = data.enabledmodules ?? data.enabledModules ?? (data as any).enabled_modules;
+        if (typeof rawModules === 'string') {
+          try { rawModules = JSON.parse(rawModules); } catch (e) { rawModules = null; }
+        }
+        
+        const enabledModules = (rawModules && typeof rawModules === 'object' && Object.keys(rawModules).length > 0) 
+          ? { ...defaultModules, ...rawModules }
+          : (cachedConfig?.enabledModules || defaultModules);
+
+        const finalConfig: StaffConfig = {
+          ...config,
+          enabledModules
+        };
+
+        localStorage.setItem('kdb_staff_cache', JSON.stringify(finalConfig));
+        return finalConfig;
       }
-      return { officialSignature: '' };
+
+      return cachedConfig || { 
+        officialSignature: '',
+        enabledModules: defaultModules
+      };
     } catch (error) {
       console.error("[DBService] getStaffConfig error:", error);
-      const local = localStorage.getItem('kdb_staff_cache');
-      return local ? JSON.parse(local) : { officialSignature: '' };
+      return cachedConfig || { 
+        officialSignature: '',
+        enabledModules: defaultModules
+      };
     }
   },
 
   async saveStaffConfig(config: StaffConfig): Promise<void> {
-    const client = await getSupabase();
-    if (!client) {
-      console.warn("[DBService] Supabase not initialized, trying local API");
-      try {
-        const response = await fetch('/api/staff', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(config)
-        });
-        if (response.ok) {
-          localStorage.setItem('kdb_staff_cache', JSON.stringify(config));
-          return;
-        }
-      } catch (e) {
-        console.error("[DBService] Local API error:", e);
-      }
-      return;
+    // 1. Always save to local storage immediately
+    localStorage.setItem('kdb_staff_cache', JSON.stringify(config));
+
+    // 2. Save to local server file /api/staff as backup
+    try {
+      await fetch('/api/staff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+    } catch (e) {
+      console.warn("[DBService] /api/staff save warning:", e);
     }
+
+    // 3. Save to Supabase
+    const client = await getSupabase();
+    if (!client) return;
 
     try {
       const dbConfig = toDb(config);
+      const payload: any = {
+        id: 1,
+        ...dbConfig,
+        enabledmodules: config.enabledModules ? JSON.stringify(config.enabledModules) : null
+      };
+
       const { error } = await client
         .from('staff_config')
-        .upsert({ id: 1, ...dbConfig });
+        .upsert(payload);
       
-      if (error) throw error;
-      localStorage.setItem('kdb_staff_cache', JSON.stringify(config));
+      if (error) {
+        console.warn("[DBService] saveStaffConfig Supabase upsert with enabledmodules failed, retrying without it:", error.message);
+        const { enabledmodules, enabledModules, ...fallbackConfig } = payload;
+        await client
+          .from('staff_config')
+          .upsert({ id: 1, ...fallbackConfig });
+      }
     } catch (error) {
       console.error("[DBService] saveStaffConfig error:", error);
-      throw error;
     }
   },
 
@@ -1916,7 +1983,11 @@ export const DBService = {
           const list1: any[] = res1.status === 'fulfilled' && !res1.value.error ? (res1.value.data || []) : [];
           const list2: any[] = res2.status === 'fulfilled' && !res2.value.error ? (res2.value.data || []) : [];
 
-          const mapped1 = list1.map(r => fromDb(r, template));
+          const mapped1 = list1.map(r => {
+            const item = fromDb(r, template);
+            const mCount = r.months_count || r.monthsCount || (Array.isArray(r.raw_data?.sales) && r.raw_data.sales.length > 0 ? r.raw_data.sales.length : 1);
+            return { ...item, monthsCount: mCount };
+          });
           const mapped2 = list2.map(r => {
             let year = 2026;
             let period = r.validation_period || '';
@@ -1939,6 +2010,7 @@ export const DBService = {
             const qDeclared = raw.sales?.[0]?.qtyDeclared || '';
             const bPrice = parseFloat(raw.sales?.[0]?.buyingPrice) || 0;
             const total = raw.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0;
+            const mCount = Array.isArray(raw.sales) && raw.sales.length > 0 ? raw.sales.length : (r.months_count || 1);
 
             return {
               id: r.id || `${r.permit_no || ''}-${r.validation_period || ''}`,
@@ -1958,7 +2030,8 @@ export const DBService = {
               validatorName: raw.complianceOfficer || '',
               validatedAt: r.date || '',
               status: 'Approved' as const,
-              remarks: raw.comments || ''
+              remarks: raw.comments || '',
+              monthsCount: mCount
             };
           });
 
@@ -2005,7 +2078,11 @@ export const DBService = {
       const list1: any[] = res1.status === 'fulfilled' && !res1.value.error ? (res1.value.data || []) : [];
       const list2: any[] = res2.status === 'fulfilled' && !res2.value.error ? (res2.value.data || []) : [];
 
-      const mapped1 = list1.map(r => fromDb(r, template));
+      const mapped1 = list1.map(r => {
+        const item = fromDb(r, template);
+        const mCount = r.months_count || r.monthsCount || (Array.isArray(r.raw_data?.sales) && r.raw_data.sales.length > 0 ? r.raw_data.sales.length : 1);
+        return { ...item, monthsCount: mCount };
+      });
 
       const mapped2 = list2.map(r => {
         let year = 2026;
@@ -2029,6 +2106,7 @@ export const DBService = {
         const qDeclared = raw.sales?.[0]?.qtyDeclared || '';
         const bPrice = parseFloat(raw.sales?.[0]?.buyingPrice) || 0;
         const total = raw.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0;
+        const mCount = Array.isArray(raw.sales) && raw.sales.length > 0 ? raw.sales.length : (r.months_count || 1);
 
         return {
           id: r.id || `${r.permit_no || ''}-${r.validation_period || ''}`,
@@ -2048,7 +2126,8 @@ export const DBService = {
           validatorName: raw.complianceOfficer || '',
           validatedAt: r.date || '',
           status: 'Approved' as const,
-          remarks: raw.comments || ''
+          remarks: raw.comments || '',
+          monthsCount: mCount
         };
       });
 

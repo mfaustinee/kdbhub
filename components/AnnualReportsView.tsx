@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { LicensedClient, ClientReturn } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, getIndividualValidationsCount, isSameCategory, getClientCategory } from '../types';
+import { processValidationsToTimeline } from '../utils/validationAggregator';
 import { exportAnnualReportToExcel } from '../utils/excelExport';
 import { 
   FileText, 
@@ -180,10 +181,13 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
 
   const fyMonths = getFYMonths(fyStartYear, fyEndYear);
 
-  const annualValidationsCount = validations.filter(v => {
+  const annualApprovedForms = validations.filter(v => {
     const vYear = Number(v.year);
     return fyMonths.some(qm => (qm.name || '').toLowerCase() === (v.period || '').toLowerCase() && Number(qm.year) === vYear) && v.status === 'Approved';
-  }).length;
+  });
+  const annualValidationsCount = annualApprovedForms.length;
+  const annualIndividualValidationsCount = annualApprovedForms.reduce((sum, v) => sum + getIndividualValidationsCount(v), 0);
+  const validationTimeline = processValidationsToTimeline(undefined, undefined, undefined, validations);
 
   const annualCumulativeDebt = (() => {
     if (fyMonths.length === 0) return 0;
@@ -326,20 +330,28 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
   const qualifyingClients = clients.filter(c => c.levyInfo === 'QFR' && isClientOperatingInPeriod(c, latestMonthName, latestMonthYear));
 
   // Proportion of DBOs and submissions per category
-  const categoriesList: ('Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry')[] = [
-    'Milk Bar', 'Dispenser', 'Cooling Plant', 'Mini Dairy', 'Cottage Industry'
+  const categoriesList: ('Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry' | 'Processor')[] = [
+    'Milk Bar', 'Dispenser', 'Cooling Plant', 'Mini Dairy', 'Cottage Industry', 'Processor'
   ];
+
+  const annualApprovedValidations = validations.filter(v => {
+    const isApproved = v.status === 'Approved';
+    return isApproved && compiledMonths.some(m => 
+      (v.period || '').toLowerCase() === m.name.toLowerCase() && 
+      Number(v.year) === m.year
+    );
+  });
 
   const proportionData = categoriesList.map(cat => {
     const catQualifyingByMonth = compiledMonths.map(m => {
       const qualifying_m = clients.filter(c => c.levyInfo === 'QFR' && isClientOperatingInPeriod(c, m.name, m.year));
-      return qualifying_m.filter(c => c.premiseCategory === cat);
+      return qualifying_m.filter(c => isSameCategory(getClientCategory(c), cat));
     });
 
     // Combine all returns in the FY for this category
     const catReturns = compiledMonths.flatMap(m => m.data.returns).filter(r => {
       const client = clients.find(c => c.id === r.clientId);
-      return client?.premiseCategory === cat;
+      return client ? isSameCategory(getClientCategory(client), cat) : false;
     });
 
     const filerIds = new Set(catReturns.map(r => r.clientId));
@@ -359,6 +371,11 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
 
     const activeCount = catQualifyingByMonth[11].length;
 
+    const catValidations = annualApprovedValidations.filter(v => 
+      isSameCategory(getClientCategory(v.category || (clients.find(c => c.id === v.clientId)?.premiseCategory) || ''), cat)
+    );
+    const validationsCount = catValidations.reduce((sum, v) => sum + getIndividualValidationsCount(v), 0);
+
     return {
       category: cat,
       activeCount,
@@ -368,7 +385,8 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
       actualSubmissions,
       submissionRate,
       totalLitres,
-      totalLevy
+      totalLevy,
+      validationsCount
     };
   });
 
@@ -379,6 +397,7 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
     actualSubmissions: proportionData.reduce((sum, d) => sum + d.actualSubmissions, 0),
     totalLitres: proportionData.reduce((sum, d) => sum + d.totalLitres, 0),
     totalLevy: proportionData.reduce((sum, d) => sum + d.totalLevy, 0),
+    validationsCount: proportionData.reduce((sum, d) => sum + d.validationsCount, 0),
   };
 
   const totalPercentageMaking = totalsProportion.activeCount > 0 
@@ -731,7 +750,7 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
             <p>1. Financial Year (FY) target is configured independently per FY at KES <strong>{formatNumber(annualTarget)}</strong>.</p>
             <p>2. Gross CSL represents revenue declared for all active months in the selected Financial Year. Debt recovery represents previous years' arrears collected during this period. During this financial year, <strong>{numAnnualDebtPayingDBOs}</strong> distinct DBO(s) paid outstanding arrears.</p>
             <p>3. A negative variance indicates performance has exceeded targets, whereas a positive variance shows shortfalls.</p>
-            <p>4. <strong>Validations Counter:</strong> Successfully completed and submitted validation forms within this financial year's timeline boundary: <strong className="text-emerald-700">{annualValidationsCount} form(s)</strong>.</p>
+            <p>4. <strong>Validations Counter:</strong> Successfully completed and submitted validation forms within this financial year's timeline boundary: <strong className="text-emerald-700">{annualValidationsCount} form(s)</strong> (<strong className="text-emerald-700">{annualIndividualValidationsCount} individual month validation(s)</strong> reconciled).</p>
           </div>
         </div>
 
@@ -803,6 +822,7 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
                     <th className="p-4 text-center">EXPECTED RETURNS</th>
                     <th className="p-4 text-center">SUBMITTED RETURNS</th>
                     <th className="p-4 text-center">SUBMISSION RATE (%)</th>
+                    <th className="p-4 text-center">DATA VALIDATIONS</th>
                     <th className="p-4 text-right">TOTAL LITRES</th>
                     <th className="p-4 text-right">LEVY COLLECTED (KES)</th>
                   </tr>
@@ -815,6 +835,7 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
                       <td className="p-4 text-center font-mono text-slate-400">{d.expectedSubmissions}</td>
                       <td className="p-4 text-center font-mono text-emerald-600">{d.actualSubmissions}</td>
                       <td className="p-4 text-center font-mono font-bold">{d.submissionRate.toFixed(0)}%</td>
+                      <td className="p-4 text-center font-mono text-purple-600 font-bold">{d.validationsCount}</td>
                       <td className="p-4 text-right font-mono">{formatNumber(d.totalLitres)}</td>
                       <td className="p-4 text-right font-mono text-slate-950">{formatNumber(d.totalLevy)}</td>
                     </tr>
@@ -825,6 +846,7 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
                     <td className="p-4 text-center font-mono text-slate-300">{totalsProportion.expectedSubmissions}</td>
                     <td className="p-4 text-center font-mono text-emerald-300">{totalsProportion.actualSubmissions}</td>
                     <td className="p-4 text-center font-mono">{totalSubmissionRate}%</td>
+                    <td className="p-4 text-center font-mono text-purple-300 font-bold">{totalsProportion.validationsCount}</td>
                     <td className="p-4 text-right font-mono">{formatNumber(totalsProportion.totalLitres)}</td>
                     <td className="p-4 text-right font-mono bg-emerald-600 text-white">{formatNumber(totalsProportion.totalLevy)}</td>
                   </tr>
@@ -900,7 +922,10 @@ export const AnnualReportsView: React.FC<AnnualReportsViewProps> = ({ clients, r
               </div>
               <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col justify-between">
                 <span className="text-[9px] font-black text-emerald-700 uppercase tracking-widest">Validations Counter</span>
-                <span className="font-mono font-black text-sm text-emerald-600 mt-2">{annualValidationsCount} Form(s)</span>
+                <div className="mt-1">
+                  <span className="font-mono font-black text-sm text-emerald-600 block">{annualValidationsCount} Form(s)</span>
+                  <span className="font-mono font-bold text-xs text-emerald-700 block mt-0.5">{annualIndividualValidationsCount} Individual Validation(s)</span>
+                </div>
                 <span className="text-[8px] text-emerald-500 font-bold uppercase mt-1">Submitted & Approved in FY</span>
               </div>
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-150 flex flex-col justify-between">

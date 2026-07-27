@@ -41,6 +41,7 @@ export interface MonthlyExportData {
     percentageMaking: number;
     debtPayingCount: number;
     totalLitres: number;
+    validationsCount?: number;
   }>;
   totalsProportion: {
     activeCount: number;
@@ -48,6 +49,7 @@ export interface MonthlyExportData {
     notMakingCount: number;
     debtPayingCount: number;
     totalLitres: number;
+    validationsCount?: number;
   };
   totalPercentageMaking: number;
   totalPercentageNotMaking: number;
@@ -195,6 +197,7 @@ export function exportMonthlyReportToExcel(data: MonthlyExportData) {
       'DBOs NOT FILING (C = A - B)',
       'FILING COMPLIANCE RATE (%)',
       'DEBT PAYING DBOs',
+      'DATA VALIDATIONS',
       'TOTAL LITRES DECLARED'
     ]
   ];
@@ -207,6 +210,7 @@ export function exportMonthlyReportToExcel(data: MonthlyExportData) {
       row.notMakingCount,
       `${row.percentageMaking}%`,
       row.debtPayingCount,
+      row.validationsCount || 0,
       row.totalLitres
     ]);
   });
@@ -219,6 +223,7 @@ export function exportMonthlyReportToExcel(data: MonthlyExportData) {
     totalsProportion.notMakingCount,
     `${totalPercentageMaking}%`,
     totalsProportion.debtPayingCount,
+    totalsProportion.validationsCount || 0,
     totalsProportion.totalLitres
   ]);
 
@@ -327,6 +332,7 @@ export interface QuarterlyExportData {
     submissionRate: number;
     totalLitres: number;
     totalLevy: number;
+    validationsCount?: number;
   }>;
   totalsProportion: {
     activeCount: number;
@@ -335,6 +341,7 @@ export interface QuarterlyExportData {
     actualSubmissions: number;
     totalLitres: number;
     totalLevy: number;
+    validationsCount?: number;
   };
   totalPercentageMaking: number;
   totalSubmissionRate: number;
@@ -407,6 +414,7 @@ export function exportQuarterlyReportToExcel(data: QuarterlyExportData) {
       'EXPECTED SUBMISSIONS (C)',
       'ACTUAL SUBMISSIONS (D)',
       'SUBMISSION RATE (D/C)',
+      'DATA VALIDATIONS',
       'TOTAL LITRES DECLARED',
       'TOTAL LEVY COLLECTED (KES)'
     ]
@@ -421,6 +429,7 @@ export function exportQuarterlyReportToExcel(data: QuarterlyExportData) {
       row.expectedSubmissions,
       row.actualSubmissions,
       `${row.submissionRate.toFixed(1)}%`,
+      row.validationsCount || 0,
       row.totalLitres,
       row.totalLevy
     ]);
@@ -434,6 +443,7 @@ export function exportQuarterlyReportToExcel(data: QuarterlyExportData) {
     totalsProportion.expectedSubmissions,
     totalsProportion.actualSubmissions,
     `${totalSubmissionRate}%`,
+    totalsProportion.validationsCount || 0,
     totalsProportion.totalLitres,
     totalsProportion.totalLevy
   ]);
@@ -523,6 +533,7 @@ export interface HalfYearlyExportData {
     submissionRate: number;
     totalLitres: number;
     totalLevy: number;
+    validationsCount?: number;
   }>;
   totalsProportion: {
     activeCount: number;
@@ -531,6 +542,7 @@ export interface HalfYearlyExportData {
     actualSubmissions: number;
     totalLitres: number;
     totalLevy: number;
+    validationsCount?: number;
   };
   totalPercentageMaking: number;
   totalSubmissionRate: number;
@@ -601,6 +613,7 @@ export function exportHalfYearlyReportToExcel(data: HalfYearlyExportData) {
       'EXPECTED SUBMISSIONS (C)',
       'ACTUAL SUBMISSIONS (D)',
       'SUBMISSION RATE (D/C)',
+      'DATA VALIDATIONS',
       'TOTAL LITRES DECLARED',
       'TOTAL LEVY COLLECTED (KES)'
     ]
@@ -615,6 +628,7 @@ export function exportHalfYearlyReportToExcel(data: HalfYearlyExportData) {
       row.expectedSubmissions,
       row.actualSubmissions,
       `${row.submissionRate.toFixed(1)}%`,
+      row.validationsCount || 0,
       row.totalLitres,
       row.totalLevy
     ]);
@@ -628,6 +642,7 @@ export function exportHalfYearlyReportToExcel(data: HalfYearlyExportData) {
     totalsProportion.expectedSubmissions,
     totalsProportion.actualSubmissions,
     `${totalSubmissionRate}%`,
+    totalsProportion.validationsCount || 0,
     totalsProportion.totalLitres,
     totalsProportion.totalLevy
   ]);
@@ -715,6 +730,7 @@ export interface AnnualExportData {
     submissionRate: number;
     totalLitres: number;
     totalLevy: number;
+    validationsCount?: number;
   }>;
   totalsProportion: {
     activeCount: number;
@@ -723,6 +739,7 @@ export interface AnnualExportData {
     actualSubmissions: number;
     totalLitres: number;
     totalLevy: number;
+    validationsCount?: number;
   };
   totalPercentageMaking: number;
   totalSubmissionRate: number;
@@ -792,6 +809,7 @@ export function exportAnnualReportToExcel(data: AnnualExportData) {
       'EXPECTED SUBMISSIONS (C)',
       'ACTUAL SUBMISSIONS (D)',
       'SUBMISSION RATE (D/C)',
+      'DATA VALIDATIONS',
       'TOTAL LITRES DECLARED',
       'TOTAL LEVY COLLECTED (KES)'
     ]
@@ -806,6 +824,7 @@ export function exportAnnualReportToExcel(data: AnnualExportData) {
       row.expectedSubmissions,
       row.actualSubmissions,
       `${row.submissionRate.toFixed(1)}%`,
+      row.validationsCount || 0,
       row.totalLitres,
       row.totalLevy
     ]);
@@ -819,6 +838,7 @@ export function exportAnnualReportToExcel(data: AnnualExportData) {
     totalsProportion.expectedSubmissions,
     totalsProportion.actualSubmissions,
     `${totalSubmissionRate}%`,
+    totalsProportion.validationsCount || 0,
     totalsProportion.totalLitres,
     totalsProportion.totalLevy
   ]);

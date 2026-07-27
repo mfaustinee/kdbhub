@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { DBService } from '../services/db';
-import { LicensedClient, ClientReturn, DataValidation } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, getIndividualValidationsCount, isSameCategory, getClientCategory } from '../types';
+import { processValidationsToTimeline } from '../utils/validationAggregator';
 import { QuarterlyReportsView } from './QuarterlyReportsView';
 import { HalfYearlyReportsView } from './HalfYearlyReportsView';
 import { AnnualReportsView } from './AnnualReportsView';
@@ -333,13 +334,13 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
   };
 
   // Proportion of DBOs Summary Calculations (grouped by category)
-  const categoriesList: ('Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry')[] = [
-    'Milk Bar', 'Dispenser', 'Cooling Plant', 'Mini Dairy', 'Cottage Industry'
+  const categoriesList: ('Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry' | 'Processor')[] = [
+    'Milk Bar', 'Dispenser', 'Cooling Plant', 'Mini Dairy', 'Cottage Industry', 'Processor'
   ];
 
   const proportionData = categoriesList.map(cat => {
     // Active qualifying clients in this category
-    const catQualifying = qualifyingClients.filter(c => c.premiseCategory === cat);
+    const catQualifying = qualifyingClients.filter(c => isSameCategory(getClientCategory(c), cat));
     
     // Clients who made returns for this selected period
     const catFilerIds = new Set(selectedPeriodReturns.map(r => r.clientId));
@@ -349,16 +350,25 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
     // Debt collected count (unique clients who paid arrears)
     const catDebtPayingIds = new Set(debtCollectedReturns.filter(r => {
       const client = clients.find(c => c.id === r.clientId);
-      return client?.premiseCategory === cat;
+      return client ? isSameCategory(getClientCategory(client), cat) : false;
     }).map(r => r.clientId));
 
     // Total Litres declared in this selected month
     const catTotalLitres = selectedPeriodReturns
       .filter(r => {
         const client = clients.find(c => c.id === r.clientId);
-        return client?.premiseCategory === cat;
+        return client ? isSameCategory(getClientCategory(client), cat) : false;
       })
       .reduce((sum, r) => sum + r.qty, 0);
+
+    // Data validations count for this category
+    const catValidations = validations.filter(v => 
+      Number(v.year) === selectedYear && 
+      (v.period || '').toLowerCase() === (selectedMonth || '').toLowerCase() &&
+      v.status === 'Approved' &&
+      isSameCategory(getClientCategory(v.category || (clients.find(c => c.id === v.clientId)?.premiseCategory) || ''), cat)
+    );
+    const catValidationsCount = catValidations.reduce((sum, v) => sum + getIndividualValidationsCount(v), 0);
 
     return {
       category: cat,
@@ -367,7 +377,8 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
       notMakingCount: catNotMakingReturns.length,
       percentageMaking: catQualifying.length > 0 ? Math.round((catMakingReturns.length / catQualifying.length) * 100) : 0,
       debtPayingCount: catDebtPayingIds.size,
-      totalLitres: catTotalLitres
+      totalLitres: catTotalLitres,
+      validationsCount: catValidationsCount
     };
   });
 
@@ -377,6 +388,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
     notMakingCount: proportionData.reduce((sum, d) => sum + d.notMakingCount, 0),
     debtPayingCount: proportionData.reduce((sum, d) => sum + d.debtPayingCount, 0),
     totalLitres: proportionData.reduce((sum, d) => sum + d.totalLitres, 0),
+    validationsCount: proportionData.reduce((sum, d) => sum + d.validationsCount, 0),
   };
 
   const totalPercentageMaking = totalsProportion.activeCount > 0 
@@ -397,12 +409,17 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
   const filerIds = new Set(selectedPeriodReturns.map(r => r.clientId));
   const nonFilers = qualifyingClients.filter(c => !filerIds.has(c.id));
 
-  // Monthly validations count
-  const monthlyValidationsCounter = validations.filter(v => 
+  // Monthly validations count (forms & individual month validations)
+  const monthlyApprovedForms = validations.filter(v => 
     Number(v.year) === selectedYear && 
     (v.period || '').toLowerCase() === (selectedMonth || '').toLowerCase() &&
     v.status === 'Approved'
-  ).length;
+  );
+  const monthlyValidationsCounter = monthlyApprovedForms.length;
+  const monthlyIndividualValidationsCounter = monthlyApprovedForms.reduce((sum, v) => sum + getIndividualValidationsCount(v), 0);
+
+  // Multi-period aggregation timeline structure
+  const validationTimeline = processValidationsToTimeline(undefined, undefined, undefined, validations);
 
   // Cumulative Branch Debt up to the end of this month
   const monthlyCumulativeDebt = returns.filter(r => {
@@ -838,20 +855,18 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
             </div>
 
             {/* Total Outstanding Levies Info Boxes */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex flex-col justify-between">
                 <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{selectedMonth.toUpperCase()} Outstanding Balance</span>
                 <span className="font-mono font-black text-sm text-slate-800 mt-2">KES {formatNumber(totalPendingAmount)}</span>
                 <span className="text-[8px] text-slate-400 font-bold uppercase mt-1">Branch Debt for Current Month</span>
               </div>
-              <div className="p-4 bg-rose-50 rounded-2xl border border-rose-100 flex flex-col justify-between">
-                <span className="text-[9px] font-black text-rose-700 uppercase tracking-widest">Cumulative Branch Debt</span>
-                <span className="font-mono font-black text-sm text-rose-600 mt-2">KES {formatNumber(monthlyCumulativeDebt)}</span>
-                <span className="text-[8px] text-rose-400 font-bold uppercase mt-1">Up to {selectedMonth} {selectedYear}</span>
-              </div>
               <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col justify-between">
                 <span className="text-[9px] font-black text-emerald-700 uppercase tracking-widest">Validations Counter</span>
-                <span className="font-mono font-black text-sm text-emerald-600 mt-2">{monthlyValidationsCounter} Form(s)</span>
+                <div className="mt-1">
+                  <span className="font-mono font-black text-sm text-emerald-600 block">{monthlyValidationsCounter} Form(s)</span>
+                  <span className="font-mono font-bold text-xs text-emerald-700 block mt-0.5">{monthlyIndividualValidationsCounter} Individual Validation(s)</span>
+                </div>
                 <span className="text-[8px] text-emerald-500 font-bold uppercase mt-1">Submitted & Approved</span>
               </div>
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex flex-col justify-between">
@@ -868,7 +883,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
               <p>2. All other Revenue (i.e. debt collected in the month) is recognized on a cash basis to facilitate weekly performance monitoring.</p>
               <p>3. CF stands for Convenience Fee; <strong>CSL</strong> = Consumer Safety Levy.</p>
               <p>4. Variance represents the difference between the monthly target and actual collection. A <strong>Negative variance</strong> indicates actual collections exceeded target. A <strong>Positive variance</strong> indicates actual collections fell short of the target.</p>
-              <p>5. <strong>Validations Counter:</strong> Successfully completed and submitted validation forms within this month's timeline boundary: <strong className="text-emerald-700">{monthlyValidationsCounter} form(s)</strong>.</p>
+              <p>5. <strong>Validations Counter:</strong> Successfully completed and submitted validation forms within this month's timeline boundary: <strong className="text-emerald-700">{monthlyValidationsCounter} form(s)</strong> (<strong className="text-emerald-700">{monthlyIndividualValidationsCounter} individual month validation(s)</strong> reconciled).</p>
             </div>
           </div>
 
@@ -884,12 +899,13 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-black uppercase text-[9px] tracking-widest">
                     <th className="p-4 border-r border-slate-200">Permit Category</th>
-                    <th className="p-4 border-r border-slate-200 text-center w-40"># Active Qualifying Clients - Current Month</th>
-                    <th className="p-4 border-r border-slate-200 text-center w-36"># Making Returns - Current Month</th>
-                    <th className="p-4 border-r border-slate-200 text-center w-36"># Not Making Returns - Current Month</th>
-                    <th className="p-4 border-r border-slate-200 text-center w-36">% Making Monthly Returns</th>
+                    <th className="p-4 border-r border-slate-200 text-center w-36"># Active Qualifying Clients - Current Month</th>
+                    <th className="p-4 border-r border-slate-200 text-center w-32"># Making Returns - Current Month</th>
+                    <th className="p-4 border-r border-slate-200 text-center w-32"># Not Making Returns - Current Month</th>
+                    <th className="p-4 border-r border-slate-200 text-center w-32">% Making Monthly Returns</th>
                     <th className="p-4 border-r border-slate-200 text-center w-32">Debt Coll (# paid previous debt)</th>
-                    <th className="p-4 text-right w-44 bg-slate-50 font-black">Total Litres Declared</th>
+                    <th className="p-4 border-r border-slate-200 text-center w-32">Data Validations</th>
+                    <th className="p-4 text-right w-40 bg-slate-50 font-black">Total Litres Declared</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 font-semibold text-slate-700">
@@ -901,6 +917,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
                       <td className="p-4 border-r border-slate-200 text-center font-mono text-slate-400">{d.notMakingCount}</td>
                       <td className="p-4 border-r border-slate-200 text-center font-mono font-bold">{formatPercentage(d.percentageMaking)}</td>
                       <td className="p-4 border-r border-slate-200 text-center font-mono text-blue-600">{d.debtPayingCount}</td>
+                      <td className="p-4 border-r border-slate-200 text-center font-mono text-purple-600 font-bold">{d.validationsCount}</td>
                       <td className="p-4 text-right font-mono font-bold bg-slate-50/30">{formatNumber(d.totalLitres)}</td>
                     </tr>
                   ))}
@@ -911,6 +928,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
                     <td className="p-4 border-r border-slate-700 text-center font-mono text-slate-300">{totalsProportion.notMakingCount}</td>
                     <td className="p-4 border-r border-slate-700 text-center font-mono">{formatPercentage(totalPercentageMaking)}</td>
                     <td className="p-4 border-r border-slate-700 text-center font-mono text-blue-300">{totalsProportion.debtPayingCount}</td>
+                    <td className="p-4 border-r border-slate-700 text-center font-mono text-purple-300 font-bold">{totalsProportion.validationsCount}</td>
                     <td className="p-4 text-right font-mono bg-emerald-600 text-white">{formatNumber(totalsProportion.totalLitres)}</td>
                   </tr>
                   <tr className="bg-slate-100 font-black text-slate-600 text-[10px] tracking-widest text-center">
@@ -918,6 +936,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
                     <td className="p-2 border-r border-slate-200">100%</td>
                     <td className="p-2 border-r border-slate-200 text-emerald-700">{formatPercentage(totalPercentageMaking)}</td>
                     <td className="p-2 border-r border-slate-200 text-rose-700">{formatPercentage(totalPercentageNotMaking)}</td>
+                    <td className="p-2 border-r border-slate-200">-</td>
                     <td className="p-2 border-r border-slate-200">-</td>
                     <td className="p-2 border-r border-slate-200">-</td>
                     <td className="p-2 bg-slate-100 text-right">-</td>

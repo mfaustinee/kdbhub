@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber } from '../types';
+import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber, isSameCategory, getClientCategory } from '../types';
 import { DBService } from '../services/db';
 import { 
   Plus, 
@@ -711,7 +711,7 @@ export const LicensedClientsModule: React.FC = () => {
       String(client.tel || '').toLowerCase().includes(qLower) ||
       String(client.county || '').toLowerCase().includes(qLower);
     
-    const matchesCategory = categoryFilter === 'All' || client.premiseCategory === categoryFilter;
+    const matchesCategory = categoryFilter === 'All' || isSameCategory(getClientCategory(client), categoryFilter);
     const matchesLevy = levyFilter === 'All' || client.levyInfo === levyFilter;
     
     // Dynamic Permit Status
@@ -751,7 +751,7 @@ export const LicensedClientsModule: React.FC = () => {
 
   // Category breakdown stats
   const categoryStats = categories.map(cat => {
-    const catClients = clients.filter(c => c.premiseCategory === cat);
+    const catClients = clients.filter(c => isSameCategory(getClientCategory(c), cat));
     const licensed = catClients.length;
     const qfr = catClients.filter(c => c.levyInfo === 'QFR').length;
     const dnqr = catClients.filter(c => c.levyInfo === 'DNQ-R').length;

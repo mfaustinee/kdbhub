@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { LicensedClient, ClientReturn, DataValidation } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, getIndividualValidationsCount } from '../types';
+import { processValidationsToTimeline } from '../utils/validationAggregator';
 import { FileText, TrendingUp, TrendingDown, DollarSign, Calendar, RefreshCw, BarChart2, ShieldAlert } from 'lucide-react';
 
 interface CollectionAnalysisViewProps {
@@ -14,14 +15,28 @@ const MONTHS_LIST = [
 ];
 
 export const CollectionAnalysisView: React.FC<CollectionAnalysisViewProps> = ({ clients, returns, validations }) => {
-  const [selectedFY, setSelectedFY] = useState<string>('2025/2026');
+  const [selectedFY, setSelectedFY] = useState<string>(() => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    return month >= 7 ? `${year}/${year + 1}` : `${year - 1}/${year}`;
+  });
   const [timeline, setTimeline] = useState<'monthly' | 'quarterly' | 'half-yearly' | 'annual'>('monthly');
   
   // Specific period selections
-  const [selectedMonth, setSelectedMonth] = useState<string>('April');
-  const [selectedQuarter, setSelectedQuarter] = useState<string>('Q4');
-  const [selectedHalf, setSelectedHalf] = useState<string>('H2');
-  const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => MONTHS_LIST[new Date().getMonth()]);
+  const [selectedQuarter, setSelectedQuarter] = useState<string>(() => {
+    const month = new Date().getMonth() + 1;
+    if (month >= 7 && month <= 9) return 'Q1';
+    if (month >= 10 && month <= 12) return 'Q2';
+    if (month >= 1 && month <= 3) return 'Q3';
+    return 'Q4';
+  });
+  const [selectedHalf, setSelectedHalf] = useState<string>(() => {
+    const month = new Date().getMonth() + 1;
+    return (month >= 7 && month <= 12) ? 'H1' : 'H2';
+  });
+  const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
 
   const [annualTarget, setAnnualTarget] = useState<number>(2418192);
 
@@ -218,10 +233,15 @@ export const CollectionAnalysisView: React.FC<CollectionAnalysisViewProps> = ({ 
   // 14. budget variance
   const budgetVariance = periodTarget - grossRevenue;
 
-  // 15. validations submitted & approved in this period
-  const validationsSubmitted = validations.filter(v => {
-    return periodMonths.some(pm => pm.name.toLowerCase() === v.period.toLowerCase() && Number(v.year) === pm.year) && v.status === 'Approved';
-  }).length;
+  // 15. validations submitted & approved in this period (forms & individual month validations)
+  const approvedValidationFormsInPeriod = validations.filter(v => {
+    return periodMonths.some(pm => pm.name.toLowerCase() === (v.period || '').toLowerCase() && Number(v.year) === pm.year) && v.status === 'Approved';
+  });
+  const validationsSubmitted = approvedValidationFormsInPeriod.length;
+  const individualValidationsSubmitted = approvedValidationFormsInPeriod.reduce((sum, v) => sum + getIndividualValidationsCount(v), 0);
+
+  // Multi-period aggregation timeline structure (monthly, quarterly, halfYear, annual)
+  const validationTimeline = processValidationsToTimeline(undefined, undefined, undefined, validations);
 
   const formatCurrency = (val: number) => {
     return `KES ${val.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -369,9 +389,16 @@ export const CollectionAnalysisView: React.FC<CollectionAnalysisViewProps> = ({ 
             <span className="text-[10px] font-black uppercase tracking-wider bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">Validations Counter</span>
             <FileText size={18} className="text-slate-600" />
           </div>
-          <div className="mt-4">
-            <span className="text-3xl font-black font-mono block text-slate-800">{validationsSubmitted}</span>
-            <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest block mt-1">APPROVED FOR THIS TIMELINE</span>
+          <div className="mt-4 space-y-1">
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-black font-mono text-slate-800">{validationsSubmitted}</span>
+              <span className="text-xs font-bold text-slate-500 uppercase">Form(s)</span>
+            </div>
+            <div className="flex items-baseline gap-2 text-emerald-700">
+              <span className="text-lg font-black font-mono">{individualValidationsSubmitted}</span>
+              <span className="text-[11px] font-bold uppercase">Individual Validation(s)</span>
+            </div>
+            <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest block pt-1 border-t border-slate-200/60">APPROVED FOR THIS TIMELINE</span>
           </div>
         </div>
       </div>
@@ -501,8 +528,11 @@ export const CollectionAnalysisView: React.FC<CollectionAnalysisViewProps> = ({ 
               {/* validations submitted */}
               <tr>
                 <td className="p-4 border-r font-bold text-slate-900 uppercase tracking-tight text-[10px]">Validations Submitted</td>
-                <td className="p-4 text-center font-mono text-slate-800 font-bold bg-slate-50/40">{validationsSubmitted} approved</td>
-                <td className="p-4 text-slate-500 text-[10px]">Total validation forms successfully completed and submitted within this period.</td>
+                <td className="p-4 text-center font-mono text-slate-800 font-bold bg-slate-50/40">
+                  <div>{validationsSubmitted} form(s)</div>
+                  <div className="text-[10px] text-emerald-700 font-extrabold mt-0.5">{individualValidationsSubmitted} individual validation(s)</div>
+                </td>
+                <td className="p-4 text-slate-500 text-[10px]">Total validation forms successfully completed ({validationsSubmitted}) and individual month/sales entries validated ({individualValidationsSubmitted}) within this period.</td>
               </tr>
             </tbody>
           </table>
