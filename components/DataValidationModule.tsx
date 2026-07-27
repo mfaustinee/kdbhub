@@ -2568,9 +2568,11 @@ export function DataValidationModule() {
                         placeholder="Enter DBO name..."
                       />
                       <datalist id="clients-names">
-                        {clients.map(c => (
-                          <option key={c.id} value={c.clientName} />
-                        ))}
+                        {clients
+                          .filter(c => c.operationalStatus !== 'closed')
+                          .map(c => (
+                            <option key={c.id} value={c.clientName} />
+                          ))}
                       </datalist>
                       {isCheckingDbo && (
                         <p className="text-[10px] text-blue-500 font-medium mt-1 flex items-center gap-1 animate-pulse">
