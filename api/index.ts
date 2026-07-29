@@ -978,6 +978,52 @@ async function startServer() {
     return google.sheets({ version: "v4", auth });
   };
 
+  const formatSellingPriceForSheets = (sellingPriceStr: any): string => {
+    if (!sellingPriceStr) return "";
+    if (typeof sellingPriceStr !== 'string') {
+      sellingPriceStr = String(sellingPriceStr);
+    }
+    sellingPriceStr = sellingPriceStr.trim();
+    if (!sellingPriceStr) return "";
+
+    let prices: Record<string, string> = {};
+
+    try {
+      const parsed = JSON.parse(sellingPriceStr);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        prices = parsed;
+      }
+    } catch (e) {
+      // Ignore JSON parse error
+    }
+
+    if (Object.keys(prices).length === 0) {
+      const parts = sellingPriceStr.split(/[|,]/);
+      parts.forEach(part => {
+        const colonIdx = part.indexOf(':');
+        if (colonIdx !== -1) {
+          const product = part.substring(0, colonIdx).trim();
+          const price = part.substring(colonIdx + 1).trim();
+          if (product) {
+            prices[product] = price;
+          }
+        } else {
+          const trimmed = part.trim();
+          if (trimmed) {
+            prices[trimmed] = trimmed;
+          }
+        }
+      });
+    }
+
+    const values = Object.values(prices).filter(v => v !== undefined && v !== null && v !== '');
+    if (values.length > 0) {
+      return values.join(' / ');
+    }
+
+    return sellingPriceStr;
+  };
+
   app.post("/api/submit", async (req, res) => {
     logToFile("[API] Received /api/submit request for detailed Google Sheets sync");
     const { data } = req.body;
@@ -1050,15 +1096,15 @@ async function startServer() {
 
           distPriceFormatted = distributors.map((d: any, dIdx: number) => {
             const priceStr = d.prices && Object.keys(d.prices).length > 0
-              ? Object.entries(d.prices).map(([prod, price]) => `${prod}: ${price}`).join(', ')
-              : "";
+              ? Object.values(d.prices).filter((p: any) => p !== undefined && p !== '' && p !== null).join(' / ')
+              : formatSellingPriceForSheets(d.distPrice || '');
             return `Distributor #${dIdx + 1}: ${priceStr}`;
           }).join(' | ');
         }
 
         const rows = data.sales.map((sale: any) => [
           data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
-          sale.avgVolPerDay || "", sale.buyingPrice || "", sale.sellingPrice || "", data.traceability,
+          sale.avgVolPerDay || "", sale.buyingPrice || "", formatSellingPriceForSheets(sale.sellingPrice), data.traceability,
           `${sale.month} ${sale.year}`, sale.qtyDeclared, sale.verifiedQty, sale.underDeclared,
           data.date, data.startTime, data.endTime,
           Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : data.natureOfProduce,
@@ -1089,7 +1135,7 @@ async function startServer() {
           .filter((s: any) => s.qtyDeclared || s.verifiedQty)
           .map((sale: any) => [
             data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
-            sale.avgVolPerDay || "", sale.buyingPrice || "", sale.sellingPrice || "", data.traceability,
+            sale.avgVolPerDay || "", sale.buyingPrice || "", formatSellingPriceForSheets(sale.sellingPrice), data.traceability,
             `${sale.month} ${sale.year}`, sale.qtyDeclared, "LOCAL SALES", sale.verifiedQty, sale.underDeclared,
             data.date, data.startTime, data.endTime
           ]);
@@ -1134,6 +1180,42 @@ async function startServer() {
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/validations-timeline", async (req, res) => {
+    logToFile("[API] Received /api/validations-timeline request");
+    try {
+      const sheets = getSheetsClient();
+      const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+
+      let tab1Values: any[][] = [];
+      let tab2Values: any[][] = [];
+      let tab3Values: any[][] = [];
+
+      if (sheets && spreadsheetId) {
+        try {
+          const [tab1Response, tab2Response, tab3Response] = await Promise.all([
+            sheets.spreadsheets.values.get({ spreadsheetId, range: "'MD & CI Distribution'!A:Z" }),
+            sheets.spreadsheets.values.get({ spreadsheetId, range: "'Dispensers & Milk Bars'!A:Z" }),
+            sheets.spreadsheets.values.get({ spreadsheetId, range: "'Cooling Plants'!A:Z" }),
+          ]);
+          tab1Values = tab1Response.data.values || [];
+          tab2Values = tab2Response.data.values || [];
+          tab3Values = tab3Response.data.values || [];
+        } catch (sheetsErr: any) {
+          logToFile(`[API] Google Sheets timeline fetch note: ${sheetsErr.message}`);
+        }
+      }
+
+      // Import validationAggregator helper
+      const { processValidationsToTimeline } = await import("../utils/validationAggregator.js");
+      const timeline = processValidationsToTimeline(tab1Values, tab2Values, tab3Values);
+
+      res.json({ success: true, timeline });
+    } catch (error: any) {
+      logToFile(`[API] /api/validations-timeline error: ${error.message}`);
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 

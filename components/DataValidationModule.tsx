@@ -163,6 +163,114 @@ const getLocalDate = () => {
   return localDate.toISOString().split('T')[0];
 };
 
+const formatToYYYYMMDD = (val: string): string => {
+  if (!val) return '';
+  const trimmed = val.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
+    const [d, m, y] = trimmed.split('/');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  if (/^\d{2}-\d{2}-\d{4}$/.test(trimmed)) {
+    const [d, m, y] = trimmed.split('-');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().split('T')[0];
+  }
+  return trimmed;
+};
+
+const normStr = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const MONTH_MAP: Record<string, string> = {
+  jan: 'january', january: 'january', '1': 'january', '01': 'january',
+  feb: 'february', february: 'february', '2': 'february', '02': 'february',
+  mar: 'march', march: 'march', '3': 'march', '03': 'march',
+  apr: 'april', april: 'april', '4': 'april', '04': 'april',
+  may: 'may', '5': 'may', '05': 'may',
+  jun: 'june', june: 'june', '6': 'june', '06': 'june',
+  jul: 'july', july: 'july', '7': 'july', '07': 'july',
+  aug: 'august', august: 'august', '8': 'august', '08': 'august',
+  sep: 'september', sept: 'september', september: 'september', '9': 'september', '09': 'september',
+  oct: 'october', october: 'october', '10': 'october',
+  nov: 'november', november: 'november', '11': 'november',
+  dec: 'december', december: 'december', '12': 'december'
+};
+
+const normMonth = (m?: string | number) => {
+  if (!m) return '';
+  const str = m.toString().toLowerCase().trim();
+  const firstToken = str.split(/[\s_\-/]+/)[0];
+  return MONTH_MAP[firstToken] || MONTH_MAP[str] || str;
+};
+
+const findMatchingReturn = (
+  saleMonth: string,
+  saleYear: string,
+  dboName: string,
+  premiseName: string,
+  client: LicensedClient | null,
+  returnsList: ClientReturn[]
+): ClientReturn | undefined => {
+  if (!returnsList || returnsList.length === 0) return undefined;
+
+  const targetMonth = normMonth(saleMonth);
+  const targetYear = Number(saleYear);
+
+  const dboNorm = normStr(dboName);
+  const premiseNorm = normStr(premiseName);
+  const clientNameNorm = normStr(client?.clientName);
+  const clientPremiseNorm = normStr(client?.premiseName);
+  const clientIdNorm = normStr(client?.id);
+  const permitNorm = normStr(client?.permitNumber);
+
+  return returnsList.find(r => {
+    // 1. Check period & year
+    const rMonth = normMonth(r.period);
+    const rYear = Number(r.year) || (r.period ? Number(r.period.replace(/[^0-9]/g, '')) : NaN);
+
+    const monthMatch = rMonth === targetMonth || (r.period && normStr(r.period).includes(targetMonth));
+    const yearMatch = !isNaN(targetYear) && (!isNaN(rYear) ? rYear === targetYear : (r.period && r.period.includes(targetYear.toString())));
+
+    if (!monthMatch || !yearMatch) return false;
+
+    // 2. Check client identification
+    const rClientNorm = normStr(r.clientName);
+    const rClientIdNorm = normStr(r.clientId);
+
+    if (rClientIdNorm && (rClientIdNorm === clientIdNorm || rClientIdNorm === permitNorm)) {
+      return true;
+    }
+
+    if (rClientNorm) {
+      if (
+        (dboNorm && rClientNorm === dboNorm) ||
+        (premiseNorm && rClientNorm === premiseNorm) ||
+        (clientNameNorm && rClientNorm === clientNameNorm) ||
+        (clientPremiseNorm && rClientNorm === clientPremiseNorm)
+      ) {
+        return true;
+      }
+
+      // Fuzzy inclusion match if length >= 4
+      if (rClientNorm.length >= 4) {
+        if (
+          (dboNorm && (dboNorm.includes(rClientNorm) || rClientNorm.includes(dboNorm))) ||
+          (premiseNorm && (premiseNorm.includes(rClientNorm) || rClientNorm.includes(premiseNorm))) ||
+          (clientNameNorm && (clientNameNorm.includes(rClientNorm) || rClientNorm.includes(clientNameNorm))) ||
+          (clientPremiseNorm && (clientPremiseNorm.includes(rClientNorm) || rClientNorm.includes(clientPremiseNorm)))
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  });
+};
+
 const initialData: FormData = {
   branch: 'Kericho',
   date: getLocalDate(),
@@ -771,6 +879,9 @@ export function DataValidationModule() {
   const handleDboAutofill = (record: any) => {
     const raw = record.raw_data || {};
     const permitNo = raw.permitNo || record.permit_no || '';
+    const formattedExpiry = formatToYYYYMMDD(raw.expiryDate || formData.expiryDate || '');
+    const currentMonthYear = `${new Date().toLocaleString('default', { month: 'long' })} ${new Date().getFullYear()}`;
+    
     const nextForm = {
       ...formData,
       dboName: record.dbo_name || formData.dboName,
@@ -780,14 +891,16 @@ export function DataValidationModule() {
       contacts: raw.contacts || formData.contacts,
       county: raw.county || record.county || formData.county,
       location: raw.location || record.location || formData.location,
-      expiryDate: raw.expiryDate || formData.expiryDate || '',
-      validationPeriod: raw.validationPeriod || formData.validationPeriod || '',
+      expiryDate: formattedExpiry,
+      validationPeriod: isAmendment ? (raw.validationPeriod || formData.validationPeriod || currentMonthYear) : (formData.validationPeriod || currentMonthYear),
       distPermitNo: raw.distPermitNo || permitNo || formData.distPermitNo || '',
     };
     setFormData(nextForm);
     
-    // Once they autofill, allow override and prevent background useEffect from overriding it
-    setIsValidationPeriodEdited(true);
+    // Only lock validationPeriod override if amending
+    if (isAmendment) {
+      setIsValidationPeriodEdited(true);
+    }
 
     // Clear matches to hide suggestions
     setLastDboRecords([]);
@@ -834,6 +947,7 @@ export function DataValidationModule() {
     if (!selectedClient) return;
 
     if (mode === 'main') {
+      const clientExpiry = formatToYYYYMMDD((selectedClient as any).expiryDate || (selectedClient as any).expiry_date || '');
       // Revert form fields to main client profile
       setFormData(prev => ({
         ...prev,
@@ -842,7 +956,7 @@ export function DataValidationModule() {
         category: selectedClient.premiseCategory || 'Milk Bar',
         location: selectedClient.location || '',
         county: selectedClient.county || 'Kericho',
-        expiryDate: (selectedClient as any).expiryDate || (selectedClient as any).expiry_date || ''
+        expiryDate: clientExpiry
       }));
       // Trigger reconciliation check
       checkReconciliation(selectedClient, {
@@ -852,7 +966,7 @@ export function DataValidationModule() {
         category: selectedClient.premiseCategory || 'Milk Bar',
         location: selectedClient.location || '',
         county: selectedClient.county || 'Kericho',
-        expiryDate: (selectedClient as any).expiryDate || (selectedClient as any).expiry_date || ''
+        expiryDate: clientExpiry
       });
     } else if (mode.startsWith('branch-')) {
       // Find branch
@@ -866,7 +980,7 @@ export function DataValidationModule() {
           category: branch.premiseCategory,
           location: branch.location,
           county: branch.county,
-          expiryDate: branch.expiryDate || ''
+          expiryDate: formatToYYYYMMDD(branch.expiryDate || '')
         }));
       }
       // Since it's an existing branch being validated, clear reconciliation screen for parent profile
@@ -1062,9 +1176,10 @@ export function DataValidationModule() {
       }
 
       if (key === 'expiryDate') {
-        const dV = v.replace(/[^0-9]/g, '');
-        const dC = c.replace(/[^0-9]/g, '');
-        return dV === dC || v.toLowerCase().trim() === c.toLowerCase().trim();
+        const normV = formatToYYYYMMDD(v);
+        const normC = formatToYYYYMMDD(c);
+        if (normV && normC) return normV === normC;
+        return cleanStr(v) === cleanStr(c);
       }
       
       return cleanStr(v) === cleanStr(c);
@@ -1112,32 +1227,36 @@ export function DataValidationModule() {
         
         if (item.key === 'permitNo') {
           chosenVal = formatPermitNumber(chosenVal, updatedForm.category || updatedClient.premiseCategory);
-        } else if (item.key === 'expiryDate') {
-          chosenVal = formatDateToDDMMYYYY(chosenVal);
-        }
-
-        // Update form data state
-        (updatedForm as any)[item.key] = chosenVal;
-
-        // Update client object
-        if (item.key === 'dboName') {
-          updatedClient.clientName = chosenVal;
-        } else if (item.key === 'premiseName') {
-          updatedClient.premiseName = chosenVal;
-        } else if (item.key === 'permitNo') {
+          (updatedForm as any)[item.key] = chosenVal;
           updatedClient.id = chosenVal;
           updatedClient.permitNumber = chosenVal;
-        } else if (item.key === 'location') {
-          updatedClient.location = chosenVal;
-        } else if (item.key === 'category') {
-          updatedClient.premiseCategory = chosenVal as any;
-        } else if (item.key === 'contacts') {
-          updatedClient.tel = chosenVal;
         } else if (item.key === 'expiryDate') {
-          (updatedClient as any).expiryDate = chosenVal;
-          (updatedClient as any).expiry_date = chosenVal;
+          const isoVal = formatToYYYYMMDD(chosenVal);
+          const formattedDDMM = formatDateToDDMMYYYY(chosenVal);
+          (updatedForm as any).expiryDate = isoVal;
+          (updatedClient as any).expiryDate = formattedDDMM;
+          (updatedClient as any).expiry_date = formattedDDMM;
+        } else {
+          (updatedForm as any)[item.key] = chosenVal;
+          if (item.key === 'dboName') updatedClient.clientName = chosenVal;
+          if (item.key === 'premiseName') updatedClient.premiseName = chosenVal;
+          if (item.key === 'location') updatedClient.location = chosenVal;
+          if (item.key === 'category') updatedClient.premiseCategory = chosenVal as any;
+          if (item.key === 'contacts') updatedClient.tel = chosenVal;
         }
       });
+
+      // Synchronize validation period if missing or unedited
+      if (!updatedForm.validationPeriod || !isValidationPeriodEdited) {
+        if (updatedForm.date) {
+          const d = new Date(updatedForm.date);
+          if (!isNaN(d.getTime())) {
+            const m = d.toLocaleString('default', { month: 'long' });
+            const y = d.getFullYear().toString();
+            updatedForm.validationPeriod = `${m} ${y}`;
+          }
+        }
+      }
 
       // Save client to licensed_clients table in Supabase via DBService
       await DBService.saveClient(updatedClient);
@@ -1163,7 +1282,7 @@ export function DataValidationModule() {
 
   // Returns quantity injection pipeline
   useEffect(() => {
-    if (!formData.dboName || returnsData.length === 0) return;
+    if ((!formData.dboName && !formData.premiseName && !selectedClient) || returnsData.length === 0) return;
 
     setFormData(prev => {
       let hasChanged = false;
@@ -1172,30 +1291,39 @@ export function DataValidationModule() {
           return sale;
         }
 
-        const cleanDboName = prev.dboName.toLowerCase().trim();
-        const cleanMonth = sale.month.toLowerCase().trim();
-        const yearNum = Number(sale.year);
-
-        const matchingReturn = returnsData.find(r => {
-          const clientMatches = r.clientName.toLowerCase().trim() === cleanDboName ||
-            (selectedClient && r.clientId === selectedClient.id);
-          const periodMatches = r.period.toLowerCase().trim() === cleanMonth;
-          const yearMatches = Number(r.year) === yearNum;
-          return clientMatches && periodMatches && yearMatches;
-        });
+        const matchingReturn = findMatchingReturn(
+          sale.month,
+          sale.year,
+          prev.dboName,
+          prev.premiseName,
+          selectedClient,
+          returnsData
+        );
 
         const targetQty = matchingReturn && matchingReturn.qty !== undefined && matchingReturn.qty !== null
           ? matchingReturn.qty.toString()
           : 'Not Filed';
 
-        if (sale.qtyDeclared !== targetQty) {
+        const isTargetNumeric = targetQty !== 'Not Filed' && targetQty.trim() !== '';
+        const isCurrentEmptyOrNotFiled = !sale.qtyDeclared || sale.qtyDeclared === 'Not Filed';
+
+        if (isTargetNumeric) {
+          if (sale.qtyDeclared !== targetQty) {
+            hasChanged = true;
+            return { 
+              ...sale, 
+              qtyDeclared: targetQty,
+              verifiedQty: sale.verifiedQty && sale.verifiedQty !== '0' && sale.verifiedQty !== sale.qtyDeclared ? sale.verifiedQty : targetQty,
+              avgVolPerDay: (parseFloat(targetQty) / 30).toFixed(2).replace(/\.?0+$/, '')
+            };
+          }
+        } else if (isCurrentEmptyOrNotFiled && sale.qtyDeclared !== 'Not Filed') {
           hasChanged = true;
-          // Mirror to verifiedQty too so calculations work out-of-the-box
           return { 
             ...sale, 
-            qtyDeclared: targetQty,
-            verifiedQty: targetQty === 'Not Filed' ? '0' : targetQty,
-            avgVolPerDay: targetQty === 'Not Filed' ? '0' : (parseFloat(targetQty) / 30).toFixed(2).replace(/\.?0+$/, '')
+            qtyDeclared: 'Not Filed',
+            verifiedQty: '0',
+            avgVolPerDay: '0'
           };
         }
         return sale;
@@ -1206,7 +1334,14 @@ export function DataValidationModule() {
       }
       return prev;
     });
-  }, [formData.dboName, selectedClient, returnsData, formData.sales]);
+  }, [formData.dboName, formData.premiseName, selectedClient, returnsData, formData.sales]);
+
+  // Re-fetch returnsData when step changes or client changes to keep absolute sync
+  useEffect(() => {
+    if (step === 1 || step === 2) {
+      DBService.getReturns().then(r => setReturnsData(r)).catch(() => {});
+    }
+  }, [step, selectedClient]);
 
   // Keep distPermitNo in sync with permitNo if empty
   useEffect(() => {
@@ -1451,12 +1586,16 @@ export function DataValidationModule() {
   };
 
   const handleStart = () => {
+    if (isAmendment) {
+      setStep(1);
+      return;
+    }
     const now = new Date();
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     setFormData(prev => ({ 
       ...prev, 
-      startTime: timeStr,
-      date: getLocalDate()
+      startTime: prev.startTime || timeStr,
+      date: prev.date || getLocalDate()
     }));
     setStep(1);
   };
@@ -1752,14 +1891,16 @@ export function DataValidationModule() {
     if (!supabase) return;
 
     let cleanPath = path;
-    if (cleanPath.startsWith('validation-pdfs/')) {
+    if (cleanPath.startsWith('ValidationPdfs/')) {
+      cleanPath = cleanPath.replace('ValidationPdfs/', '');
+    } else if (cleanPath.startsWith('validation-pdfs/')) {
       cleanPath = cleanPath.replace('validation-pdfs/', '');
     }
 
     try {
       // Create a signed URL that expires in 60 seconds for security
       const { data, error } = await supabase.storage
-        .from('validation-pdfs')
+        .from('ValidationPdfs')
         .createSignedUrl(cleanPath, 60);
       
       if (error) {
@@ -1817,6 +1958,12 @@ export function DataValidationModule() {
       return;
     }
 
+    if (showReconciliation || !reconciliationResolved) {
+      setStatus({ type: 'error', message: 'Please resolve the 7-point data reconciliation conflict before submitting.' });
+      setIsSubmitting(false);
+      return;
+    }
+
     // Duplicate check
     if (!isAmendment) {
       const isDuplicate = lastCollections.some(c => c.fullPeriod.toLowerCase() === formData.validationPeriod.toLowerCase());
@@ -1828,7 +1975,10 @@ export function DataValidationModule() {
     }
 
     try {
-      const endTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      // For amendments, keep the original recorded date, startTime, and endTime intact
+      const endTime = isAmendment 
+        ? (formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) 
+        : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const updatedData = { ...formData, endTime };
       setFormData(updatedData);
 
@@ -1930,7 +2080,7 @@ export function DataValidationModule() {
               ? `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_Amended_v2_${Date.now()}.pdf`
               : `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
             const { data: uploadData, error: uploadError } = await supabase.storage
-              .from('validation-pdfs')
+              .from('ValidationPdfs')
               .upload(fileName, pdfBlob, {
                 contentType: 'application/pdf',
                 upsert: false
@@ -2418,9 +2568,11 @@ export function DataValidationModule() {
                         placeholder="Enter DBO name..."
                       />
                       <datalist id="clients-names">
-                        {clients.map(c => (
-                          <option key={c.id} value={c.clientName} />
-                        ))}
+                        {clients
+                          .filter(c => c.operationalStatus !== 'closed')
+                          .map(c => (
+                            <option key={c.id} value={c.clientName} />
+                          ))}
                       </datalist>
                       {isCheckingDbo && (
                         <p className="text-[10px] text-blue-500 font-medium mt-1 flex items-center gap-1 animate-pulse">

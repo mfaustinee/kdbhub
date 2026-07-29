@@ -26,7 +26,13 @@ const App: React.FC = () => {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [staffConfig, setStaffConfig] = useState<StaffConfig>({
-    officialSignature: ''
+    officialSignature: '',
+    enabledModules: {
+      levyAgreement: true,
+      businessClosure: true,
+      clientInquiry: true,
+      stakeholderComplaint: true,
+    }
   });
   const [currentAgreement, setCurrentAgreement] = useState<AgreementData | null>(null);
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
@@ -637,12 +643,89 @@ const App: React.FC = () => {
               onSelectInquiryPortal={() => navigate('/inquiries')}
               unreadAgreementsCount={agreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length}
               unreadClosuresCount={closures.filter(c => c.status === 'submitted').length}
+              enabledModules={staffConfig.enabledModules}
             />
           } />
-          <Route path="/payment-agreement" element={<AgreementForm agreements={agreements} debtors={debtors} clients={clients} onSubmit={handleClientSubmit} />} />
-          <Route path="/closure-notice" element={<ClosureForm onSubmit={handleClosureSubmit} onBack={() => navigate('/')} />} />
-          <Route path="/complaints" element={<ComplaintForm onSubmit={handleComplaintSubmit} onBack={() => navigate('/')} />} />
-          <Route path="/inquiries" element={<InquiryForm onSubmit={handleInquirySubmit} onBack={() => navigate('/')} />} />
+          <Route path="/payment-agreement" element={
+            staffConfig.enabledModules?.levyAgreement !== false ? (
+              <AgreementForm agreements={agreements} debtors={debtors} clients={clients} onSubmit={handleClientSubmit} />
+            ) : (
+              <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 shadow-xl text-center space-y-6">
+                <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600 border border-amber-100">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-xl font-black text-slate-800">Levy Payment Portal Offline</h2>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    This portal module is currently offline or under administrative review. Please check back later or contact Kenya Dairy Board support.
+                  </p>
+                </div>
+                <button onClick={() => navigate('/')} className="w-full py-3.5 bg-slate-900 text-white text-xs font-black rounded-2xl hover:bg-slate-800 transition-all uppercase tracking-widest">
+                  Return to Portal Hub
+                </button>
+              </div>
+            )
+          } />
+          <Route path="/closure-notice" element={
+            staffConfig.enabledModules?.businessClosure !== false ? (
+              <ClosureForm onSubmit={handleClosureSubmit} onBack={() => navigate('/')} />
+            ) : (
+              <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 shadow-xl text-center space-y-6">
+                <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600 border border-amber-100">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-xl font-black text-slate-800">Business Closure Portal Offline</h2>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    This portal module is currently offline or under administrative review. Please check back later or contact Kenya Dairy Board support.
+                  </p>
+                </div>
+                <button onClick={() => navigate('/')} className="w-full py-3.5 bg-slate-900 text-white text-xs font-black rounded-2xl hover:bg-slate-800 transition-all uppercase tracking-widest">
+                  Return to Portal Hub
+                </button>
+              </div>
+            )
+          } />
+          <Route path="/complaints" element={
+            staffConfig.enabledModules?.stakeholderComplaint !== false ? (
+              <ComplaintForm onSubmit={handleComplaintSubmit} onBack={() => navigate('/')} />
+            ) : (
+              <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 shadow-xl text-center space-y-6">
+                <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600 border border-amber-100">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-xl font-black text-slate-800">Complaints Portal Offline</h2>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    This portal module is currently offline or under administrative review. Please check back later or contact Kenya Dairy Board support.
+                  </p>
+                </div>
+                <button onClick={() => navigate('/')} className="w-full py-3.5 bg-slate-900 text-white text-xs font-black rounded-2xl hover:bg-slate-800 transition-all uppercase tracking-widest">
+                  Return to Portal Hub
+                </button>
+              </div>
+            )
+          } />
+          <Route path="/inquiries" element={
+            staffConfig.enabledModules?.clientInquiry !== false ? (
+              <InquiryForm onSubmit={handleInquirySubmit} onBack={() => navigate('/')} />
+            ) : (
+              <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 shadow-xl text-center space-y-6">
+                <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600 border border-amber-100">
+                  <Lock className="w-7 h-7" />
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-xl font-black text-slate-800">Inquiries Portal Offline</h2>
+                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                    This portal module is currently offline or under administrative review. Please check back later or contact Kenya Dairy Board support.
+                  </p>
+                </div>
+                <button onClick={() => navigate('/')} className="w-full py-3.5 bg-slate-900 text-white text-xs font-black rounded-2xl hover:bg-slate-800 transition-all uppercase tracking-widest">
+                  Return to Portal Hub
+                </button>
+              </div>
+            )
+          } />
           <Route path="/admin" element={
             isAdminAuthenticated ? (
               <AdminDashboard 

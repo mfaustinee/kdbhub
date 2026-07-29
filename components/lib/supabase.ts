@@ -65,3 +65,40 @@ export const supabase = new Proxy({}, {
     return value;
   }
 }) as any;
+
+export const viewPdf = async (path: string) => {
+  if (!path) return;
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
+    window.open(path, '_blank');
+    return;
+  }
+  if (!supabase) return;
+
+  let cleanPath = path;
+  if (cleanPath.startsWith('ValidationPdfs/')) {
+    cleanPath = cleanPath.replace('ValidationPdfs/', '');
+  } else if (cleanPath.startsWith('validation-pdfs/')) {
+    cleanPath = cleanPath.replace('validation-pdfs/', '');
+  }
+
+  try {
+    // Generate a cryptographically signed URL valid for 60 seconds
+    const { data, error } = await supabase.storage
+      .from('ValidationPdfs')
+      .createSignedUrl(cleanPath, 60);
+
+    if (error) {
+      console.error('Error creating signed URL:', error);
+      alert(`Could not retrieve PDF: ${error.message}`);
+      return;
+    }
+
+    if (data?.signedUrl) {
+      window.open(data.signedUrl, '_blank');
+    }
+  } catch (err: any) {
+    console.error('Failed to view PDF:', err);
+    alert('Failed to retrieve PDF document.');
+  }
+};
+

@@ -50,7 +50,6 @@ export const InquiryForm: React.FC<InquiryFormProps> = ({ onSubmit, onBack }) =>
     if (!formData.clientName?.trim()) return setFormError('Client Full Name / Company Name is required');
     if (!formData.postalAddress?.trim()) return setFormError('Postal Address is required');
     if (!formData.cityTown?.trim()) return setFormError('City/Town is required');
-    if (!formData.tel?.trim()) return setFormError('Telephone Number is required');
     if (!formData.mobileNumber?.trim()) return setFormError('Mobile Number is required');
     if (!formData.email?.trim()) return setFormError('Email Address is required');
     if (!formData.inquiryDetails?.trim()) return setFormError('Inquiry Details description is required');
@@ -295,11 +294,10 @@ export const InquiryForm: React.FC<InquiryFormProps> = ({ onSubmit, onBack }) =>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Telephone Number *</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Telephone Number (Optional)</label>
                 <div className="relative">
                   <Phone className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input 
-                    required 
                     type="tel"
                     placeholder="Landline or Main Tel" 
                     value={formData.tel} 
@@ -438,20 +436,27 @@ export const InquiryForm: React.FC<InquiryFormProps> = ({ onSubmit, onBack }) =>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Documents Status *</label>
-                <div className="flex gap-4">
+                <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => updateField('supportingDocsStatus', 'Attached')}
-                    className={`flex-1 py-3 px-4 rounded-2xl border text-center transition-all text-xs font-bold ${formData.supportingDocsStatus === 'Attached' ? 'border-sky-600 bg-sky-50 text-sky-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                    className={`flex-1 py-3 px-3 rounded-2xl border text-center transition-all text-xs font-bold ${formData.supportingDocsStatus === 'Attached' ? 'border-sky-600 bg-sky-50 text-sky-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                   >
                     Attached
                   </button>
                   <button
                     type="button"
                     onClick={() => updateField('supportingDocsStatus', 'To be submitted later')}
-                    className={`flex-1 py-3 px-4 rounded-2xl border text-center transition-all text-xs font-bold ${formData.supportingDocsStatus === 'To be submitted later' ? 'border-sky-600 bg-sky-50 text-sky-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                    className={`flex-1 py-3 px-3 rounded-2xl border text-center transition-all text-xs font-bold ${formData.supportingDocsStatus === 'To be submitted later' ? 'border-sky-600 bg-sky-50 text-sky-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
                   >
                     To be submitted later
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateField('supportingDocsStatus', 'None')}
+                    className={`flex-1 py-3 px-3 rounded-2xl border text-center transition-all text-xs font-bold ${formData.supportingDocsStatus === 'None' ? 'border-sky-600 bg-sky-50 text-sky-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                  >
+                    None
                   </button>
                 </div>
               </div>

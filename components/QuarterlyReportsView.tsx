@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { LicensedClient, ClientReturn } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, getIndividualValidationsCount, isSameCategory, getClientCategory } from '../types';
+import { processValidationsToTimeline } from '../utils/validationAggregator';
 import { exportQuarterlyReportToExcel } from '../utils/excelExport';
 import { 
   FileText, 
@@ -26,7 +27,15 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
     const month = d.getMonth() + 1;
     return month >= 7 ? `${year}/${year + 1}` : `${year - 1}/${year}`;
   });
-  const [selectedQuarter, setSelectedQuarter] = useState<string>('Q4');
+  const getCurrentQuarter = () => {
+    const month = new Date().getMonth() + 1;
+    if (month >= 7 && month <= 9) return 'Q1';
+    if (month >= 10 && month <= 12) return 'Q2';
+    if (month >= 1 && month <= 3) return 'Q3';
+    return 'Q4';
+  };
+
+  const [selectedQuarter, setSelectedQuarter] = useState<string>(getCurrentQuarter);
   const [annualTarget, setAnnualTarget] = useState<number>(2418192);
   const [reportingDate, setReportingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [compiledByName, setCompiledByName] = useState('Officer Name');
@@ -173,10 +182,13 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
 
   const qMonths = getQuarterMonths(selectedQuarter, fyStartYear, fyEndYear);
 
-  const quarterlyValidationsCount = validations.filter(v => {
+  const quarterlyApprovedForms = validations.filter(v => {
     const vYear = Number(v.year);
     return qMonths.some(qm => (qm.name || '').toLowerCase() === (v.period || '').toLowerCase() && Number(qm.year) === vYear) && v.status === 'Approved';
-  }).length;
+  });
+  const quarterlyValidationsCount = quarterlyApprovedForms.length;
+  const quarterlyIndividualValidationsCount = quarterlyApprovedForms.reduce((sum, v) => sum + getIndividualValidationsCount(v), 0);
+  const validationTimeline = processValidationsToTimeline(undefined, undefined, undefined, validations);
 
   const quarterlyCumulativeDebt = (() => {
     if (qMonths.length === 0) return 0;
@@ -346,15 +358,23 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
   const activeClients = clients.filter(c => isClientOperatingInPeriod(c, qMonths[2].name, qMonths[2].year));
   const qualifyingClients = qualifying_m3;
 
+  const quarterlyApprovedValidations = validations.filter(v => {
+    const isApproved = v.status === 'Approved';
+    return isApproved && qMonths.some(m => 
+      (v.period || '').toLowerCase() === m.name.toLowerCase() && 
+      Number(v.year) === m.year
+    );
+  });
+
   // Proportion of DBOs and submissions per category
-  const categoriesList: ('Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry')[] = [
-    'Milk Bar', 'Dispenser', 'Cooling Plant', 'Mini Dairy', 'Cottage Industry'
+  const categoriesList: ('Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry' | 'Processor')[] = [
+    'Milk Bar', 'Dispenser', 'Cooling Plant', 'Mini Dairy', 'Cottage Industry', 'Processor'
   ];
 
   const proportionData = categoriesList.map(cat => {
-    const catQualifying_m1 = qualifying_m1.filter(c => c.premiseCategory === cat);
-    const catQualifying_m2 = qualifying_m2.filter(c => c.premiseCategory === cat);
-    const catQualifying_m3 = qualifying_m3.filter(c => c.premiseCategory === cat);
+    const catQualifying_m1 = qualifying_m1.filter(c => isSameCategory(getClientCategory(c), cat));
+    const catQualifying_m2 = qualifying_m2.filter(c => isSameCategory(getClientCategory(c), cat));
+    const catQualifying_m3 = qualifying_m3.filter(c => isSameCategory(getClientCategory(c), cat));
     
     // Combine all returns in the Quarter for this category
     const catReturns = [
@@ -363,7 +383,7 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
       ...m3Data.returns
     ].filter(r => {
       const client = clients.find(c => c.id === r.clientId);
-      return client?.premiseCategory === cat;
+      return client ? isSameCategory(getClientCategory(client), cat) : false;
     });
 
     const filerIds = new Set(catReturns.map(r => r.clientId));
@@ -385,6 +405,11 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
 
     const activeCount = catQualifying_m3.length;
 
+    const catValidations = quarterlyApprovedValidations.filter(v => 
+      isSameCategory(getClientCategory(v.category || (clients.find(c => c.id === v.clientId)?.premiseCategory) || ''), cat)
+    );
+    const validationsCount = catValidations.reduce((sum, v) => sum + getIndividualValidationsCount(v), 0);
+
     return {
       category: cat,
       activeCount,
@@ -394,7 +419,8 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
       actualSubmissions,
       submissionRate,
       totalLitres,
-      totalLevy
+      totalLevy,
+      validationsCount
     };
   });
 
@@ -405,6 +431,7 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
     actualSubmissions: proportionData.reduce((sum, d) => sum + d.actualSubmissions, 0),
     totalLitres: proportionData.reduce((sum, d) => sum + d.totalLitres, 0),
     totalLevy: proportionData.reduce((sum, d) => sum + d.totalLevy, 0),
+    validationsCount: proportionData.reduce((sum, d) => sum + d.validationsCount, 0),
   };
 
   const totalPercentageMaking = totalsProportion.activeCount > 0 
@@ -631,7 +658,7 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
             <p>1. Financial Year (FY) target is configured independently per FY at KES <strong>{formatNumber(annualTarget)}</strong>. The quarterly share is 25% (KES <strong>{formatNumber(quarterTarget)}</strong>).</p>
             <p>2. Gross CSL represents revenue declared for the active months in the selected Quarter. Debt recovery represents previous quarters' arrears collected during this period. During this quarter, <strong>{numQuarterDebtPayingDBOs}</strong> distinct DBO(s) paid outstanding arrears.</p>
             <p>3. A negative variance indicates performance has exceeded targets, whereas a positive variance shows shortfalls.</p>
-            <p>4. <strong>Validations Counter:</strong> Successfully completed and submitted validation forms within this quarter's timeline boundary: <strong className="text-emerald-700">{quarterlyValidationsCount} form(s)</strong>.</p>
+            <p>4. <strong>Validations Counter:</strong> Successfully completed and submitted validation forms within this quarter's timeline boundary: <strong className="text-emerald-700">{quarterlyValidationsCount} form(s)</strong> (<strong className="text-emerald-700">{quarterlyIndividualValidationsCount} individual month validation(s)</strong> reconciled).</p>
           </div>
         </div>
 
@@ -724,6 +751,7 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
                     <th className="p-4 text-center">EXPECTED RETURNS</th>
                     <th className="p-4 text-center">SUBMITTED RETURNS</th>
                     <th className="p-4 text-center">SUBMISSION RATE (%)</th>
+                    <th className="p-4 text-center">DATA VALIDATIONS</th>
                     <th className="p-4 text-right">TOTAL LITRES</th>
                     <th className="p-4 text-right">LEVY COLLECTED (KES)</th>
                   </tr>
@@ -736,6 +764,7 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
                       <td className="p-4 text-center font-mono text-slate-400">{d.expectedSubmissions}</td>
                       <td className="p-4 text-center font-mono text-emerald-600">{d.actualSubmissions}</td>
                       <td className="p-4 text-center font-mono font-bold">{d.submissionRate.toFixed(0)}%</td>
+                      <td className="p-4 text-center font-mono text-purple-600 font-bold">{d.validationsCount}</td>
                       <td className="p-4 text-right font-mono">{formatNumber(d.totalLitres)}</td>
                       <td className="p-4 text-right font-mono text-slate-950">{formatNumber(d.totalLevy)}</td>
                     </tr>
@@ -746,6 +775,7 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
                     <td className="p-4 text-center font-mono text-slate-300">{totalsProportion.expectedSubmissions}</td>
                     <td className="p-4 text-center font-mono text-emerald-300">{totalsProportion.actualSubmissions}</td>
                     <td className="p-4 text-center font-mono">{totalSubmissionRate}%</td>
+                    <td className="p-4 text-center font-mono text-purple-300 font-bold">{totalsProportion.validationsCount}</td>
                     <td className="p-4 text-right font-mono">{formatNumber(totalsProportion.totalLitres)}</td>
                     <td className="p-4 text-right font-mono bg-emerald-600 text-white">{formatNumber(totalsProportion.totalLevy)}</td>
                   </tr>
@@ -821,7 +851,10 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
               </div>
               <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col justify-between">
                 <span className="text-[9px] font-black text-emerald-700 uppercase tracking-widest">Validations Counter</span>
-                <span className="font-mono font-black text-sm text-emerald-600 mt-2">{quarterlyValidationsCount} Form(s)</span>
+                <div className="mt-1">
+                  <span className="font-mono font-black text-sm text-emerald-600 block">{quarterlyValidationsCount} Form(s)</span>
+                  <span className="font-mono font-bold text-xs text-emerald-700 block mt-0.5">{quarterlyIndividualValidationsCount} Individual Validation(s)</span>
+                </div>
                 <span className="text-[8px] text-emerald-500 font-bold uppercase mt-1">Submitted & Approved in Quarter</span>
               </div>
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-150 flex flex-col justify-between">

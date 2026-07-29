@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData } from '../types';
-import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, TrendingUp, Menu } from 'lucide-react';
+import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules } from '../types';
+import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle } from 'lucide-react';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
 import { ComplaintPDFPreview } from './ComplaintPDFPreview';
@@ -109,6 +109,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [rejectionReason, setRejectionReason] = useState('');
   const [closureRejectionReason, setClosureRejectionReason] = useState('');
   const [adminName, setAdminName] = useState('');
+  const [adminTitle, setAdminTitle] = useState('Compliance Officer');
   const [closureOfficerTitle, setClosureOfficerTitle] = useState('');
   const [closureOfficerComments, setClosureOfficerComments] = useState('');
 
@@ -238,6 +239,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [tab]);
 
+  const handleToggleModule = (moduleKey: keyof EnabledModules) => {
+    const currentModules = staffConfig.enabledModules || {
+      levyAgreement: true,
+      businessClosure: true,
+      clientInquiry: true,
+      stakeholderComplaint: true,
+    };
+
+    const updatedConfig: StaffConfig = {
+      ...staffConfig,
+      enabledModules: {
+        ...currentModules,
+        [moduleKey]: !currentModules[moduleKey],
+      },
+    };
+
+    onStaffUpdate(updatedConfig);
+  };
+
+  const handleToggleAllModules = (enable: boolean) => {
+    const updatedConfig: StaffConfig = {
+      ...staffConfig,
+      enabledModules: {
+        levyAgreement: enable,
+        businessClosure: enable,
+        clientInquiry: enable,
+        stakeholderComplaint: enable,
+      },
+    };
+
+    onStaffUpdate(updatedConfig);
+  };
+
   const [newDebtor, setNewDebtor] = useState<Partial<DebtorRecord>>({
     dboName: '',
     premiseName: '',
@@ -326,6 +360,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         actionTaken: complaintActionTaken,
         officialSignature: staffConfig.officialSignature,
         officialName: adminName,
+        officialTitle: adminTitle || 'Compliance Officer',
+        officialComments: complaintActionTaken || investigationFindings,
+        actionDate: new Date().toISOString().split('T')[0],
         dateClosed: ['resolved', 'closed', 'rejected'].includes(complaintStatus) 
           ? new Date().toISOString().split('T')[0] 
           : undefined,
@@ -358,10 +395,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (onInquiryAction) {
       const updates: Partial<InquiryData> = {
         referredTo: inquiryReferredTo,
+        departmentAssigned: inquiryReferredTo,
         status: inquiryStatus,
         responseDetails: inquiryResponseDetails,
+        officialComments: inquiryResponseDetails,
         officialSignature: staffConfig.officialSignature,
         officialName: adminName,
+        officialTitle: adminTitle || 'Compliance Officer',
         dateReplied: ['resolved', 'closed'].includes(inquiryStatus) 
           ? new Date().toISOString().split('T')[0] 
           : undefined,
@@ -1564,7 +1604,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div className="p-6 rounded-[24px] bg-slate-50 border border-dashed flex flex-col space-y-4">
                           <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">KDB Administrative Sign-off</span>
                           
-                          <div className="grid grid-cols-2 gap-6 items-end">
+                          <div className="grid grid-cols-3 gap-6 items-end">
                             <div>
                               <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Full Name</label>
                               <input 
@@ -1572,6 +1612,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 value={adminName}
                                 onChange={(e) => setAdminName(e.target.value)}
                                 placeholder="Enter your full name"
+                                className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Title / Designation</label>
+                              <input 
+                                type="text"
+                                value={adminTitle}
+                                onChange={(e) => setAdminTitle(e.target.value)}
+                                placeholder="e.g. Compliance Officer"
                                 className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
                               />
                             </div>
@@ -1799,7 +1849,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div className="p-6 rounded-[24px] bg-slate-50 border border-dashed flex flex-col space-y-4">
                           <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">KDB Administrative Sign-off</span>
                           
-                          <div className="grid grid-cols-2 gap-6 items-end">
+                          <div className="grid grid-cols-3 gap-6 items-end">
                             <div>
                               <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Full Name</label>
                               <input 
@@ -1807,6 +1857,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 value={adminName}
                                 onChange={(e) => setAdminName(e.target.value)}
                                 placeholder="Enter your full name"
+                                className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Title / Designation</label>
+                              <input 
+                                type="text"
+                                value={adminTitle}
+                                onChange={(e) => setAdminTitle(e.target.value)}
+                                placeholder="e.g. Compliance Officer"
                                 className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
                               />
                             </div>
@@ -1928,10 +1988,202 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="bg-white p-10 rounded-[40px] border border-slate-100 shadow-xl space-y-10">
             <div>
               <h3 className="text-2xl font-black text-slate-900 tracking-tight">KDB Execution Setup</h3>
-              <p className="text-sm text-slate-500 font-medium mt-1">Manage your official digital identity.</p>
+              <p className="text-sm text-slate-500 font-medium mt-1">Manage your official digital identity and public client module availability.</p>
             </div>
             
             <div className="space-y-6">
+                {/* Module Toggles Section */}
+                <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-200/80 space-y-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <Globe className="w-5 h-5 text-emerald-600" />
+                        <h4 className="text-sm font-black text-slate-900 tracking-tight">Client Portal Module Controls</h4>
+                      </div>
+                      <p className="text-xs text-slate-500 font-medium mt-0.5">
+                        Toggle public client-facing service modules on or off in the Client Portal.
+                      </p>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAllModules(true)}
+                        className="px-3 py-1.5 bg-emerald-100/80 text-emerald-800 hover:bg-emerald-200/80 border border-emerald-300/80 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all"
+                      >
+                        Show All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAllModules(false)}
+                        className="px-3 py-1.5 bg-rose-100/80 text-rose-800 hover:bg-rose-200/80 border border-rose-300/80 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all"
+                      >
+                        Hide All
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3">
+                    {/* Module 1: Client Inquiry */}
+                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
+                      staffConfig.enabledModules?.clientInquiry !== false ? 'bg-white border-sky-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
+                    }`}>
+                      <div className="flex items-center space-x-3">
+                        <div className={`p-2.5 rounded-xl ${
+                          staffConfig.enabledModules?.clientInquiry !== false ? 'bg-sky-50 text-sky-600' : 'bg-slate-200 text-slate-500'
+                        }`}>
+                          <HelpCircle className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-xs text-slate-900">Client Inquiry Form</span>
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                              staffConfig.enabledModules?.clientInquiry !== false ? 'bg-sky-100 text-sky-800' : 'bg-slate-200 text-slate-600'
+                            }`}>
+                              {staffConfig.enabledModules?.clientInquiry !== false ? 'Active' : 'Hidden'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Allow public stakeholders to submit general or technical inquiries to KDB.</span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleModule('clientInquiry')}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          staffConfig.enabledModules?.clientInquiry !== false ? 'bg-sky-600' : 'bg-slate-300'
+                        }`}
+                        role="switch"
+                        aria-checked={staffConfig.enabledModules?.clientInquiry !== false}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                            staffConfig.enabledModules?.clientInquiry !== false ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Module 2: Stakeholder Complaints */}
+                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
+                      staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-white border-rose-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
+                    }`}>
+                      <div className="flex items-center space-x-3">
+                        <div className={`p-2.5 rounded-xl ${
+                          staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-rose-50 text-rose-600' : 'bg-slate-200 text-slate-500'
+                        }`}>
+                          <FileCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-xs text-slate-900">Stakeholder Complaints Form</span>
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                              staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-600'
+                            }`}>
+                              {staffConfig.enabledModules?.stakeholderComplaint !== false ? 'Active' : 'Hidden'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Allow stakeholders to submit formal complaint reports to KDB.</span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleModule('stakeholderComplaint')}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-rose-600' : 'bg-slate-300'
+                        }`}
+                        role="switch"
+                        aria-checked={staffConfig.enabledModules?.stakeholderComplaint !== false}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                            staffConfig.enabledModules?.stakeholderComplaint !== false ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Module 3: Levy Payment Agreement */}
+                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
+                      staffConfig.enabledModules?.levyAgreement !== false ? 'bg-white border-emerald-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
+                    }`}>
+                      <div className="flex items-center space-x-3">
+                        <div className={`p-2.5 rounded-xl ${
+                          staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'
+                        }`}>
+                          <FileCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-xs text-slate-900">Levy Arrears Payment Portal</span>
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                              staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                            }`}>
+                              {staffConfig.enabledModules?.levyAgreement !== false ? 'Active' : 'Hidden'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Enable debtors to view arrears breakdown and propose payment schedules.</span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleModule('levyAgreement')}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-600' : 'bg-slate-300'
+                        }`}
+                        role="switch"
+                        aria-checked={staffConfig.enabledModules?.levyAgreement !== false}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                            staffConfig.enabledModules?.levyAgreement !== false ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Module 4: Business Closure Notification */}
+                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
+                      staffConfig.enabledModules?.businessClosure !== false ? 'bg-white border-amber-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
+                    }`}>
+                      <div className="flex items-center space-x-3">
+                        <div className={`p-2.5 rounded-xl ${
+                          staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-50 text-amber-600' : 'bg-slate-200 text-slate-500'
+                        }`}>
+                          <Building2 className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-xs text-slate-900">Business Closure & Cessation</span>
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                              staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-600'
+                            }`}>
+                              {staffConfig.enabledModules?.businessClosure !== false ? 'Active' : 'Hidden'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Allow licensees to formally notify KDB of business cessation or closures.</span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleModule('businessClosure')}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-600' : 'bg-slate-300'
+                        }`}
+                        role="switch"
+                        aria-checked={staffConfig.enabledModules?.businessClosure !== false}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                            staffConfig.enabledModules?.businessClosure !== false ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </div>
                 <div className={`p-6 rounded-[32px] border flex flex-col space-y-4 transition-all ${systemHealth.clientSupabase ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
                     <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-3">

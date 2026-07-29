@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber } from '../types';
+import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber, isSameCategory, getClientCategory } from '../types';
 import { DBService } from '../services/db';
 import { 
   Plus, 
@@ -324,30 +324,37 @@ export const LicensedClientsModule: React.FC = () => {
 
   const downloadSampleTemplate = () => {
     const headers = [
-      'clientName',
-      'premiseName',
-      'premiseCategory',
-      'startYear',
-      'startMonth',
-      'endYear',
-      'endMonth',
+      'clientname',
+      'premises',
+      'category',
+      'permit_number',
+      'startyear',
+      'startmonth',
+      'endyear',
+      'endmonth',
+      'start_date',
+      'end_date',
       'tel',
-      'contactPerson',
+      'contacts',
       'location',
       'county',
-      'coolingCapacity',
-      'permitStatus',
-      'operationalStatus',
-      'levyInfo'
+      'coolingcapacity',
+      'permitstatus',
+      'operationalstatus',
+      'levyinfo',
+      'expiry_date'
     ];
     const rows = [
       [
         'Brookside Kericho Depot',
         'Kericho Central Hub',
         'Processor',
+        'KDB/PR/2021/001',
         '2021',
         'March',
         '',
+        '',
+        '15/03/2021',
         '',
         '0711223344',
         'Robert Kirui',
@@ -356,15 +363,19 @@ export const LicensedClientsModule: React.FC = () => {
         '25000',
         'active',
         'operating',
-        'QFR'
+        'QFR',
+        '31/12/2024'
       ],
       [
         'Kapsoit Milk Bar',
         'Kapsoit Junction Station',
         'Milk Bar',
+        'KDB/MB/2023/042',
         '2023',
         'July',
         '',
+        '',
+        '01/07/2023',
         '',
         '0722334455',
         'Janet Chebet',
@@ -373,7 +384,8 @@ export const LicensedClientsModule: React.FC = () => {
         '',
         'active',
         'operating',
-        'DNQ-R'
+        'DNQ-R',
+        '31/12/2024'
       ]
     ];
     // Create CSV content
@@ -389,7 +401,7 @@ export const LicensedClientsModule: React.FC = () => {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "kdb_licensed_clients_template.csv");
+    link.setAttribute("download", "licensed_clients_supabase_template.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -401,23 +413,23 @@ export const LicensedClientsModule: React.FC = () => {
       return;
     }
     const headers = [
-      'id',
-      'clientName',
-      'premiseName',
-      'premiseCategory',
-      'startYear',
-      'startMonth',
-      'endYear',
-      'endMonth',
+      'permit_number',
+      'clientname',
+      'premises',
+      'category',
+      'startyear',
+      'startmonth',
+      'endyear',
+      'endmonth',
       'tel',
-      'contactPerson',
+      'contacts',
       'location',
       'county',
-      'coolingCapacity',
-      'permitStatus',
-      'operationalStatus',
-      'levyInfo',
-      'expiryDate'
+      'coolingcapacity',
+      'permitstatus',
+      'operationalstatus',
+      'levyinfo',
+      'expiry_date'
     ];
     const rows = filteredClients.map(client => {
       const resolvedPermitStatus = (() => {
@@ -436,7 +448,7 @@ export const LicensedClientsModule: React.FC = () => {
       })();
 
       return [
-        client.id,
+        client.permitNumber || client.id,
         client.clientName,
         client.premiseName,
         client.premiseCategory,
@@ -711,7 +723,7 @@ export const LicensedClientsModule: React.FC = () => {
       String(client.tel || '').toLowerCase().includes(qLower) ||
       String(client.county || '').toLowerCase().includes(qLower);
     
-    const matchesCategory = categoryFilter === 'All' || client.premiseCategory === categoryFilter;
+    const matchesCategory = categoryFilter === 'All' || isSameCategory(getClientCategory(client), categoryFilter);
     const matchesLevy = levyFilter === 'All' || client.levyInfo === levyFilter;
     
     // Dynamic Permit Status
@@ -751,7 +763,7 @@ export const LicensedClientsModule: React.FC = () => {
 
   // Category breakdown stats
   const categoryStats = categories.map(cat => {
-    const catClients = clients.filter(c => c.premiseCategory === cat);
+    const catClients = clients.filter(c => isSameCategory(getClientCategory(c), cat));
     const licensed = catClients.length;
     const qfr = catClients.filter(c => c.levyInfo === 'QFR').length;
     const dnqr = catClients.filter(c => c.levyInfo === 'DNQ-R').length;
@@ -1733,24 +1745,162 @@ export const LicensedClientsModule: React.FC = () => {
             <div className="flex-grow overflow-y-auto p-8 space-y-6">
               
               {/* Instructions and download template */}
-              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-3">
+              <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
                 <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                  <FileText size={16} className="text-slate-500" /> Instructions for Bulk Import
+                  <FileText size={16} className="text-slate-500" /> Instructions & Supabase Schema Match
                 </h4>
-                <ul className="list-disc pl-5 text-slate-600 text-xs space-y-2 leading-relaxed">
-                  <li>Download the pre-formatted CSV template below to match database structures exactly.</li>
-                  <li>Fill in client details using Microsoft Excel, Google Sheets, or any other CSV editor.</li>
-                  <li>Ensure the <strong>premiseCategory</strong> field matches exactly: <em>Milk Bar</em>, <em>Dispenser</em>, <em>Cooling Plant</em>, <em>Mini Dairy</em>, <em>Cottage Industry</em>, or <em>Processor</em>.</li>
-                  <li>Upload the saved <strong>.csv</strong> file to instantly preview and validate the fields before saving.</li>
+                <ul className="list-disc pl-5 text-slate-600 text-xs space-y-1.5 leading-relaxed">
+                  <li>Download the pre-formatted CSV template below to match Supabase database columns (<code>licensed_clients</code> table) exactly.</li>
+                  <li>Fill in client details using Microsoft Excel, Google Sheets, or any CSV editor.</li>
+                  <li>Ensure the <strong>category</strong> field matches one of: <em>Milk Bar</em>, <em>Dispenser</em>, <em>Cooling Plant</em>, <em>Mini Dairy</em>, <em>Cottage Industry</em>, or <em>Processor</em>.</li>
+                  <li>Upload the saved <strong>.csv</strong> file to preview and validate all fields before committing to Supabase.</li>
                 </ul>
 
-                <div className="pt-2">
+                <div className="pt-1">
                   <button
                     onClick={downloadSampleTemplate}
                     className="inline-flex items-center gap-2 bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 px-4 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all shadow-sm"
                   >
-                    <Download size={14} className="text-emerald-500" /> Download CSV Template (.csv)
+                    <Download size={14} className="text-emerald-500" /> Download Supabase CSV Template (.csv)
                   </button>
+                </div>
+
+                {/* Supabase Columns Reference Table */}
+                <div className="pt-3 border-t border-slate-200">
+                  <details className="group">
+                    <summary className="text-[11px] font-black text-slate-700 uppercase tracking-wider cursor-pointer hover:text-emerald-600 transition-colors flex items-center justify-between">
+                      <span>View Required Supabase Column Schema (licensed_clients)</span>
+                      <span className="text-xs group-open:rotate-180 transition-transform">▼</span>
+                    </summary>
+                    <div className="mt-3 overflow-x-auto border border-slate-200 rounded-2xl bg-white shadow-inner">
+                      <table className="w-full text-left text-[11px] border-collapse">
+                        <thead>
+                          <tr className="bg-slate-100 text-slate-600 text-[9px] font-black uppercase tracking-widest border-b border-slate-200">
+                            <th className="px-3 py-2">Supabase Column Name</th>
+                            <th className="px-3 py-2">Field Description</th>
+                            <th className="px-3 py-2">Allowed / Expected Values</th>
+                            <th className="px-3 py-2">Example</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">clientname</td>
+                            <td className="px-3 py-2">Client / DBO Name <span className="text-rose-500 font-bold">*</span></td>
+                            <td className="px-3 py-2 text-slate-500">Text</td>
+                            <td className="px-3 py-2 text-slate-400">Brookside Kericho Depot</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">premises</td>
+                            <td className="px-3 py-2">Premise / Outlet Name <span className="text-rose-500 font-bold">*</span></td>
+                            <td className="px-3 py-2 text-slate-500">Text</td>
+                            <td className="px-3 py-2 text-slate-400">Kericho Central Hub</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">category</td>
+                            <td className="px-3 py-2">Premise Category <span className="text-rose-500 font-bold">*</span></td>
+                            <td className="px-3 py-2 text-slate-500">Milk Bar, Dispenser, Cooling Plant, Mini Dairy, Cottage Industry, Processor</td>
+                            <td className="px-3 py-2 text-slate-400">Processor</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">permit_number</td>
+                            <td className="px-3 py-2">Permit / License Number</td>
+                            <td className="px-3 py-2 text-slate-500">Text (or auto-generated if blank)</td>
+                            <td className="px-3 py-2 text-slate-400">KDB/PR/2021/001</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">startyear</td>
+                            <td className="px-3 py-2">Start / Reg Year <span className="text-rose-500 font-bold">*</span></td>
+                            <td className="px-3 py-2 text-slate-500">YYYY (1980 - 2030)</td>
+                            <td className="px-3 py-2 text-slate-400">2021</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">startmonth</td>
+                            <td className="px-3 py-2">Start / Reg Month</td>
+                            <td className="px-3 py-2 text-slate-500">Month Name (e.g., January)</td>
+                            <td className="px-3 py-2 text-slate-400">March</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">endyear</td>
+                            <td className="px-3 py-2">End / Closure Year</td>
+                            <td className="px-3 py-2 text-slate-500">YYYY (Optional)</td>
+                            <td className="px-3 py-2 text-slate-400">2024</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">endmonth</td>
+                            <td className="px-3 py-2">End / Closure Month</td>
+                            <td className="px-3 py-2 text-slate-500">Month Name (Optional)</td>
+                            <td className="px-3 py-2 text-slate-400">December</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">start_date</td>
+                            <td className="px-3 py-2">Start Date</td>
+                            <td className="px-3 py-2 text-slate-500">DD/MM/YYYY</td>
+                            <td className="px-3 py-2 text-slate-400">15/03/2021</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">end_date</td>
+                            <td className="px-3 py-2">Closure Date</td>
+                            <td className="px-3 py-2 text-slate-500">DD/MM/YYYY</td>
+                            <td className="px-3 py-2 text-slate-400">31/12/2024</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">tel</td>
+                            <td className="px-3 py-2">Phone Number</td>
+                            <td className="px-3 py-2 text-slate-500">Text</td>
+                            <td className="px-3 py-2 text-slate-400">0711223344</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">contacts</td>
+                            <td className="px-3 py-2">Contact Person</td>
+                            <td className="px-3 py-2 text-slate-500">Text</td>
+                            <td className="px-3 py-2 text-slate-400">Robert Kirui</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">location</td>
+                            <td className="px-3 py-2">Location / Town</td>
+                            <td className="px-3 py-2 text-slate-500">Text</td>
+                            <td className="px-3 py-2 text-slate-400">Industrial Area, Kericho</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">county</td>
+                            <td className="px-3 py-2">County</td>
+                            <td className="px-3 py-2 text-slate-500">Text</td>
+                            <td className="px-3 py-2 text-slate-400">Kericho</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">coolingcapacity</td>
+                            <td className="px-3 py-2">Cooling Capacity (L)</td>
+                            <td className="px-3 py-2 text-slate-500">Number (For Processor/Cooling Plant)</td>
+                            <td className="px-3 py-2 text-slate-400">25000</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">permitstatus</td>
+                            <td className="px-3 py-2">Permit Status</td>
+                            <td className="px-3 py-2 text-slate-500">active or inactive</td>
+                            <td className="px-3 py-2 text-slate-400">active</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">operationalstatus</td>
+                            <td className="px-3 py-2">Operational Status</td>
+                            <td className="px-3 py-2 text-slate-500">operating or closed</td>
+                            <td className="px-3 py-2 text-slate-400">operating</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">levyinfo</td>
+                            <td className="px-3 py-2">Levy Info</td>
+                            <td className="px-3 py-2 text-slate-500">QFR or DNQ-R</td>
+                            <td className="px-3 py-2 text-slate-400">QFR</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">expiry_date</td>
+                            <td className="px-3 py-2">Expiry Date</td>
+                            <td className="px-3 py-2 text-slate-500">DD/MM/YYYY</td>
+                            <td className="px-3 py-2 text-slate-400">31/12/2024</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
                 </div>
               </div>
 

@@ -1520,7 +1520,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       <thead>
                         <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
                           <th className="px-6 py-4">Client / Premise details</th>
-                          <th className="px-6 py-4">Location</th>
                           <th className="px-6 py-4 text-center">Returns Filed</th>
                           <th className="px-6 py-4 text-right">Aggregated QTY</th>
                           <th className="px-6 py-4 text-right">Invoiced Amt</th>
@@ -1538,11 +1537,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                               <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
                                 <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[9px] uppercase font-bold">{client.premiseCategory}</span>
                                 <span>• {client.premiseName}</span>
+                                <span>• Permit: {client.permitNumber || client.id}</span>
                               </div>
-                            </td>
-                            <td className="px-6 py-4.5">
-                              <div className="text-slate-800 font-medium">{client.location || 'N/A'}</div>
-                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">Permit: {client.permitNumber || client.id}</div>
                             </td>
                             <td className="px-6 py-4.5 text-center">
                               <span className="bg-slate-100 text-slate-800 px-2.5 py-1 rounded-full text-[10px] font-black">
@@ -1777,8 +1773,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                       </td>
                                       <td className="px-6 py-3.5">
                                         <div className="text-slate-800">{item.client.premiseName}</div>
-                                        <div className="text-[10px] text-slate-400 flex items-center gap-0.5 mt-0.5">
-                                          <MapPin size={10} /> {item.client.location}, {item.client.county || 'N/A'}
+                                        <div className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                          {item.client.county || 'N/A'}
                                         </div>
                                       </td>
                                       <td className="px-6 py-3.5">
@@ -1895,7 +1891,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                 <thead>
                                   <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100 sticky top-0 bg-white z-10">
                                     <th className="px-6 py-3">Client details</th>
-                                    <th className="px-6 py-3">Premise & Location</th>
+                                    <th className="px-6 py-3">Premise Name</th>
                                     <th className="px-6 py-3">Permit No</th>
                                     <th className="px-6 py-3">Arrears Period(s)</th>
                                     <th className="px-6 py-3 text-right">Balance Due</th>
@@ -1918,8 +1914,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                         </td>
                                         <td className="px-6 py-3.5">
                                           <div className="text-slate-800">{item.premiseName || 'N/A'}</div>
-                                          <div className="text-[10px] text-slate-400 flex items-center gap-0.5 mt-0.5">
-                                            <MapPin size={10} /> {item.location || 'N/A'}, {item.county || 'N/A'}
+                                          <div className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                            {item.county || 'N/A'}
                                           </div>
                                         </td>
                                         <td className="px-6 py-3.5 text-slate-500 font-mono text-[11px]">
@@ -2172,58 +2168,32 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
               </div>
 
               {statementClientObj ? (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:hidden">
+                <div className="space-y-6 print:hidden">
                   
-                  {/* Left Column: Client profile, compliance, and list of unfiled months */}
-                  <div className="space-y-6">
-                    {/* Profile */}
-                    <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-xl space-y-4">
-                      <div className="text-[10px] bg-slate-100 border text-slate-600 font-black px-2.5 py-1 rounded-full uppercase tracking-wider w-fit">
+                  {/* Top Summary Bar - Full Width Span */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    
+                    {/* Selected Client Card */}
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-center space-y-2">
+                      <div className="text-[10px] bg-slate-100 border text-slate-600 font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider w-fit">
                         {statementClientObj.premiseCategory}
                       </div>
                       <div>
-                        <h4 className="text-xl font-black text-slate-800">{statementClientObj.clientName}</h4>
-                        <p className="text-xs font-semibold text-slate-400 mt-1">{statementClientObj.premiseName}</p>
-                      </div>
-
-                      <div className="divide-y divide-slate-100 text-xs font-bold text-slate-600">
-                        <div className="py-2.5 flex justify-between">
-                          <span>Permit Status</span>
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-black ${statementClientObj.permitStatus === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                            {statementClientObj.permitStatus === 'active' ? 'VALID' : 'EXPIRED'}
-                          </span>
-                        </div>
-                        <div className="py-2.5 flex justify-between">
-                          <span>Levy Qualification</span>
-                          <span className="font-extrabold text-indigo-600">{statementClientObj.levyInfo}</span>
-                        </div>
-                        <div className="py-2.5 flex justify-between">
-                          <span>Operational Start</span>
-                          <span className="text-slate-800">{statementClientObj.startMonth} {statementClientObj.startYear}</span>
-                        </div>
-                        <div className="py-2.5 flex justify-between">
-                          <span>Location</span>
-                          <span className="text-slate-800">{statementClientObj.location}, {statementClientObj.county}</span>
-                        </div>
-                        <div className="py-2.5 flex justify-between">
-                          <span>Contact Person</span>
-                          <span className="text-slate-800">{statementClientObj.contactPerson}</span>
-                        </div>
-                        <div className="py-2.5 flex justify-between">
-                          <span>Phone Number</span>
-                          <span className="text-slate-800">{statementClientObj.tel}</span>
-                        </div>
+                        <h4 className="text-xl font-black text-slate-800 leading-snug">{statementClientObj.clientName}</h4>
+                        <p className="text-xs font-semibold text-slate-400 mt-0.5">{statementClientObj.premiseName}</p>
                       </div>
                     </div>
 
-                    {/* Compliance KPI Card */}
-                    <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-xl space-y-3">
-                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Filing Compliance</h4>
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-4xl font-black text-slate-800">{complianceRate}%</span>
-                        <span className="text-xs font-bold text-slate-400">({statementReturns.length} of {stmtTotalMonths} periods filed)</span>
+                    {/* Filing Compliance KPI Card */}
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-center space-y-2">
+                      <div className="flex justify-between items-center">
+                        <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Filing Compliance</h4>
+                        <span className="text-2xl font-black text-slate-800">{complianceRate}%</span>
                       </div>
-                      <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                      <div className="text-xs font-bold text-slate-400">
+                        ({statementReturns.length} of {stmtTotalMonths} periods filed)
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
                         <div 
                           className={`h-full rounded-full transition-all duration-500 ${
                             complianceRate >= 90 ? 'bg-emerald-500' : complianceRate >= 60 ? 'bg-amber-500' : 'bg-rose-500'
@@ -2233,8 +2203,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       </div>
                     </div>
 
-                    {/* Spotlight: Unfiled periods specifically for this client */}
-                    <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-xl space-y-4">
+                    {/* Missing / Unfiled Periods Card */}
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-center space-y-2">
                       <div className="flex justify-between items-center">
                         <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">Missing / Unfiled Periods</h4>
                         <span className="text-[10px] bg-rose-50 border border-rose-100 text-rose-600 px-2.5 py-0.5 rounded-full font-black">
@@ -2243,17 +2213,17 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       </div>
 
                       {stmtUnfiledPeriods.length === 0 ? (
-                        <div className="py-6 text-center text-slate-400 text-xs font-bold">
+                        <div className="text-slate-400 text-xs font-bold py-1">
                           🎉 This client's returns ledger is up to date!
                         </div>
                       ) : (
-                        <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                        <div className="max-h-24 overflow-y-auto space-y-1.5 pr-1">
                           {stmtUnfiledPeriods.map((period, idx) => (
-                            <div key={idx} className="bg-rose-50/50 border border-rose-100/50 rounded-2xl p-3 flex justify-between items-center text-xs font-bold text-rose-700">
+                            <div key={idx} className="bg-rose-50/50 border border-rose-100/50 rounded-xl px-3 py-1.5 flex justify-between items-center text-xs font-bold text-rose-700">
                               <span>{period.month} {period.year}</span>
                               <button
                                 onClick={() => openAddModal(statementClientObj.id, period.year, period.month)}
-                                className="bg-white hover:bg-rose-100 border border-rose-200 text-rose-700 px-2 py-1 rounded-lg text-[9px] uppercase tracking-wider transition-all"
+                                className="bg-white hover:bg-rose-100 border border-rose-200 text-rose-700 px-2 py-0.5 rounded text-[9px] uppercase tracking-wider transition-all"
                               >
                                 File Now
                               </button>
@@ -2264,8 +2234,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                     </div>
                   </div>
 
-                  {/* Right Column (Col-span-2): Filed Returns Ledger Statement */}
-                  <div className="lg:col-span-2 bg-white rounded-[40px] border border-slate-100 shadow-xl overflow-hidden print:shadow-none print:border-none">
+                  {/* Full Width Filed Returns Ledger Statement */}
+                  <div className="w-full bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden print:shadow-none print:border-none">
                     
                     {/* Header Details */}
                     <div className="p-8 border-b border-slate-100 bg-slate-50/50 space-y-4">
@@ -2315,9 +2285,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                           <thead>
                             <tr className="bg-slate-50 text-slate-400 text-[9px] font-black uppercase tracking-widest border-b border-slate-100">
                               <th className="px-4 py-4">Client Name</th>
-                              <th className="px-4 py-4">Premise Name</th>
-                              <th className="px-4 py-4">Location</th>
-                              <th className="px-4 py-4">Permit No</th>
                               <th className="px-4 py-4">Filing Period</th>
                               <th className="px-4 py-4 text-right">Qty</th>
                               <th className="px-4 py-4 text-right">Invoice Amount</th>
@@ -2333,9 +2300,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                             {filteredStatementReturns.map((ret, idx) => (
                               <tr key={idx} className="hover:bg-slate-50/20 text-xs">
                                 <td className="px-4 py-3.5 font-bold text-slate-900">{statementClientObj.clientName}</td>
-                                <td className="px-4 py-3.5 text-slate-700">{statementClientObj.premiseName}</td>
-                                <td className="px-4 py-3.5 text-slate-500">{statementClientObj.location}</td>
-                                <td className="px-4 py-3.5 text-slate-500 font-mono text-[10px]">{statementClientObj.permitNumber || statementClientObj.id}</td>
                                 <td className="px-4 py-3.5 font-extrabold text-slate-800">{ret.period} {ret.year}</td>
                                 <td className="px-4 py-3.5 text-right font-mono">{ret.qty.toLocaleString()}</td>
                                 <td className="px-4 py-3.5 text-right font-black text-slate-900">{formatCurrency(ret.invoiceAmount)}</td>
