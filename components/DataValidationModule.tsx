@@ -1187,12 +1187,12 @@ export function DataValidationModule() {
 
     const points = [
       { key: 'dboName', label: 'Name of DBO (clientname)', validationVal: currentForm.dboName || '', clientVal: client.clientName || '' },
-      { key: 'premiseName', label: 'Premise Name (premises)', validationVal: currentForm.premiseName || '', clientVal: client.premiseName || '' },
-      { key: 'permitNo', label: 'Permit Number (permit_number)', validationVal: currentForm.permitNo || '', clientVal: client.id || '' },
+      { key: 'premiseName', label: 'Premise Name (premisename)', validationVal: currentForm.premiseName || '', clientVal: client.premiseName || '' },
+      { key: 'permitNo', label: 'Permit Number (permitnumber)', validationVal: currentForm.permitNo || '', clientVal: client.permitNumber || client.id || '' },
       { key: 'location', label: 'Location (location)', validationVal: currentForm.location || '', clientVal: client.location || '' },
-      { key: 'category', label: 'Category (category)', validationVal: currentForm.category || '', clientVal: client.premiseCategory || '' },
-      { key: 'contacts', label: 'Contacts (contacts)', validationVal: currentForm.contacts || '', clientVal: client.tel || '' },
-      { key: 'expiryDate', label: 'Expiry Date (expiry_date)', validationVal: currentForm.expiryDate || '', clientVal: (client as any).expiryDate || (client as any).expiry_date || '' }
+      { key: 'category', label: 'Category (premisecategory)', validationVal: currentForm.category || '', clientVal: client.premiseCategory || '' },
+      { key: 'contacts', label: 'Contacts (tel / contactperson)', validationVal: currentForm.contacts || '', clientVal: client.tel || client.contactPerson || '' },
+      { key: 'expiryDate', label: 'Expiry Date (expirydate)', validationVal: currentForm.expiryDate || '', clientVal: client.expiryDate || '' }
     ];
 
     const mismatches = points.filter(p => !isMatch(p.key, p.validationVal, p.clientVal));

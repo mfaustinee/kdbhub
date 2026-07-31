@@ -225,41 +225,42 @@ export const getCategoryShortCode = (category?: string): string => {
 };
 
 export const formatPermitNumber = (permitNo: string | undefined | null, category?: string, year?: number | string): string => {
+  if (permitNo && permitNo.trim()) {
+    return permitNo.trim();
+  }
   const code = getCategoryShortCode(category);
   const yr = year || new Date().getFullYear();
+  const seq = Math.floor(10000 + Math.random() * 90000);
+  return `KDB/${code}/${seq}/${yr}`;
+};
 
-  if (!permitNo || !permitNo.trim()) {
-    const seq = Math.floor(10000 + Math.random() * 90000);
-    return `KDB/${code}/${seq}/${yr}`;
-  }
-  
-  const trimmed = permitNo.trim();
-  // Check if it already matches KDB/XX/12345/YYYY
-  const match = trimmed.match(/^KDB\/(CP|CI|MB|DP|PR|MD)\/(\d+)\/(\d{4})$/i);
-  if (match) {
-    return `KDB/${match[1].toUpperCase()}/${match[2].padStart(5, '0')}/${match[3]}`;
-  }
-
-  // Handle KDB/LC/12345 or KDB/MB/12345 or other variations
-  if (trimmed.startsWith('KDB/')) {
-    const parts = trimmed.split('/');
-    if (parts.length === 4) {
-      const numDigits = parts[2].replace(/\D/g, '');
-      const num = numDigits ? numDigits.padStart(5, '0').slice(-5) : '10001';
-      const y = parts[3].match(/\d{4}/) ? parts[3] : yr;
-      return `KDB/${code}/${num}/${y}`;
-    } else if (parts.length === 3) {
-      const numDigits = parts[1].replace(/\D/g, '');
-      const num = numDigits ? numDigits.padStart(5, '0').slice(-5) : '10001';
-      const y = parts[2].match(/\d{4}/) ? parts[2] : yr;
-      return `KDB/${code}/${num}/${y}`;
+export const parseDDMMYYYY = (dateStr: string | undefined | null): Date | null => {
+  if (!dateStr) return null;
+  const s = String(dateStr).trim();
+  if (!s || s.toLowerCase() === 'not filed' || s.toLowerCase() === 'n/a') return null;
+  if (s.includes('/')) {
+    const parts = s.split('/');
+    if (parts.length === 3) {
+      const d = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const y = parseInt(parts[2], 10);
+      if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+        return new Date(y, m, d);
+      }
     }
   }
-
-  // Extract digits for sequence
-  const digits = trimmed.replace(/\D/g, '');
-  const seq = digits.length >= 5 ? digits.slice(-5) : (digits ? digits.padStart(5, '0') : '10001');
-  return `KDB/${code}/${seq}/${yr}`;
+  if (s.includes('-')) {
+    const parts = s.split('T')[0].split('-');
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      } else if (parts[2].length === 4) {
+        return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      }
+    }
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
 };
 
 export const formatDateToDDMMYYYY = (dateStr: string | Date | undefined | null): string => {
@@ -268,12 +269,32 @@ export const formatDateToDDMMYYYY = (dateStr: string | Date | undefined | null):
     const s = dateStr.trim();
     if (!s) return '';
     if (s.toLowerCase() === 'not filed' || s.toLowerCase() === 'n/a') return s;
-    // If already in DD/MM/YYYY format
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
-    // If in YYYY-MM-DD format
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-      const [y, m, d] = s.split('T')[0].split('-');
-      return `${d.padStart(2, '0')}/${m.padStart(2, '0')}/${y}`;
+    if (s.includes('/')) {
+      const parts = s.split('/');
+      if (parts.length === 3) {
+        if (parts[2].trim().length === 4) {
+          const d = parts[0].trim().padStart(2, '0');
+          const m = parts[1].trim().padStart(2, '0');
+          const y = parts[2].trim();
+          return `${d}/${m}/${y}`;
+        }
+      }
+    }
+    if (s.includes('-')) {
+      const parts = s.split('T')[0].split('-');
+      if (parts.length === 3) {
+        if (parts[0].trim().length === 4) {
+          const y = parts[0].trim();
+          const m = parts[1].trim().padStart(2, '0');
+          const d = parts[2].trim().padStart(2, '0');
+          return `${d}/${m}/${y}`;
+        } else if (parts[2].trim().length === 4) {
+          const d = parts[0].trim().padStart(2, '0');
+          const m = parts[1].trim().padStart(2, '0');
+          const y = parts[2].trim();
+          return `${d}/${m}/${y}`;
+        }
+      }
     }
   }
   const d = new Date(dateStr);
@@ -306,6 +327,10 @@ export interface ClientBranch {
   county: string;
   expiryDate?: string;
   operationalStatus: 'closed' | 'operating';
+  permitStatus?: 'valid' | 'expired' | 'active' | 'inactive' | string;
+  tel?: string;
+  contactPerson?: string;
+  coolingCapacity?: number;
 }
 
 export interface LicensedClient {
@@ -324,7 +349,7 @@ export interface LicensedClient {
   premiseCategory: 'Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry' | 'Processor';
   county: string;
   coolingCapacity?: number; // for cooling plants and processors
-  permitStatus: 'active' | 'inactive';
+  permitStatus: 'valid' | 'expired' | 'active' | 'inactive' | string;
   operationalStatus: 'closed' | 'operating';
   levyInfo: 'QFR' | 'DNQ-R';
   expiryDate?: string;

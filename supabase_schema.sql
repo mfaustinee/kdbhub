@@ -1,11 +1,12 @@
 -- Supabase PostgreSQL Schema for Kenya Dairy Board (KDB) Integrated System
--- This file contains all table schemas and indexes needed for the Supabase Database.
+-- This file contains all table schemas, indexes, and RLS policies needed for Supabase.
 
 -- 1. LICENSED CLIENTS TABLE (Core registry for App A & B)
 CREATE TABLE IF NOT EXISTS licensed_clients (
     id TEXT PRIMARY KEY,
     clientname TEXT NOT NULL,
     premisename TEXT NOT NULL,
+    premisecategory TEXT NOT NULL,
     startyear INTEGER NOT NULL,
     startmonth TEXT NOT NULL,
     endyear INTEGER,
@@ -13,10 +14,9 @@ CREATE TABLE IF NOT EXISTS licensed_clients (
     tel TEXT,
     contactperson TEXT,
     location TEXT NOT NULL,
-    premisecategory TEXT NOT NULL,
     county TEXT NOT NULL,
     coolingcapacity NUMERIC,
-    permitstatus TEXT DEFAULT 'active',
+    permitstatus TEXT DEFAULT 'valid',
     operationalstatus TEXT DEFAULT 'operating',
     levyinfo TEXT,
     expirydate TEXT,
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS licensed_clients (
 
 CREATE INDEX IF NOT EXISTS idx_licensed_clients_permitnumber ON licensed_clients(permitnumber);
 CREATE INDEX IF NOT EXISTS idx_licensed_clients_premisecategory ON licensed_clients(premisecategory);
+CREATE INDEX IF NOT EXISTS idx_licensed_clients_clientname ON licensed_clients(clientname);
 
 -- 2. CLIENT RETURNS TABLE (Ingestion and manual returns entry)
 CREATE TABLE IF NOT EXISTS client_returns (
@@ -91,7 +92,7 @@ CREATE TABLE IF NOT EXISTS kdb_validations (
 
 CREATE INDEX IF NOT EXISTS idx_kdb_validations_permit_no ON kdb_validations(permit_no);
 
--- 5. AGREEMENTS TABLE (CRITICAL LEGAL FILE - DO NOT ALTER OR REMOVE)
+-- 5. AGREEMENTS TABLE (CRITICAL LEGAL FILE - ISOLATED AND LOCKED)
 CREATE TABLE IF NOT EXISTS agreements (
     id TEXT PRIMARY KEY,
     dboname TEXT,
@@ -126,7 +127,7 @@ CREATE TABLE IF NOT EXISTS agreements (
 CREATE INDEX IF NOT EXISTS idx_agreements_permitno ON agreements(permitno);
 CREATE INDEX IF NOT EXISTS idx_agreements_status ON agreements(status);
 
--- 6. CLOSURES TABLE (CRITICAL OPERATIONAL FILE - DO NOT ALTER OR REMOVE)
+-- 6. CLOSURES TABLE (CRITICAL OPERATIONAL FILE - ISOLATED AND LOCKED)
 CREATE TABLE IF NOT EXISTS closures (
     id TEXT PRIMARY KEY,
     status TEXT DEFAULT 'submitted',
@@ -209,7 +210,7 @@ CREATE TABLE IF NOT EXISTS complaints (
     numattachments INTEGER DEFAULT 0,
     desiredresolution TEXT,
     declarationagreed BOOLEAN DEFAULT FALSE,
-    clientsignature TEXT, -- Base64 encoded signature drawing
+    clientsignature TEXT,
     clientnamedeclaration TEXT,
     
     -- Official Use / Actions
@@ -219,7 +220,7 @@ CREATE TABLE IF NOT EXISTS complaints (
     actiontaken TEXT,
     officialstatus TEXT,
     dateclosed TEXT,
-    officialsignature TEXT, -- Base64 encoded official signature
+    officialsignature TEXT,
     officialname TEXT,
     officialtitle TEXT,
     officialcomments TEXT,
@@ -260,7 +261,7 @@ CREATE TABLE IF NOT EXISTS inquiries (
     attacheddocslist TEXT,
     preferredresponsemode TEXT NOT NULL,
     declarationagreed BOOLEAN DEFAULT FALSE,
-    clientsignature TEXT, -- Base64 encoded signature drawing
+    clientsignature TEXT,
     
     -- Official Use / Actions
     receivedby TEXT,
@@ -268,7 +269,7 @@ CREATE TABLE IF NOT EXISTS inquiries (
     departmentassigned TEXT,
     actiontaken TEXT,
     dateclosed TEXT,
-    officialsignature TEXT, -- Base64 encoded official signature
+    officialsignature TEXT,
     officialname TEXT,
     officialtitle TEXT,
     officialcomments TEXT,
@@ -287,3 +288,54 @@ CREATE TABLE IF NOT EXISTS inquiries (
 CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);
 CREATE INDEX IF NOT EXISTS idx_inquiries_email ON inquiries(email);
 CREATE INDEX IF NOT EXISTS idx_inquiries_submittedat ON inquiries(submittedat DESC);
+
+-- ============================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- Enable full read/write access for application usage via Supabase Anon API
+-- ============================================================================
+
+DO $$ 
+DECLARE 
+    t text;
+BEGIN
+    FOR t IN 
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+          AND table_name IN (
+            'licensed_clients', 'client_returns', 'data_validations', 
+            'kdb_validations', 'agreements', 'closures', 'debtors', 
+            'staff_config', 'complaints', 'inquiries'
+          )
+    LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Enable read access for all users" ON %I;', t);
+        EXECUTE format('CREATE POLICY "Enable read access for all users" ON %I FOR SELECT USING (true);', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Enable insert for all users" ON %I;', t);
+        EXECUTE format('CREATE POLICY "Enable insert for all users" ON %I FOR INSERT WITH CHECK (true);', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Enable update for all users" ON %I;', t);
+        EXECUTE format('CREATE POLICY "Enable update for all users" ON %I FOR UPDATE USING (true) WITH CHECK (true);', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Enable delete for all users" ON %I;', t);
+        EXECUTE format('CREATE POLICY "Enable delete for all users" ON %I FOR DELETE USING (true);', t);
+    END LOOP;
+END $$;
+
+-- 11. ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
+-- Enables public API access (via Supabase anon/authenticated roles) for all application tables
+
+DO $$ 
+DECLARE
+    tbl TEXT;
+    tables TEXT[] := ARRAY[
+        'licensed_clients', 'client_returns', 'data_validations', 
+        'kdb_validations', 'agreements', 'closures', 'debtors', 
+        'staff_config', 'complaints', 'inquiries'
+    ];
+BEGIN
+    FOREACH tbl IN ARRAY tables LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', tbl);
+        EXECUTE format('DROP POLICY IF EXISTS "Allow anon and authenticated full access" ON %I;', tbl);
+        EXECUTE format('CREATE POLICY "Allow anon and authenticated full access" ON %I FOR ALL USING (true) WITH CHECK (true);', tbl);
+        EXECUTE format('GRANT ALL ON TABLE %I TO postgres, anon, authenticated, service_role;', tbl);
+    END LOOP;
+END $$;

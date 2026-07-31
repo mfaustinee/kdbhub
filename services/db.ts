@@ -100,70 +100,110 @@ const fromDb = (obj: any, template: any) => {
   return out;
 };
 
-// Custom translators for LicensedClient to reconcile differences between live database columns and frontend types
+const safeSetLocalStorage = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (err) {
+    console.warn(`[LocalStorage] Could not write to ${key}:`, err);
+  }
+};
+
+// Custom translators for LicensedClient to map cleanly to the 19 actual Supabase columns
 const clientToDb = (client: any) => {
   if (!client) return client;
-  const out = toDb(client);
-  
-  if (client.premiseName !== undefined) {
-    out.premises = client.premiseName;
-    delete out.premisename;
-  }
-  if (client.permitNumber !== undefined) {
-    out.permit_number = client.permitNumber;
-    delete out.permitnumber;
-  }
-  if (client.premiseCategory !== undefined) {
-    out.category = client.premiseCategory;
-    delete out.premisecategory;
-  }
-  if (client.contactPerson !== undefined) {
-    out.contacts = client.contactPerson;
-    delete out.contactperson;
-  }
-  if (client.expiryDate !== undefined) {
-    out.expiry_date = client.expiryDate;
-    delete out.expirydate;
-  }
-  if (client.startDate !== undefined) {
-    out.start_date = client.startDate;
-    delete out.startdate;
-  }
-  if (client.endDate !== undefined) {
-    out.end_date = client.endDate;
-    delete out.enddate;
-  }
+  const pNo = client.permitNumber || client.permitnumber || client.id || '';
+  const out: any = {
+    id: client.id || pNo,
+    clientname: client.clientName ?? client.clientname ?? '',
+    premisename: client.premiseName ?? client.premisename ?? '',
+    premisecategory: client.premiseCategory ?? client.premisecategory ?? 'Milk Bar',
+    startyear: Number(client.startYear ?? client.startyear ?? new Date().getFullYear()),
+    startmonth: String(client.startMonth ?? client.startmonth ?? 'January'),
+    endyear: (client.endYear !== undefined && client.endYear !== null && !isNaN(Number(client.endYear))) ? Number(client.endYear) : null,
+    endmonth: client.endMonth ?? client.endmonth ?? null,
+    tel: client.tel ?? '',
+    contactperson: client.contactPerson ?? client.contactperson ?? '',
+    location: client.location ?? '',
+    county: client.county ?? '',
+    coolingcapacity: (client.coolingCapacity !== undefined && client.coolingCapacity !== null && !isNaN(Number(client.coolingCapacity))) ? Number(client.coolingCapacity) : null,
+    permitstatus: client.permitStatus ?? client.permitstatus ?? 'valid',
+    operationalstatus: client.operationalStatus ?? client.operationalstatus ?? 'operating',
+    levyinfo: client.levyInfo ?? client.levyinfo ?? '',
+    expirydate: client.expiryDate ?? client.expirydate ?? '',
+    permitnumber: pNo,
+    branches: typeof client.branches === 'string' ? client.branches : JSON.stringify(client.branches || [])
+  };
   return out;
+};
+
+const returnToDb = (r: any) => {
+  if (!r) return r;
+  return {
+    id: r.id || `RET-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    clientid: r.clientId ?? r.clientid ?? '',
+    clientname: r.clientName ?? r.clientname ?? '',
+    year: Number(r.year ?? 2026),
+    period: String(r.period ?? 'January'),
+    qty: Number(r.qty ?? 0),
+    invoiceamount: Number(r.invoiceAmount ?? r.invoiceamount ?? 0),
+    returndate: String(r.returnDate ?? r.returndate ?? new Date().toISOString().slice(0, 10)),
+    paymentamount: Number(r.paymentAmount ?? r.paymentamount ?? 0),
+    paymentdate: String(r.paymentDate ?? r.paymentdate ?? ''),
+    txnref: r.txnRef ?? r.txnref ?? '',
+    lesscf: Number(r.lessCF ?? r.lesscf ?? 0),
+    outstandingbalance: Number(r.outstandingBalance ?? r.outstandingbalance ?? 0),
+    agingdays: Number(r.agingDays ?? r.agingdays ?? 0),
+    paymentstatus: String(r.paymentStatus ?? r.paymentstatus ?? 'Unpaid'),
+    comments: r.comments ?? ''
+  };
 };
 
 const clientFromDb = (dbObj: any): LicensedClient => {
   if (!dbObj) return dbObj;
   const out: any = { ...dbObj };
   
-  if (dbObj.clientname !== undefined) out.clientName = dbObj.clientname;
-  if (dbObj.premises !== undefined) out.premiseName = dbObj.premises;
+  const clientName = dbObj.clientname ?? dbObj.client_name ?? dbObj.clientName;
+  if (clientName !== undefined) out.clientName = clientName;
+
+  const premiseName = dbObj.premisename ?? dbObj.premises ?? dbObj.premise_name ?? dbObj.premiseName;
+  if (premiseName !== undefined) out.premiseName = premiseName;
+
   if (dbObj.startyear !== undefined) out.startYear = Number(dbObj.startyear);
   if (dbObj.startmonth !== undefined) out.startMonth = dbObj.startmonth;
   if (dbObj.endyear !== undefined) out.endYear = dbObj.endyear ? Number(dbObj.endyear) : null;
   if (dbObj.endmonth !== undefined) out.endMonth = dbObj.endmonth;
-  if (dbObj.start_date !== undefined) out.startDate = dbObj.start_date;
-  if (dbObj.end_date !== undefined) out.endDate = dbObj.end_date;
+  
   if (dbObj.tel !== undefined) out.tel = dbObj.tel;
-  if (dbObj.contacts !== undefined) out.contactPerson = dbObj.contacts;
+  
+  const contactPerson = dbObj.contactperson ?? dbObj.contacts ?? dbObj.contact_person ?? dbObj.contactPerson;
+  if (contactPerson !== undefined) out.contactPerson = contactPerson;
+
   if (dbObj.location !== undefined) out.location = dbObj.location;
-  const rawCat = dbObj.premiseCategory ?? dbObj.premise_category ?? dbObj.premisecategory ?? dbObj.category ?? dbObj.client_category ?? dbObj.clientCategory;
+
+  const rawCat = dbObj.premisecategory ?? dbObj.category ?? dbObj.premiseCategory ?? dbObj.premise_category ?? dbObj.client_category ?? dbObj.clientCategory;
   if (rawCat !== undefined && rawCat !== null) {
     out.premiseCategory = String(rawCat).trim();
   } else if (!out.premiseCategory) {
     out.premiseCategory = 'Milk Bar';
   }
+
   if (dbObj.county !== undefined) out.county = dbObj.county;
   if (dbObj.coolingcapacity !== undefined) out.coolingCapacity = dbObj.coolingcapacity ? Number(dbObj.coolingcapacity) : undefined;
   if (dbObj.permitstatus !== undefined) out.permitStatus = dbObj.permitstatus;
   if (dbObj.operationalstatus !== undefined) out.operationalStatus = dbObj.operationalstatus;
   if (dbObj.levyinfo !== undefined) out.levyInfo = dbObj.levyinfo;
-  if (dbObj.expiry_date !== undefined) out.expiryDate = dbObj.expiry_date;
-  if (dbObj.permit_number !== undefined) out.permitNumber = dbObj.permit_number;
+
+  const expiryDate = dbObj.expirydate ?? dbObj.expiry_date ?? dbObj.expiryDate;
+  if (expiryDate !== undefined) out.expiryDate = expiryDate;
+
+  const permitNumber = dbObj.permitnumber ?? dbObj.permit_number ?? dbObj.permitNumber ?? dbObj.id;
+  if (permitNumber !== undefined) {
+    out.permitNumber = permitNumber;
+    out.id = dbObj.id || permitNumber;
+  } else if (dbObj.id !== undefined) {
+    out.id = dbObj.id;
+    if (!out.permitNumber) out.permitNumber = dbObj.id;
+  }
   
   if (dbObj.branches !== undefined) {
     if (typeof dbObj.branches === 'string') {
@@ -1669,10 +1709,13 @@ export const DBService = {
   },
 
   async saveClientsBulk(clientsList: LicensedClient[]): Promise<void> {
-    const saveLocal = async () => {
-      console.log("[DBService] Saving clients bulk to local API / storage...");
-      const currentClients = await this.getClients();
-      
+    const getMergedLocal = async () => {
+      let currentClients: LicensedClient[] = [];
+      try {
+        const cached = localStorage.getItem('kdb_clients_cache');
+        if (cached) currentClients = JSON.parse(cached);
+      } catch {}
+
       const merged = [...currentClients];
       clientsList.forEach(newC => {
         const idx = merged.findIndex(c => c.id === newC.id);
@@ -1682,26 +1725,27 @@ export const DBService = {
           merged.push(newC);
         }
       });
+      return merged;
+    };
 
+    const saveLocal = async () => {
+      console.log("[DBService] Saving clients bulk to local API / storage...");
+      const merged = await getMergedLocal();
       try {
-        const response = await fetch('/api/clients', {
+        await fetch('/api/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(merged)
         });
-        if (response.ok) {
-          localStorage.setItem('kdb_clients_cache', JSON.stringify(merged));
-          return;
-        }
       } catch (e) {
-        console.warn("[DBService] Local API saveClientsBulk error:", e);
+        console.warn("[DBService] Local API saveClientsBulk warning:", e);
       }
-      localStorage.setItem('kdb_clients_cache', JSON.stringify(merged));
+      safeSetLocalStorage('kdb_clients_cache', JSON.stringify(merged));
     };
 
     const client = await getSupabase();
     if (!client) {
-      console.warn("[DBService] Supabase not initialized, trying local API");
+      console.warn("[DBService] Supabase not initialized, saving locally");
       await saveLocal();
       return;
     }
@@ -1709,20 +1753,34 @@ export const DBService = {
     try {
       console.log("[DBService] Attempting Supabase bulk upsert...", clientsList.length);
       const dbClients = clientsList.map(c => clientToDb(c));
-      const { error } = await client
-        .from('licensed_clients')
-        .upsert(dbClients);
       
-      if (error) {
-        console.warn("[DBService] Supabase bulk upsert failed, falling back to local API. Error:", error);
-        await saveLocal();
-        return;
+      // Batch in chunks of 50 for max reliability
+      const chunkSize = 50;
+      for (let i = 0; i < dbClients.length; i += chunkSize) {
+        const chunk = dbClients.slice(i, i + chunkSize);
+        const { error } = await client
+          .from('licensed_clients')
+          .upsert(chunk);
+        
+        if (error) {
+          console.error("[DBService] Supabase bulk upsert chunk error:", error);
+          await saveLocal();
+          return;
+        }
       }
       
-      const current = await this.getClients();
-      localStorage.setItem('kdb_clients_cache', JSON.stringify(current));
+      console.log("[DBService] Supabase bulk upsert succeeded for", clientsList.length, "clients");
+      const merged = await getMergedLocal();
+      safeSetLocalStorage('kdb_clients_cache', JSON.stringify(merged));
+      try {
+        fetch('/api/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(merged)
+        }).catch(() => {});
+      } catch {}
     } catch (error: any) {
-      console.warn("[DBService] Supabase bulk upsert exception, falling back to local API. Error:", error);
+      console.error("[DBService] Supabase bulk upsert exception, falling back to local API. Error:", error);
       await saveLocal();
     }
   },
@@ -1886,9 +1944,14 @@ export const DBService = {
   },
 
   async saveReturnsBulk(returnsList: ClientReturn[]): Promise<void> {
-    const saveLocal = async () => {
-      const current = await this.getReturns();
-      const merged = [...current];
+    const getMergedLocal = async () => {
+      let currentReturns: ClientReturn[] = [];
+      try {
+        const cached = localStorage.getItem('kdb_returns_cache');
+        if (cached) currentReturns = JSON.parse(cached);
+      } catch {}
+
+      const merged = [...currentReturns];
       returnsList.forEach(newR => {
         const idx = merged.findIndex(r => r.id === newR.id);
         if (idx !== -1) {
@@ -1897,16 +1960,21 @@ export const DBService = {
           merged.push(newR);
         }
       });
+      return merged;
+    };
 
-      const response = await fetch('/api/returns', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(merged)
-      });
-      if (!response.ok) {
-        const errMessage = await safeParseError(response, "Failed to save returns bulk");
-        throw new Error(errMessage);
+    const saveLocal = async () => {
+      const merged = await getMergedLocal();
+      try {
+        await fetch('/api/returns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(merged)
+        });
+      } catch (e) {
+        console.warn("[DBService] Local API saveReturnsBulk error:", e);
       }
+      safeSetLocalStorage('kdb_returns_cache', JSON.stringify(merged));
     };
 
     const client = await getSupabase();
@@ -1916,18 +1984,35 @@ export const DBService = {
     }
 
     try {
-      const dbObjs = returnsList.map(r => toDb(r));
-      const { error } = await client
-        .from('client_returns')
-        .upsert(dbObjs);
+      console.log("[DBService] Attempting Supabase bulk upsert of", returnsList.length, "returns...");
+      const dbObjs = returnsList.map(r => returnToDb(r));
+      
+      const chunkSize = 50;
+      for (let i = 0; i < dbObjs.length; i += chunkSize) {
+        const chunk = dbObjs.slice(i, i + chunkSize);
+        const { error } = await client
+          .from('client_returns')
+          .upsert(chunk);
 
-      if (error) {
-        console.warn("[DBService] Supabase saveReturnsBulk failed, falling back to local.", error);
-        await saveLocal();
-        return;
+        if (error) {
+          console.error("[DBService] Supabase saveReturnsBulk chunk error:", error);
+          await saveLocal();
+          return;
+        }
       }
+
+      console.log("[DBService] Supabase saveReturnsBulk succeeded for", returnsList.length, "returns");
+      const merged = await getMergedLocal();
+      safeSetLocalStorage('kdb_returns_cache', JSON.stringify(merged));
+      try {
+        fetch('/api/returns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(merged)
+        }).catch(() => {});
+      } catch {}
     } catch (e) {
-      console.warn("[DBService] Supabase saveReturnsBulk exception, falling back to local.", e);
+      console.error("[DBService] Supabase saveReturnsBulk exception, falling back to local.", e);
       await saveLocal();
     }
   },

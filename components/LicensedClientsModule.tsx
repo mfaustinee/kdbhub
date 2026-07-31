@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber, isSameCategory, getClientCategory } from '../types';
+import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber, isSameCategory, getClientCategory, parseDDMMYYYY } from '../types';
 import { DBService } from '../services/db';
 import { 
   Plus, 
@@ -55,7 +55,7 @@ export const LicensedClientsModule: React.FC = () => {
   const [premiseCategory, setPremiseCategory] = useState<LicensedClient['premiseCategory']>('Milk Bar');
   const [county, setCounty] = useState<string>('Kericho');
   const [coolingCapacity, setCoolingCapacity] = useState<string>('');
-  const [permitStatus, setPermitStatus] = useState<'active' | 'inactive'>('active');
+  const [permitStatus, setPermitStatus] = useState<LicensedClient['permitStatus']>('valid');
   const [operationalStatus, setOperationalStatus] = useState<'operating' | 'closed'>('operating');
   const [levyInfo, setLevyInfo] = useState<'QFR' | 'DNQ-R'>('QFR');
   const [expiryDate, setExpiryDate] = useState<string>('');
@@ -107,7 +107,10 @@ export const LicensedClientsModule: React.FC = () => {
     setLoading(true);
     try {
       const data = await DBService.getClients();
-      setClients(data);
+      const sorted = [...data].sort((a, b) => 
+        (a.clientName || '').localeCompare(b.clientName || '', undefined, { sensitivity: 'base' })
+      );
+      setClients(sorted);
     } catch (error) {
       console.error('Error fetching clients:', error);
     } finally {
@@ -190,7 +193,7 @@ export const LicensedClientsModule: React.FC = () => {
     }
 
     // Permit Status is strictly dictated by the permit expiry date
-    let resolvedPermitStatus: 'active' | 'inactive' = 'active';
+    let resolvedPermitStatus: LicensedClient['permitStatus'] = 'valid';
     const formattedExpiry = expiryDate ? formatDateToDDMMYYYY(expiryDate) : undefined;
     if (expiryDate) {
       const parts = expiryDate.split('/');
@@ -204,7 +207,7 @@ export const LicensedClientsModule: React.FC = () => {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         exp.setHours(23, 59, 59, 999);
-        resolvedPermitStatus = exp >= today ? 'active' : 'inactive';
+        resolvedPermitStatus = exp >= today ? 'valid' : 'expired';
       }
     } else {
       resolvedPermitStatus = permitStatus;
@@ -325,67 +328,84 @@ export const LicensedClientsModule: React.FC = () => {
   const downloadSampleTemplate = () => {
     const headers = [
       'clientname',
-      'premises',
-      'category',
-      'permit_number',
+      'premisename',
+      'premisecategory',
       'startyear',
       'startmonth',
       'endyear',
       'endmonth',
-      'start_date',
-      'end_date',
       'tel',
-      'contacts',
+      'contactperson',
       'location',
       'county',
       'coolingcapacity',
       'permitstatus',
       'operationalstatus',
       'levyinfo',
-      'expiry_date'
+      'expirydate',
+      'permitnumber',
+      'branches'
     ];
     const rows = [
       [
         'Brookside Kericho Depot',
         'Kericho Central Hub',
         'Processor',
-        'KDB/PR/2021/001',
         '2021',
         'March',
         '',
-        '',
-        '15/03/2021',
         '',
         '0711223344',
         'Robert Kirui',
         'Industrial Area, Kericho',
         'Kericho',
         '25000',
-        'active',
+        'valid',
         'operating',
         'QFR',
-        '31/12/2024'
+        '31/12/2026',
+        'KDB/PR/2021/001',
+        ''
+      ],
+      [
+        'Brookside Kericho Depot',
+        'Litein Branch Outlet',
+        'Cooling Plant',
+        '2022',
+        'June',
+        '',
+        '',
+        '0722334455',
+        'Robert Kirui',
+        'Litein Town Centre',
+        'Kericho',
+        '10000',
+        'valid',
+        'operating',
+        'QFR',
+        '31/12/2026',
+        'KDB/CP/2022/014',
+        ''
       ],
       [
         'Kapsoit Milk Bar',
         'Kapsoit Junction Station',
         'Milk Bar',
-        'KDB/MB/2023/042',
         '2023',
         'July',
         '',
         '',
-        '01/07/2023',
-        '',
-        '0722334455',
+        '0733445566',
         'Janet Chebet',
         'Kapsoit Market, off Highway',
         'Kericho',
         '',
-        'active',
-        'operating',
+        'expired',
+        'closed',
         'DNQ-R',
-        '31/12/2024'
+        '31/12/2024',
+        'KDB/MB/2023/042',
+        ''
       ]
     ];
     // Create CSV content
@@ -401,7 +421,7 @@ export const LicensedClientsModule: React.FC = () => {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "licensed_clients_supabase_template.csv");
+    link.setAttribute("download", "licensed_clients_import_template.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -413,42 +433,47 @@ export const LicensedClientsModule: React.FC = () => {
       return;
     }
     const headers = [
-      'permit_number',
       'clientname',
-      'premises',
-      'category',
+      'premisename',
+      'premisecategory',
       'startyear',
       'startmonth',
       'endyear',
       'endmonth',
       'tel',
-      'contacts',
+      'contactperson',
       'location',
       'county',
       'coolingcapacity',
       'permitstatus',
       'operationalstatus',
       'levyinfo',
-      'expiry_date'
+      'expirydate',
+      'permitnumber',
+      'branches'
     ];
     const rows = filteredClients.map(client => {
       const resolvedPermitStatus = (() => {
         if (!client.expiryDate) {
-          return client.permitStatus || 'active';
+          return client.permitStatus === 'expired' ? 'expired' : 'valid';
         }
-        const exp = new Date(client.expiryDate);
-        if (isNaN(exp.getTime())) {
-          return client.permitStatus || 'active';
+        const parts = client.expiryDate.split('/');
+        if (parts.length === 3) {
+          const exp = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          if (!isNaN(exp.getTime()) && exp < today) {
+            return 'expired';
+          }
         }
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const expWithTime = new Date(exp);
-        expWithTime.setHours(23, 59, 59, 999);
-        return expWithTime >= today ? 'active' : 'inactive';
+        return client.permitStatus === 'expired' ? 'expired' : 'valid';
       })();
 
+      const branchesStr = client.branches && client.branches.length > 0 
+        ? JSON.stringify(client.branches)
+        : '';
+
       return [
-        client.permitNumber || client.id,
         client.clientName,
         client.premiseName,
         client.premiseCategory,
@@ -456,15 +481,17 @@ export const LicensedClientsModule: React.FC = () => {
         client.startMonth,
         client.endYear || '',
         client.endMonth || '',
-        client.tel,
-        client.contactPerson,
-        client.location,
-        client.county,
+        client.tel || '',
+        client.contactPerson || '',
+        client.location || '',
+        client.county || '',
         client.coolingCapacity || '',
         resolvedPermitStatus,
         client.operationalStatus,
         client.levyInfo,
-        client.expiryDate || ''
+        client.expiryDate || '',
+        client.permitNumber || client.id,
+        branchesStr
       ];
     });
     const csvRows = [headers.join(',')];
@@ -479,7 +506,7 @@ export const LicensedClientsModule: React.FC = () => {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `kdb_licensed_clients_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute("download", `licensed_clients_export_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -522,9 +549,8 @@ export const LicensedClientsModule: React.FC = () => {
       }
       
       const headers = parseCSVLine(lines[0]).map(h => h.replace(/^["']|["']$/g, '').trim());
-      const records: LicensedClient[] = [];
+      const clientRecordsMap = new Map<string, LicensedClient>();
       const errors: string[] = [];
-      const csvClientNames = new Set<string>();
       
       // Helper function to find and return value by matching flexible potential headers
       const getVal = (rowData: any, possibleKeys: string[]): string => {
@@ -539,15 +565,21 @@ export const LicensedClientsModule: React.FC = () => {
       };
 
       // Helper to match full month names
-      const normalizePeriod = (val: string): string => {
-        if (!val) return 'January';
+      const normalizePeriod = (val: any): string => {
+        if (val === undefined || val === null) return 'January';
+        const s = String(val).trim();
+        if (!s) return 'January';
         const monthsList = [
           'January', 'February', 'March', 'April', 'May', 'June',
           'July', 'August', 'September', 'October', 'November', 'December'
         ];
-        const trimmed = val.trim().toLowerCase();
+        const num = parseInt(s, 10);
+        if (!isNaN(num) && num >= 1 && num <= 12) {
+          return monthsList[num - 1];
+        }
+        const trimmed = s.toLowerCase();
         const match = monthsList.find(m => m.toLowerCase() === trimmed || m.toLowerCase().slice(0, 3) === trimmed);
-        return match || 'January';
+        return match || s;
       };
 
       for (let i = 1; i < lines.length; i++) {
@@ -564,34 +596,7 @@ export const LicensedClientsModule: React.FC = () => {
         const rowNum = i + 1;
         
         const cName = getVal(rowData, ['clientname', 'client', 'name', 'company', 'companyname']).trim();
-        const pName = getVal(rowData, ['premisename', 'premise', 'businessname', 'locationname', 'facility']).trim();
-        
-        const rawCat = getVal(rowData, ['premisecategory', 'category', 'type', 'premisetype']).trim();
-        const cat = categories.find(c => c.toLowerCase() === rawCat.toLowerCase()) || rawCat;
-
-        const rawStartY = getVal(rowData, ['startyear', 'year', 'registeredyear', 'regyear']).trim();
-        let startY = parseInt(rawStartY);
-        if (isNaN(startY)) {
-          const match = rawStartY.match(/\b(19|20)\d{2}\b/);
-          if (match) {
-            startY = parseInt(match[0]);
-          }
-        }
-
-        const startM = normalizePeriod(getVal(rowData, ['startmonth', 'month', 'registeredmonth', 'regmonth']));
-        const phone = getVal(rowData, ['tel', 'telephone', 'phone', 'phonenumber', 'contactnumber', 'contactno']).trim();
-        const contact = getVal(rowData, ['contactperson', 'contact', 'manager', 'owner', 'proprietor']).trim();
-        const loc = getVal(rowData, ['location', 'subcounty', 'town', 'address', 'area']).trim();
-        const co = getVal(rowData, ['county', 'district', 'region']).trim() || 'Kericho';
-        
-        const rawPermitStatus = getVal(rowData, ['permitstatus', 'status', 'permit', 'active']).trim().toLowerCase();
-        const status = rawPermitStatus === 'inactive' ? 'inactive' : 'active';
-        
-        const rawOpStatus = getVal(rowData, ['operationalstatus', 'operational', 'operationstatus', 'operation']).trim().toLowerCase();
-        const opStatus = rawOpStatus === 'closed' ? 'closed' : 'operating';
-        
-        const rawLevy = getVal(rowData, ['levyinfo', 'levy', 'levytype', 'qfr']).trim().toUpperCase();
-        const levy = rawLevy === 'DNQ-R' ? 'DNQ-R' : 'QFR';
+        const pName = getVal(rowData, ['premisename', 'premise', 'premises', 'businessname', 'locationname', 'facility']).trim();
         
         if (!cName) {
           errors.push(`Row ${rowNum}: Client Name is required.`);
@@ -602,29 +607,42 @@ export const LicensedClientsModule: React.FC = () => {
           continue;
         }
 
-        const uniqueKey = `${cName.toLowerCase()}|||${pName.toLowerCase()}`;
-        if (csvClientNames.has(uniqueKey)) {
-          errors.push(`Row ${rowNum}: Duplicate client entry within the CSV file for "${cName}" (${pName}).`);
-          continue;
-        }
-        csvClientNames.add(uniqueKey);
+        const rawCat = getVal(rowData, ['premisecategory', 'category', 'type', 'premisetype']).trim();
+        const cat = categories.find(c => c.toLowerCase() === rawCat.toLowerCase()) || rawCat;
 
-        const dbDuplicateExists = clients.some(c => 
-          (c.clientName || '').trim().toLowerCase() === cName.toLowerCase() && 
-          (c.premiseName || '').trim().toLowerCase() === pName.toLowerCase()
-        );
-        if (dbDuplicateExists) {
-          errors.push(`Row ${rowNum}: Duplicate client entry. Client "${cName}" with premise "${pName}" already exists in the database.`);
-          continue;
-        }
         if (!cat || !categories.includes(cat as any)) {
           errors.push(`Row ${rowNum}: Invalid Premise Category "${rawCat}". Must be one of: ${categories.join(', ')}`);
           continue;
         }
-        if (isNaN(startY) || startY < 1980 || startY > 2030) {
-          errors.push(`Row ${rowNum}: Invalid Start Year "${rawStartY}". Must be a number between 1980 and 2030.`);
-          continue;
+
+        const rawStartY = getVal(rowData, ['startyear', 'year', 'registeredyear', 'regyear']).trim();
+        let startY = parseInt(rawStartY);
+        if (isNaN(startY)) {
+          const match = rawStartY.match(/\b(19|20)\d{2}\b/);
+          if (match) {
+            startY = parseInt(match[0]);
+          }
         }
+        if (isNaN(startY) || startY < 1980 || startY > 2030) {
+          startY = new Date().getFullYear();
+        }
+
+        const rawStartMonthVal = getVal(rowData, ['startmonth', 'start_month', 'month', 'registeredmonth', 'regmonth']);
+        const startM = rawStartMonthVal ? normalizePeriod(rawStartMonthVal) : 'January';
+        const phone = getVal(rowData, ['tel', 'telephone', 'phone', 'phonenumber', 'contactnumber', 'contactno']).trim();
+        const contact = getVal(rowData, ['contactperson', 'contacts', 'contact', 'manager', 'owner', 'proprietor']).trim();
+        const loc = getVal(rowData, ['location', 'subcounty', 'town', 'address', 'area']).trim();
+        const co = getVal(rowData, ['county', 'district', 'region']).trim() || 'Kericho';
+        
+        // Permit status is either 'valid' or 'expired' (mapping 'active'->'valid', 'inactive'->'expired')
+        const rawPermitStatus = getVal(rowData, ['permitstatus', 'status', 'permit', 'active', 'permit_status']).trim().toLowerCase();
+        let status: 'valid' | 'expired' = (rawPermitStatus === 'expired' || rawPermitStatus === 'inactive') ? 'expired' : 'valid';
+        
+        const rawOpStatus = getVal(rowData, ['operationalstatus', 'operational', 'operationstatus', 'operation']).trim().toLowerCase();
+        const opStatus: 'operating' | 'closed' = rawOpStatus === 'closed' ? 'closed' : 'operating';
+        
+        const rawLevy = getVal(rowData, ['levyinfo', 'levy', 'levytype', 'qfr']).trim().toUpperCase();
+        const levy: 'QFR' | 'DNQ-R' = rawLevy === 'DNQ-R' ? 'DNQ-R' : 'QFR';
         
         let cap: number | undefined = undefined;
         if (cat === 'Cooling Plant' || cat === 'Processor') {
@@ -645,7 +663,7 @@ export const LicensedClientsModule: React.FC = () => {
         const rawEndMonth = getVal(rowData, ['endmonth', 'closedmonth', 'closemonth']).trim();
         const endMParsed = rawEndMonth ? normalizePeriod(rawEndMonth) : null;
 
-        const rawPermitNo = getVal(rowData, ['id', 'clientid', 'permitno', 'permitnumber', 'permit_number']);
+        const rawPermitNo = getVal(rowData, ['permitnumber', 'permit_number', 'permitno', 'permit_no', 'id', 'clientid']);
         const formattedPermitNo = formatPermitNumber(rawPermitNo, cat, startY);
 
         const rawStartDate = getVal(rowData, ['startdate', 'start_date', 'start', 'registrationdate']).trim();
@@ -657,30 +675,152 @@ export const LicensedClientsModule: React.FC = () => {
         const rawExpiryDate = getVal(rowData, ['expirydate', 'expiry', 'permitexpiry', 'expiry_date']).trim();
         const formattedExpiryDate = rawExpiryDate ? formatDateToDDMMYYYY(rawExpiryDate) : undefined;
 
-        records.push({
-          id: formattedPermitNo,
-          permitNumber: formattedPermitNo,
-          clientName: cName,
-          premiseName: pName,
-          premiseCategory: cat as any,
-          startYear: startY,
-          startMonth: startM,
-          endYear: isNaN(endYParsed as any) ? null : endYParsed,
-          endMonth: endMParsed,
-          startDate: formattedStartDate,
-          endDate: formattedEndDate,
-          tel: phone,
-          contactPerson: contact,
-          location: loc,
-          county: co,
-          coolingCapacity: cap,
-          permitStatus: status,
-          operationalStatus: opStatus,
-          levyInfo: levy,
-          expiryDate: formattedExpiryDate
-        });
+        // Auto-mark as expired if expiry date has passed
+        if (formattedExpiryDate) {
+          const expDate = parseDDMMYYYY(formattedExpiryDate);
+          if (expDate) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            expDate.setHours(23, 59, 59, 999);
+            if (expDate < today) {
+              status = 'expired';
+            }
+          }
+        }
+
+        const rawBranches = getVal(rowData, ['branches', 'branch_list', 'branchlist']).trim();
+        let colBranches: ClientBranch[] = [];
+        if (rawBranches) {
+          try {
+            const bArr = JSON.parse(rawBranches);
+            if (Array.isArray(bArr)) {
+              colBranches = bArr.map((b: any) => ({
+                id: b.permitNumber || b.id || formatPermitNumber('', b.premiseCategory || cat, startY),
+                premiseName: b.premiseName || 'Branch',
+                permitNumber: b.permitNumber || b.id || '',
+                premiseCategory: b.premiseCategory || cat,
+                location: b.location || loc,
+                county: b.county || co,
+                expiryDate: b.expiryDate ? formatDateToDDMMYYYY(b.expiryDate) : formattedExpiryDate,
+                operationalStatus: b.operationalStatus || 'operating',
+                permitStatus: b.permitStatus || status,
+                tel: b.tel || phone,
+                contactPerson: b.contactPerson || contact,
+                coolingCapacity: b.coolingCapacity
+              }));
+            }
+          } catch {
+            // ignore non-json
+          }
+        }
+
+        const clientKey = cName.toLowerCase();
+
+        // METHOD 1: Check if client already captured in this CSV run or existing in DB
+        if (!clientRecordsMap.has(clientKey)) {
+          const existingDbClient = clients.find(c => (c.clientName || '').trim().toLowerCase() === clientKey);
+
+          if (existingDbClient) {
+            const updatedClient: LicensedClient = {
+              ...existingDbClient,
+              branches: existingDbClient.branches ? [...existingDbClient.branches] : []
+            };
+
+            if (existingDbClient.premiseName.trim().toLowerCase() === pName.toLowerCase()) {
+              updatedClient.permitStatus = status;
+              updatedClient.operationalStatus = opStatus;
+              if (formattedExpiryDate) updatedClient.expiryDate = formattedExpiryDate;
+              if (colBranches.length > 0) {
+                const existingBranchNames = new Set((updatedClient.branches || []).map(b => b.premiseName.trim().toLowerCase()));
+                colBranches.forEach(cb => {
+                  if (!existingBranchNames.has(cb.premiseName.trim().toLowerCase())) {
+                    updatedClient.branches!.push(cb);
+                  }
+                });
+              }
+            } else {
+              const newBranch: ClientBranch = {
+                id: formattedPermitNo,
+                premiseName: pName,
+                permitNumber: formattedPermitNo,
+                premiseCategory: cat,
+                location: loc,
+                county: co,
+                expiryDate: formattedExpiryDate,
+                operationalStatus: opStatus,
+                permitStatus: status,
+                tel: phone,
+                contactPerson: contact,
+                coolingCapacity: cap
+              };
+              const branchExists = updatedClient.branches?.some(b => b.premiseName.trim().toLowerCase() === pName.toLowerCase());
+              if (!branchExists) {
+                updatedClient.branches = [...(updatedClient.branches || []), newBranch];
+              }
+            }
+            clientRecordsMap.set(clientKey, updatedClient);
+          } else {
+            // First row for this client in CSV -> Primary LicensedClient record
+            const mainClient: LicensedClient = {
+              id: formattedPermitNo,
+              permitNumber: formattedPermitNo,
+              clientName: cName,
+              premiseName: pName,
+              premiseCategory: cat as any,
+              startYear: startY,
+              startMonth: startM,
+              endYear: isNaN(endYParsed as any) ? null : endYParsed,
+              endMonth: endMParsed,
+              startDate: formattedStartDate,
+              endDate: formattedEndDate,
+              tel: phone,
+              contactPerson: contact,
+              location: loc,
+              county: co,
+              coolingCapacity: cap,
+              permitStatus: status,
+              operationalStatus: opStatus,
+              levyInfo: levy,
+              expiryDate: formattedExpiryDate,
+              branches: colBranches
+            };
+            clientRecordsMap.set(clientKey, mainClient);
+          }
+        } else {
+          // Method 1: Subsequent CSV row for same clientName -> Added as ClientBranch
+          const existingParsedClient = clientRecordsMap.get(clientKey)!;
+
+          if (existingParsedClient.premiseName.trim().toLowerCase() === pName.toLowerCase()) {
+            errors.push(`Row ${rowNum}: Duplicate primary premise "${pName}" for client "${cName}".`);
+            continue;
+          }
+
+          const branchExists = existingParsedClient.branches?.some(b => b.premiseName.trim().toLowerCase() === pName.toLowerCase());
+          if (branchExists) {
+            errors.push(`Row ${rowNum}: Duplicate branch premise "${pName}" for client "${cName}".`);
+            continue;
+          }
+
+          const newBranch: ClientBranch = {
+            id: formattedPermitNo,
+            premiseName: pName,
+            permitNumber: formattedPermitNo,
+            premiseCategory: cat,
+            location: loc,
+            county: co,
+            expiryDate: formattedExpiryDate,
+            operationalStatus: opStatus,
+            permitStatus: status,
+            tel: phone,
+            contactPerson: contact,
+            coolingCapacity: cap
+          };
+
+          existingParsedClient.branches = [...(existingParsedClient.branches || []), newBranch];
+        }
       }
       
+      const records = Array.from(clientRecordsMap.values());
       setParsedRecords(records);
       setParseErrors(errors);
     };
@@ -701,9 +841,9 @@ export const LicensedClientsModule: React.FC = () => {
       setParseErrors([]);
       await fetchClients();
       alert(`Successfully imported ${parsedRecords.length} clients!`);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Bulk import failed:", error);
-      alert("Failed to complete bulk import. Please check connection and try again.");
+      alert(`Bulk import issue: ${error?.message || "Please check connection and try again."}`);
     } finally {
       setImporting(false);
     }
@@ -731,15 +871,14 @@ export const LicensedClientsModule: React.FC = () => {
       if (!client.expiryDate) {
         return client.permitStatus || 'active';
       }
-      const exp = new Date(client.expiryDate);
-      if (isNaN(exp.getTime())) {
+      const exp = parseDDMMYYYY(client.expiryDate);
+      if (!exp) {
         return client.permitStatus || 'active';
       }
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const expWithTime = new Date(exp);
-      expWithTime.setHours(23, 59, 59, 999);
-      return expWithTime >= today ? 'active' : 'inactive';
+      exp.setHours(23, 59, 59, 999);
+      return exp >= today ? 'active' : 'inactive';
     })();
 
     let matchesStatus = true;
@@ -754,7 +893,7 @@ export const LicensedClientsModule: React.FC = () => {
     }
 
     return matchesSearch && matchesCategory && matchesLevy && matchesStatus;
-  });
+  }).sort((a, b) => (a.clientName || '').localeCompare(b.clientName || '', undefined, { sensitivity: 'base' }));
 
   // Calculate high-level stats
   const totalCount = clients.length;
@@ -1071,22 +1210,23 @@ export const LicensedClientsModule: React.FC = () => {
                           {(() => {
                             const resolvedPermitStatus = (() => {
                               if (!client.expiryDate) {
-                                return client.permitStatus || 'active';
+                                return client.permitStatus || 'valid';
                               }
-                              const exp = new Date(client.expiryDate);
-                              if (isNaN(exp.getTime())) {
-                                return client.permitStatus || 'active';
+                              const exp = parseDDMMYYYY(client.expiryDate);
+                              if (!exp) {
+                                return client.permitStatus || 'valid';
                               }
                               const today = new Date();
                               today.setHours(0, 0, 0, 0);
-                              const expWithTime = new Date(exp);
-                              expWithTime.setHours(23, 59, 59, 999);
-                              return expWithTime >= today ? 'active' : 'inactive';
+                              exp.setHours(23, 59, 59, 999);
+                              return exp >= today ? 'valid' : 'expired';
                             })();
 
+                            const isValid = resolvedPermitStatus === 'valid' || resolvedPermitStatus === 'active';
+
                             return (
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${resolvedPermitStatus === 'active' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`} title={client.expiryDate ? `Expires: ${formatDateToDDMMYYYY(client.expiryDate)}` : undefined}>
-                                Permit: {resolvedPermitStatus === 'active' ? 'Valid' : 'Expired'} {client.expiryDate ? `(${formatDateToDDMMYYYY(client.expiryDate)})` : ''}
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${isValid ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`} title={client.expiryDate ? `Expires: ${formatDateToDDMMYYYY(client.expiryDate)}` : undefined}>
+                                Permit: {isValid ? 'Valid' : 'Expired'} {client.expiryDate ? `(${formatDateToDDMMYYYY(client.expiryDate)})` : ''}
                               </span>
                             );
                           })()}
@@ -1752,6 +1892,8 @@ export const LicensedClientsModule: React.FC = () => {
                 <ul className="list-disc pl-5 text-slate-600 text-xs space-y-1.5 leading-relaxed">
                   <li>Download the pre-formatted CSV template below to match Supabase database columns (<code>licensed_clients</code> table) exactly.</li>
                   <li>Fill in client details using Microsoft Excel, Google Sheets, or any CSV editor.</li>
+                  <li><strong>Client Branches (Method 1):</strong> Multiple rows sharing the exact same <strong>clientname</strong> will be automatically grouped as branches under that primary client.</li>
+                  <li><strong>Permit Status:</strong> Set <code>permitstatus</code> to <code>valid</code> or <code>expired</code> (or leave blank to auto-calculate from <code>expiry_date</code>).</li>
                   <li>Ensure the <strong>category</strong> field matches one of: <em>Milk Bar</em>, <em>Dispenser</em>, <em>Cooling Plant</em>, <em>Mini Dairy</em>, <em>Cottage Industry</em>, or <em>Processor</em>.</li>
                   <li>Upload the saved <strong>.csv</strong> file to preview and validate all fields before committing to Supabase.</li>
                 </ul>
@@ -1790,22 +1932,16 @@ export const LicensedClientsModule: React.FC = () => {
                             <td className="px-3 py-2 text-slate-400">Brookside Kericho Depot</td>
                           </tr>
                           <tr>
-                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">premises</td>
+                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">premisename</td>
                             <td className="px-3 py-2">Premise / Outlet Name <span className="text-rose-500 font-bold">*</span></td>
                             <td className="px-3 py-2 text-slate-500">Text</td>
                             <td className="px-3 py-2 text-slate-400">Kericho Central Hub</td>
                           </tr>
                           <tr>
-                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">category</td>
+                            <td className="px-3 py-2 font-mono font-bold text-emerald-700">premisecategory</td>
                             <td className="px-3 py-2">Premise Category <span className="text-rose-500 font-bold">*</span></td>
                             <td className="px-3 py-2 text-slate-500">Milk Bar, Dispenser, Cooling Plant, Mini Dairy, Cottage Industry, Processor</td>
                             <td className="px-3 py-2 text-slate-400">Processor</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3 py-2 font-mono font-bold text-slate-700">permit_number</td>
-                            <td className="px-3 py-2">Permit / License Number</td>
-                            <td className="px-3 py-2 text-slate-500">Text (or auto-generated if blank)</td>
-                            <td className="px-3 py-2 text-slate-400">KDB/PR/2021/001</td>
                           </tr>
                           <tr>
                             <td className="px-3 py-2 font-mono font-bold text-emerald-700">startyear</td>
@@ -1832,25 +1968,13 @@ export const LicensedClientsModule: React.FC = () => {
                             <td className="px-3 py-2 text-slate-400">December</td>
                           </tr>
                           <tr>
-                            <td className="px-3 py-2 font-mono font-bold text-slate-700">start_date</td>
-                            <td className="px-3 py-2">Start Date</td>
-                            <td className="px-3 py-2 text-slate-500">DD/MM/YYYY</td>
-                            <td className="px-3 py-2 text-slate-400">15/03/2021</td>
-                          </tr>
-                          <tr>
-                            <td className="px-3 py-2 font-mono font-bold text-slate-700">end_date</td>
-                            <td className="px-3 py-2">Closure Date</td>
-                            <td className="px-3 py-2 text-slate-500">DD/MM/YYYY</td>
-                            <td className="px-3 py-2 text-slate-400">31/12/2024</td>
-                          </tr>
-                          <tr>
                             <td className="px-3 py-2 font-mono font-bold text-slate-700">tel</td>
                             <td className="px-3 py-2">Phone Number</td>
                             <td className="px-3 py-2 text-slate-500">Text</td>
                             <td className="px-3 py-2 text-slate-400">0711223344</td>
                           </tr>
                           <tr>
-                            <td className="px-3 py-2 font-mono font-bold text-slate-700">contacts</td>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">contactperson</td>
                             <td className="px-3 py-2">Contact Person</td>
                             <td className="px-3 py-2 text-slate-500">Text</td>
                             <td className="px-3 py-2 text-slate-400">Robert Kirui</td>
@@ -1876,8 +2000,8 @@ export const LicensedClientsModule: React.FC = () => {
                           <tr>
                             <td className="px-3 py-2 font-mono font-bold text-slate-700">permitstatus</td>
                             <td className="px-3 py-2">Permit Status</td>
-                            <td className="px-3 py-2 text-slate-500">active or inactive</td>
-                            <td className="px-3 py-2 text-slate-400">active</td>
+                            <td className="px-3 py-2 text-slate-500">valid or expired</td>
+                            <td className="px-3 py-2 text-slate-400">valid</td>
                           </tr>
                           <tr>
                             <td className="px-3 py-2 font-mono font-bold text-slate-700">operationalstatus</td>
@@ -1892,10 +2016,22 @@ export const LicensedClientsModule: React.FC = () => {
                             <td className="px-3 py-2 text-slate-400">QFR</td>
                           </tr>
                           <tr>
-                            <td className="px-3 py-2 font-mono font-bold text-slate-700">expiry_date</td>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">expirydate</td>
                             <td className="px-3 py-2">Expiry Date</td>
                             <td className="px-3 py-2 text-slate-500">DD/MM/YYYY</td>
-                            <td className="px-3 py-2 text-slate-400">31/12/2024</td>
+                            <td className="px-3 py-2 text-slate-400">31/12/2026</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">permitnumber</td>
+                            <td className="px-3 py-2">Permit Number</td>
+                            <td className="px-3 py-2 text-slate-500">Text (or auto-generated if blank)</td>
+                            <td className="px-3 py-2 text-slate-400">KDB/PR/2021/001</td>
+                          </tr>
+                          <tr>
+                            <td className="px-3 py-2 font-mono font-bold text-slate-700">branches</td>
+                            <td className="px-3 py-2">Client Branches</td>
+                            <td className="px-3 py-2 text-slate-500">Multiple rows with same clientname OR JSON string array</td>
+                            <td className="px-3 py-2 text-slate-400">[&#123;"premiseName":"Litein Outlet"...&#125;]</td>
                           </tr>
                         </tbody>
                       </table>
@@ -1930,7 +2066,10 @@ export const LicensedClientsModule: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">Upload Parsing Results</h4>
                     <span className="text-[10px] bg-slate-100 border text-slate-600 font-black px-2.5 py-1 rounded-full uppercase tracking-wider">
-                      {parsedRecords.length} Valid Records Found
+                      {parsedRecords.length} Primary Client(s)
+                      {parsedRecords.reduce((acc, c) => acc + (c.branches?.length || 0), 0) > 0 && 
+                        ` + ${parsedRecords.reduce((acc, c) => acc + (c.branches?.length || 0), 0)} Branch(es)`
+                      }
                     </span>
                   </div>
 
@@ -1960,19 +2099,29 @@ export const LicensedClientsModule: React.FC = () => {
                             <th className="px-4 py-2.5">Client & Premise</th>
                             <th className="px-4 py-2.5">Category</th>
                             <th className="px-4 py-2.5">Contact</th>
-                            <th className="px-4 py-2.5">Levy</th>
+                            <th className="px-4 py-2.5">Status & Levy</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-[11px] font-bold text-slate-700">
                           {parsedRecords.slice(0, 100).map((record, index) => (
                             <tr key={index} className="hover:bg-slate-50/50">
                               <td className="px-4 py-2">
-                                <div className="text-slate-900 font-black">{record.clientName}</div>
+                                <div className="text-slate-900 font-black flex items-center gap-1.5">
+                                  <span>{record.clientName}</span>
+                                  {record.branches && record.branches.length > 0 && (
+                                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-black px-1.5 py-0.5 rounded-full">
+                                      +{record.branches.length} branch(es)
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[9px] text-slate-400">{record.premiseName}</div>
                               </td>
                               <td className="px-4 py-2">{record.premiseCategory}</td>
                               <td className="px-4 py-2">{record.contactPerson} ({record.tel})</td>
-                              <td className="px-4 py-2">
+                              <td className="px-4 py-2 flex items-center gap-1">
+                                <span className={`font-black px-1.5 py-0.5 rounded text-[9px] uppercase ${record.permitStatus === 'expired' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                  {record.permitStatus}
+                                </span>
                                 <span className="bg-blue-50 text-blue-700 font-black px-1.5 py-0.5 rounded text-[9px]">
                                   {record.levyInfo}
                                 </span>

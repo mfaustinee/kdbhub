@@ -734,9 +734,9 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
       setImportErrors([]);
       await fetchData();
       alert(`Successfully imported ${parsedReturns.length} returns!`);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Bulk import failed:", error);
-      alert("Failed to complete bulk import. Please check connection and try again.");
+      alert(`Bulk import issue: ${error?.message || "Please check connection and try again."}`);
     } finally {
       setImporting(false);
     }
