@@ -111,27 +111,39 @@ const safeSetLocalStorage = (key: string, value: string) => {
 // Custom translators for LicensedClient to map cleanly to the 19 actual Supabase columns
 const clientToDb = (client: any) => {
   if (!client) return client;
-  const pNo = client.permitNumber || client.permitnumber || client.id || '';
+  const pNo = String(client.permitNumber || client.permitnumber || client.id || '').trim();
+  
+  let branchesVal: any[] = [];
+  if (Array.isArray(client.branches)) {
+    branchesVal = client.branches;
+  } else if (typeof client.branches === 'string' && client.branches.trim() !== '') {
+    try {
+      branchesVal = JSON.parse(client.branches);
+    } catch {
+      branchesVal = [];
+    }
+  }
+
   const out: any = {
-    id: client.id || pNo,
-    clientname: client.clientName ?? client.clientname ?? '',
-    premisename: client.premiseName ?? client.premisename ?? '',
-    premisecategory: client.premiseCategory ?? client.premisecategory ?? 'Milk Bar',
+    id: String(client.id || pNo).trim(),
+    clientname: String(client.clientName ?? client.clientname ?? '').trim(),
+    premisename: String(client.premiseName ?? client.premisename ?? '').trim(),
+    premisecategory: String(client.premiseCategory ?? client.premisecategory ?? 'Milk Bar').trim(),
     startyear: Number(client.startYear ?? client.startyear ?? new Date().getFullYear()),
-    startmonth: String(client.startMonth ?? client.startmonth ?? 'January'),
+    startmonth: String(client.startMonth ?? client.startmonth ?? 'January').trim(),
     endyear: (client.endYear !== undefined && client.endYear !== null && !isNaN(Number(client.endYear))) ? Number(client.endYear) : null,
-    endmonth: client.endMonth ?? client.endmonth ?? null,
-    tel: client.tel ?? '',
-    contactperson: client.contactPerson ?? client.contactperson ?? '',
-    location: client.location ?? '',
-    county: client.county ?? '',
+    endmonth: client.endMonth ? String(client.endMonth).trim() : null,
+    tel: String(client.tel ?? '').trim(),
+    contactperson: String(client.contactPerson ?? client.contactperson ?? '').trim(),
+    location: String(client.location ?? '').trim() || 'N/A',
+    county: String(client.county ?? '').trim() || 'N/A',
     coolingcapacity: (client.coolingCapacity !== undefined && client.coolingCapacity !== null && !isNaN(Number(client.coolingCapacity))) ? Number(client.coolingCapacity) : null,
-    permitstatus: client.permitStatus ?? client.permitstatus ?? 'valid',
-    operationalstatus: client.operationalStatus ?? client.operationalstatus ?? 'operating',
-    levyinfo: client.levyInfo ?? client.levyinfo ?? '',
-    expirydate: client.expiryDate ?? client.expirydate ?? '',
+    permitstatus: String(client.permitStatus ?? client.permitstatus ?? 'valid').trim(),
+    operationalstatus: String(client.operationalStatus ?? client.operationalstatus ?? 'operating').trim(),
+    levyinfo: String(client.levyInfo ?? client.levyinfo ?? '').trim(),
+    expirydate: String(client.expiryDate ?? client.expirydate ?? '').trim(),
     permitnumber: pNo,
-    branches: typeof client.branches === 'string' ? client.branches : JSON.stringify(client.branches || [])
+    branches: branchesVal
   };
   return out;
 };
@@ -139,22 +151,22 @@ const clientToDb = (client: any) => {
 const returnToDb = (r: any) => {
   if (!r) return r;
   return {
-    id: r.id || `RET-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-    clientid: r.clientId ?? r.clientid ?? '',
-    clientname: r.clientName ?? r.clientname ?? '',
+    id: String(r.id || `RET-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`).trim(),
+    clientid: String(r.clientId ?? r.clientid ?? '').trim(),
+    clientname: String(r.clientName ?? r.clientname ?? '').trim(),
     year: Number(r.year ?? 2026),
-    period: String(r.period ?? 'January'),
+    period: String(r.period ?? 'January').trim(),
     qty: Number(r.qty ?? 0),
     invoiceamount: Number(r.invoiceAmount ?? r.invoiceamount ?? 0),
-    returndate: String(r.returnDate ?? r.returndate ?? new Date().toISOString().slice(0, 10)),
+    returndate: String(r.returnDate ?? r.returndate ?? new Date().toISOString().slice(0, 10)).trim(),
     paymentamount: Number(r.paymentAmount ?? r.paymentamount ?? 0),
-    paymentdate: String(r.paymentDate ?? r.paymentdate ?? ''),
-    txnref: r.txnRef ?? r.txnref ?? '',
+    paymentdate: String(r.paymentDate ?? r.paymentdate ?? '').trim(),
+    txnref: String(r.txnRef ?? r.txnref ?? '').trim(),
     lesscf: Number(r.lessCF ?? r.lesscf ?? 0),
     outstandingbalance: Number(r.outstandingBalance ?? r.outstandingbalance ?? 0),
     agingdays: Number(r.agingDays ?? r.agingdays ?? 0),
-    paymentstatus: String(r.paymentStatus ?? r.paymentstatus ?? 'Unpaid'),
-    comments: r.comments ?? ''
+    paymentstatus: String(r.paymentStatus ?? r.paymentstatus ?? 'Unpaid').trim(),
+    comments: String(r.comments ?? '').trim()
   };
 };
 

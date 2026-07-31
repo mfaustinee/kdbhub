@@ -24,7 +24,8 @@ import {
   Upload,
   Download,
   AlertCircle,
-  Check
+  Check,
+  Database
 } from 'lucide-react';
 
 export const LicensedClientsModule: React.FC = () => {
@@ -1103,6 +1104,28 @@ export const LicensedClientsModule: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap gap-2 shrink-0">
+            {clients.length > 0 && (
+              <button
+                onClick={async () => {
+                  if (!confirm(`Push all ${clients.length} clients to Supabase now?`)) return;
+                  setLoading(true);
+                  try {
+                    await DBService.saveClientsBulk(clients);
+                    await fetchClients();
+                    alert(`Successfully pushed ${clients.length} clients to Supabase!`);
+                  } catch (err: any) {
+                    alert(`Sync failed: ${err?.message || 'Check connection'}`);
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-sm"
+                title="Push current list of clients directly to Supabase table"
+              >
+                <Database size={14} /> Sync to Supabase
+              </button>
+            )}
             <button
               onClick={() => {
                 setCsvFile(null);

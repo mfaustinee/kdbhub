@@ -1481,6 +1481,28 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
                 {/* Import/Export buttons */}
                 <div className="flex flex-wrap gap-2">
+                  {returns.length > 0 && (
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Push all ${returns.length} returns to Supabase now?`)) return;
+                        setLoading(true);
+                        try {
+                          await DBService.saveReturnsBulk(returns);
+                          await fetchData();
+                          alert(`Successfully pushed ${returns.length} returns to Supabase!`);
+                        } catch (err: any) {
+                          alert(`Sync failed: ${err?.message || 'Check connection'}`);
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                      disabled={loading}
+                      className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest px-4 py-2.5 rounded-xl transition-all shadow-sm"
+                      title="Push current list of returns directly to Supabase table"
+                    >
+                      <Database size={14} /> Sync to Supabase
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setCsvFile(null);
