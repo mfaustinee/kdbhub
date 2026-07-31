@@ -32,18 +32,18 @@ export const PortalHub: React.FC<PortalHubProps> = ({
   const activeCount = [showInquiry, showComplaint, showPayment, showClosure].filter(Boolean).length;
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-12 md:py-20 space-y-12 animate-in fade-in zoom-in-95 duration-500">
-      <div className="text-center space-y-4">
-        <div className="inline-flex p-3 bg-emerald-50 rounded-2xl border border-emerald-100 shadow-sm mb-2">
-          <ShieldCheck className="w-8 h-8 text-emerald-600" />
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-6 animate-in fade-in zoom-in-95 duration-500">
+      <div className="text-center space-y-2.5">
+        <div className="inline-flex p-2 bg-emerald-50 rounded-xl border border-emerald-100 shadow-sm mb-1">
+          <ShieldCheck className="w-6 h-6 text-emerald-600" />
         </div>
-        <h1 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tight leading-tight">
+        <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
           Kenya Dairy Board
         </h1>
-        <p className="text-xs font-black text-emerald-600 uppercase tracking-widest">
+        <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">
           Regulatory Compliance & Client Portal
         </p>
-        <p className="max-w-2xl mx-auto text-sm text-slate-500 font-medium leading-relaxed">
+        <p className="max-w-2xl mx-auto text-xs text-slate-500 font-medium leading-relaxed">
           Welcome to the Kenya Dairy Board compliance support platform. 
           Select an active regulatory pathway below to execute a structured levy payment agreement, formally submit a business cessation notice, file a stakeholder complaint, or submit a client inquiry.
         </p>

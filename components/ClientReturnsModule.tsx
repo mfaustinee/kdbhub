@@ -1344,79 +1344,79 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     <div className="space-y-8 max-w-7xl mx-auto">
       
       {/* Page Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
         <div>
-          <h2 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            <FileSpreadsheet className="w-8 h-8 text-indigo-500" /> Returns & Ledger Module
+          <h2 className="text-base font-bold text-slate-800 tracking-tight flex items-center gap-2">
+            <FileSpreadsheet className="w-4 h-4 text-indigo-500" /> Returns & Ledger Module
           </h2>
-          <p className="text-sm font-semibold text-slate-500 mt-1">
+          <p className="text-xs font-medium text-slate-500 mt-0.5">
             File monthly levy, monitor collections, generate client statements, and track unfiled debtors
           </p>
         </div>
 
         {/* Sub-tab Navigation */}
-        <div className="bg-slate-100 p-1.5 rounded-2xl flex gap-1 border border-slate-200">
+        <div className="bg-slate-100 p-1 rounded-xl flex gap-1 border border-slate-200">
           <button
             onClick={() => setActiveSubTab('registry')}
-            className={`px-4 py-2 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'registry' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'registry' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
-            <Database size={14} /> Returns Registry
+            <Database size={13} /> Returns Registry
           </button>
           <button
             onClick={() => setActiveSubTab('debtors')}
-            className={`px-4 py-2 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'debtors' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'debtors' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
-            <AlertTriangle size={14} className="text-amber-500" /> Non-Filers & Debtors
+            <AlertTriangle size={13} className="text-amber-500" /> Non-Filers & Debtors
           </button>
           <button
             onClick={() => setActiveSubTab('statements')}
-            className={`px-4 py-2 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'statements' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+            className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'statements' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
           >
-            <FileText size={14} /> Client Statements
+            <FileText size={13} /> Client Statements
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="bg-white rounded-[40px] border border-slate-100 shadow-lg p-20 text-center space-y-4">
-          <Loader2 className="w-12 h-12 text-slate-400 animate-spin mx-auto" />
+        <div className="bg-white rounded-[24px] border border-slate-100 shadow-md p-12 text-center space-y-3">
+          <Loader2 className="w-8 h-8 text-slate-400 animate-spin mx-auto" />
           <p className="text-slate-500 font-bold uppercase tracking-wider text-xs">Loading records & database configurations...</p>
         </div>
       ) : (
         <>
           {/* ==================== SUB-TAB: REGISTRY ==================== */}
           {activeSubTab === 'registry' && (
-            <div className="space-y-6 animate-in fade-in duration-300">
+            <div className="space-y-4 animate-in fade-in duration-300">
               
               {/* Summary Stats Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center gap-4">
-                  <div className="bg-indigo-50 p-3.5 rounded-2xl text-indigo-500">
-                    <TrendingUp size={24} />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
+                  <div className="bg-indigo-50 p-2.5 rounded-xl text-indigo-500">
+                    <TrendingUp size={18} />
                   </div>
                   <div>
-                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Invoiced</div>
-                    <div className="text-xl font-black text-slate-800 mt-0.5">{formatCurrency(totalInvoiced)}</div>
+                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Total Invoiced</div>
+                    <div className="text-sm font-bold text-slate-800 mt-0.5">{formatCurrency(totalInvoiced)}</div>
                   </div>
                 </div>
 
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center gap-4">
-                  <div className="bg-emerald-50 p-3.5 rounded-2xl text-emerald-500">
-                    <CheckCircle2 size={24} />
+                <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
+                  <div className="bg-emerald-50 p-2.5 rounded-xl text-emerald-500">
+                    <CheckCircle2 size={18} />
                   </div>
                   <div>
-                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Collections</div>
-                    <div className="text-xl font-black text-slate-800 mt-0.5">{formatCurrency(totalPaid)}</div>
+                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Total Collections</div>
+                    <div className="text-sm font-bold text-slate-800 mt-0.5">{formatCurrency(totalPaid)}</div>
                   </div>
                 </div>
 
-                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center gap-4">
-                  <div className="bg-amber-50 p-3.5 rounded-2xl text-amber-500">
-                    <AlertTriangle size={24} />
+                <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
+                  <div className="bg-amber-50 p-2.5 rounded-xl text-amber-500">
+                    <AlertTriangle size={18} />
                   </div>
                   <div>
-                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Outstanding Balance</div>
-                    <div className="text-xl font-black text-slate-800 mt-0.5">{formatCurrency(totalOutstanding)}</div>
+                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Outstanding Balance</div>
+                    <div className="text-sm font-bold text-slate-800 mt-0.5">{formatCurrency(totalOutstanding)}</div>
                   </div>
                 </div>
               </div>

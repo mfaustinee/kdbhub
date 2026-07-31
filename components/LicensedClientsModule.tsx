@@ -927,55 +927,55 @@ export const LicensedClientsModule: React.FC = () => {
   });
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-4 animate-in fade-in duration-500">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-[32px] p-8 text-white relative overflow-hidden shadow-xl">
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-4 sm:p-5 text-white relative overflow-hidden shadow-md">
         <div className="absolute right-0 bottom-0 opacity-10 translate-y-6 translate-x-6 pointer-events-none">
-          <Building size={320} className="text-white" />
+          <Building size={200} className="text-white" />
         </div>
-        <div className="max-w-2xl">
-          <div className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider mb-3">
-            <Sparkles size={12} /> Live Licensed Registry
+        <div className="max-w-xl">
+          <div className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider mb-2">
+            <Sparkles size={11} /> Live Licensed Registry
           </div>
-          <h1 className="text-3xl font-black tracking-tight">Licensed Clients Database</h1>
-          <p className="text-sm text-slate-300 mt-2 leading-relaxed">
-            Manage your licensed dairies, milk bars, cooling stations, and processors. Track their operational lifespan, levy qualification, and cooling infrastructure capacity.
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight">Licensed Clients Database</h1>
+          <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+            Manage your licensed dairies, milk bars, cooling stations, and processors. Track operational lifespan, levy qualification, and cooling capacity.
           </p>
         </div>
       </div>
 
       {/* 3 Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Licensed Entities</p>
-            <h3 className="text-3xl font-black text-slate-800">{totalCount}</h3>
-            <p className="text-[10px] text-slate-400 font-medium">Active in KDB system</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Licensed Entities</p>
+            <h3 className="text-base sm:text-lg font-bold text-slate-800">{totalCount}</h3>
+            <p className="text-[9px] text-slate-400 font-medium">Active in KDB system</p>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-700">
-            <Layers size={22} />
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qualifies for Returns (QFR)</p>
-            <h3 className="text-3xl font-black text-emerald-600">{totalQFR}</h3>
-            <p className="text-[10px] text-emerald-600/70 font-semibold uppercase tracking-wider">Required to file</p>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-            <TrendingUp size={22} />
+          <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-700">
+            <Layers size={18} />
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Exempt / Non-Qualifying (DNQ-R)</p>
-            <h3 className="text-3xl font-black text-amber-600">{totalDNQR}</h3>
-            <p className="text-[10px] text-amber-600/70 font-semibold uppercase tracking-wider">No returns filing required</p>
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Qualifies for Returns (QFR)</p>
+            <h3 className="text-base sm:text-lg font-bold text-emerald-600">{totalQFR}</h3>
+            <p className="text-[9px] text-emerald-600/70 font-semibold uppercase tracking-wider">Required to file</p>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-600">
-            <XCircle size={22} />
+          <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
+            <TrendingUp size={18} />
+          </div>
+        </div>
+
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Exempt / Non-Qualifying (DNQ-R)</p>
+            <h3 className="text-base sm:text-lg font-bold text-amber-600">{totalDNQR}</h3>
+            <p className="text-[9px] text-amber-600/70 font-semibold uppercase tracking-wider">No returns filing required</p>
+          </div>
+          <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
+            <XCircle size={18} />
           </div>
         </div>
       </div>

@@ -613,7 +613,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-10">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
       {/* Hidden PDF Generation Container - Moved off-screen but kept in layout for html2canvas */}
       <div style={{ position: 'fixed', top: 0, left: '-9999px', width: '1024px', zIndex: -1000, overflow: 'hidden' }}>
         {selectedReview && (
@@ -881,7 +881,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {!isSidebarCollapsed && (
               <div>
                 <div className="flex items-center space-x-2">
-                  <h2 className="text-xl font-black text-slate-900 tracking-tight">Admin Workspace</h2>
+                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">Admin Workspace</h2>
                   {onRefresh && (
                     <button 
                       onClick={onRefresh}
@@ -893,34 +893,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   )}
                 </div>
-                <p className="text-slate-400 font-medium text-[11px] mt-1">Operational control for Kericho & Region levy compliance.</p>
+                <p className="text-slate-400 font-medium text-[10px] mt-0.5">Operational control for Kericho & Region levy compliance.</p>
               </div>
             )}
             <button
               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              className={`p-2 rounded-xl text-slate-500 hover:bg-slate-100 transition-all ${isSidebarCollapsed ? 'mx-auto' : ''}`}
+              className={`p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition-all ${isSidebarCollapsed ? 'mx-auto' : ''}`}
               title={isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
             <button 
               onClick={() => changeTab('data_validation')} 
               title="Data Validation Form"
-              className={`px-4 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'data_validation' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'data_validation' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <FileCheck className={`w-4 h-4 shrink-0 ${isSidebarCollapsed ? '' : 'mr-3'}`} />
+              <FileCheck className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Data Validation Form</span>}
             </button>
 
             <button 
               onClick={() => navigate('/')} 
               title="Client Portal"
-              className={`px-4 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center text-emerald-600 hover:bg-emerald-50 border border-emerald-100 ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'}`}
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center text-emerald-600 hover:bg-emerald-50 border border-emerald-100 ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'}`}
             >
-              <Globe className={`w-4 h-4 shrink-0 ${isSidebarCollapsed ? '' : 'mr-3'}`} />
+              <Globe className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Client Portal</span>}
             </button>
 
@@ -929,21 +929,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <button 
               onClick={() => changeTab('requests_to_approve')} 
               title="Requests to Approve"
-              className={`px-4 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center relative ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'requests_to_approve' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center relative ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'requests_to_approve' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <FileCheck className={`w-4 h-4 shrink-0 ${isSidebarCollapsed ? '' : 'mr-3'}`} />
+              <FileCheck className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed ? (
                 <>
                   <span>Requests to Approve</span>
                   {pendingRequestsCount > 0 && (
-                    <span className="ml-auto px-1.5 py-0.5 text-[9px] bg-rose-500 text-white rounded-full font-black animate-pulse">
+                    <span className="ml-auto px-1.5 py-0.5 text-[8px] bg-rose-500 text-white rounded-full font-bold animate-pulse">
                       {pendingRequestsCount}
                     </span>
                   )}
                 </>
               ) : (
                 pendingRequestsCount > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white rounded-full text-[8px] flex items-center justify-center font-black">
+                  <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-500 text-white rounded-full text-[8px] flex items-center justify-center font-bold">
                     {pendingRequestsCount}
                   </span>
                 )
@@ -953,36 +953,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <button 
               onClick={() => changeTab('clients')} 
               title="Clients Registry"
-              className={`px-4 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'clients' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'clients' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <Building className={`w-4 h-4 shrink-0 ${isSidebarCollapsed ? '' : 'mr-3'}`} />
+              <Building className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Clients</span>}
             </button>
 
             <button 
               onClick={() => changeTab('returns')} 
               title="Client Returns"
-              className={`px-4 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'returns' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'returns' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <FileText className={`w-4 h-4 shrink-0 ${isSidebarCollapsed ? '' : 'mr-3'}`} />
+              <FileText className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Returns</span>}
             </button>
 
             <button 
               onClick={() => changeTab('reports')} 
               title="Compliance Reports"
-              className={`px-4 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'reports' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'reports' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <TrendingUp className={`w-4 h-4 shrink-0 ${isSidebarCollapsed ? '' : 'mr-3'}`} />
+              <TrendingUp className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Reports</span>}
             </button>
 
             <button 
               onClick={() => changeTab('settings')} 
               title="System Settings"
-              className={`px-4 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'settings' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'settings' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <Settings className={`w-4 h-4 shrink-0 ${isSidebarCollapsed ? '' : 'mr-3'}`} />
+              <Settings className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Settings</span>}
             </button>
           </div>

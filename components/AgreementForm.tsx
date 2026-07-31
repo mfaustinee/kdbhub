@@ -217,19 +217,19 @@ export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtor
   }, []);
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-16 md:py-32">
+    <div className="max-w-3xl mx-auto px-4 py-6">
       {isSubmitting && (
-        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[200] flex items-center justify-center p-8">
-          <div className="max-w-md w-full text-center space-y-8 animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+          <div className="max-w-md w-full text-center space-y-6 animate-in fade-in zoom-in-95">
             <div className="relative inline-block">
-              <div className="w-24 h-24 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
+              <div className="w-16 h-16 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
               <div className="absolute inset-0 flex items-center justify-center">
-                <Send className="w-8 h-8 text-emerald-500 animate-pulse" />
+                <Send className="w-6 h-6 text-emerald-500 animate-pulse" />
               </div>
             </div>
-            <div className="space-y-2">
-              <h3 className="text-xl font-black text-white uppercase tracking-widest">Transmitting Agreement</h3>
-              <p className="text-emerald-400 font-bold text-sm h-6">{transmissionStatus}</p>
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">Transmitting Agreement</h3>
+              <p className="text-emerald-400 font-medium text-xs h-5">{transmissionStatus}</p>
             </div>
             <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
               <div className="bg-emerald-500 h-full animate-[progress_4s_ease-in-out]"></div>
@@ -238,23 +238,36 @@ export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtor
         </div>
       )}
 
-      <div className="bg-white rounded-[40px] shadow-2xl overflow-hidden border border-slate-100 animate-in fade-in zoom-in-95 duration-500">
-        <div className="bg-emerald-600 px-10 py-10 text-white flex justify-between items-center">
-          <div><h2 className="text-3xl font-black tracking-tight">Execution Portal</h2><p className="text-emerald-100 text-xs font-bold uppercase tracking-widest mt-1 opacity-80">Levy Arrears Payment Agreement</p></div>
-          <div className="bg-white/10 px-4 py-2 rounded-2xl text-[10px] font-black tracking-widest uppercase flex items-center"><Lock className="w-3 h-3 mr-2" /> Secured Session</div>
+      <div className="bg-white rounded-2xl shadow-md overflow-hidden border border-slate-100 animate-in fade-in zoom-in-95 duration-500">
+        <div className="bg-emerald-600 px-5 py-4 sm:px-6 sm:py-4 text-white flex justify-between items-center">
+          <div>
+            <h2 className="text-base sm:text-lg font-bold tracking-tight">Execution Portal</h2>
+            <p className="text-emerald-100 text-[10px] font-bold uppercase tracking-wider mt-0.5 opacity-90">Levy Arrears Payment Agreement</p>
+          </div>
+          <div className="bg-white/10 px-3 py-1.5 rounded-xl text-[9px] font-bold tracking-wider uppercase flex items-center">
+            <Lock className="w-3 h-3 mr-1.5" /> Secured Session
+          </div>
         </div>
 
-
-
-        <div className="p-12">
+        <div className="p-5 sm:p-8">
           {step === 0 && (
-            <div className="max-w-md mx-auto py-12 space-y-10">
-              <div className="text-center"><ShieldCheck className="w-20 h-20 text-emerald-600 mx-auto mb-6" /><h3 className="text-2xl font-black text-slate-800">Operator Identity</h3><p className="text-sm text-slate-500 font-medium leading-relaxed">Authenticate your Business Profile using your KDB Permit Number and registered phone number</p></div>
-              <form onSubmit={handleVerify} className="space-y-4">
-                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Permit Number</label><input required placeholder="KDB/MB/0001234/2025" value={lookupPermit} onChange={e => setLookupPermit(e.target.value)} className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all font-bold" /></div>
-                <div className="space-y-1.5"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Authorized Phone / Debit Note No</label><input required type="password" placeholder="••••••••" value={lookupSecret} onChange={e => setLookupSecret(e.target.value)} className="w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all font-bold" /></div>
-                {verifyError && <p className="text-xs text-rose-600 bg-rose-50 p-4 rounded-2xl flex items-center font-bold animate-pulse"><AlertCircle className="w-4 h-4 mr-2" /> {verifyError}</p>}
-                <button className="w-full py-5 bg-emerald-600 text-white font-black rounded-3xl hover:bg-emerald-700 shadow-2xl shadow-emerald-200 transition-all flex items-center justify-center uppercase tracking-widest text-sm">Access Portal <ChevronRight className="ml-2 w-4 h-4" /></button>
+            <div className="max-w-md mx-auto py-6 space-y-6">
+              <div className="text-center">
+                <ShieldCheck className="w-12 h-12 text-emerald-600 mx-auto mb-3" />
+                <h3 className="text-lg font-bold text-slate-800">Operator Identity</h3>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed mt-1">Authenticate your Business Profile using your KDB Permit Number and registered phone number</p>
+              </div>
+              <form onSubmit={handleVerify} className="space-y-3.5">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider ml-2">Permit Number</label>
+                  <input required placeholder="KDB/MB/0001234/2025" value={lookupPermit} onChange={e => setLookupPermit(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all text-xs font-semibold" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider ml-2">Authorized Phone / Debit Note No</label>
+                  <input required type="password" placeholder="••••••••" value={lookupSecret} onChange={e => setLookupSecret(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 outline-none transition-all text-xs font-semibold" />
+                </div>
+                {verifyError && <p className="text-xs text-rose-600 bg-rose-50 p-3 rounded-xl flex items-center font-semibold animate-pulse"><AlertCircle className="w-4 h-4 mr-1.5 shrink-0" /> {verifyError}</p>}
+                <button className="w-full py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-md shadow-emerald-100 transition-all flex items-center justify-center uppercase tracking-wider text-xs">Access Portal <ChevronRight className="ml-1.5 w-4 h-4" /></button>
               </form>
             </div>
           )}
