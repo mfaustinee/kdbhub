@@ -762,8 +762,11 @@ export const LicensedClientsModule: React.FC = () => {
             clientRecordsMap.set(clientKey, updatedClient);
           } else {
             // First row for this client in CSV -> Primary LicensedClient record
+            const clientUniqueId = formattedPermitNo 
+              ? `${formattedPermitNo}_${rowNum}_${Math.random().toString(36).substring(2, 6)}` 
+              : `CLI-${Date.now()}-${rowNum}-${Math.random().toString(36).substring(2, 6)}`;
             const mainClient: LicensedClient = {
-              id: formattedPermitNo,
+              id: clientUniqueId,
               permitNumber: formattedPermitNo,
               clientName: cName,
               premiseName: pName,
@@ -1043,55 +1046,55 @@ export const LicensedClientsModule: React.FC = () => {
       <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 space-y-6">
         
         {/* Toolbar & Filters */}
-        <div className="flex flex-col lg:flex-row gap-4 justify-between">
-          <div className="flex flex-col sm:flex-row gap-3 flex-grow">
+        <div className="flex flex-col xl:flex-row gap-3 justify-between items-stretch xl:items-center">
+          <div className="flex flex-wrap sm:flex-nowrap gap-2 flex-grow items-center">
             {/* Search */}
-            <div className="relative flex-grow max-w-md">
-              <Search className="absolute left-4.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <div className="relative flex-grow min-w-[200px] max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
               <input
                 type="text"
-                placeholder="Search by client, premise, contact, address..."
+                placeholder="Search clients, premises, contacts..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
-                className="w-full pl-11 pr-5 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs"
+                className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs"
               />
             </div>
             
             {/* Category Filter */}
-            <div className="relative">
+            <div className="relative min-w-[130px]">
               <select
                 value={categoryFilter}
                 onChange={e => setCategoryFilter(e.target.value)}
-                className="appearance-none w-full pl-5 pr-10 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs cursor-pointer"
+                className="appearance-none w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs cursor-pointer"
               >
                 <option value="All">All Categories</option>
                 {categories.map(cat => (
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
-              <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
 
             {/* Levy Filter */}
-            <div className="relative">
+            <div className="relative min-w-[130px]">
               <select
                 value={levyFilter}
                 onChange={e => setLevyFilter(e.target.value)}
-                className="appearance-none w-full pl-5 pr-10 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs cursor-pointer"
+                className="appearance-none w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs cursor-pointer"
               >
                 <option value="All">All Levy Statuses</option>
                 <option value="QFR">Qualifies (QFR)</option>
                 <option value="DNQ-R">Exempt (DNQ-R)</option>
               </select>
-              <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
 
             {/* Status Filter */}
-            <div className="relative">
+            <div className="relative min-w-[120px]">
               <select
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
-                className="appearance-none w-full pl-5 pr-10 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs cursor-pointer"
+                className="appearance-none w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs cursor-pointer"
               >
                 <option value="All">All Permits</option>
                 <option value="active">Valid Permits</option>
@@ -1099,11 +1102,11 @@ export const LicensedClientsModule: React.FC = () => {
                 <option value="operating">Operating Premises</option>
                 <option value="closed">Closed Premises</option>
               </select>
-              <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             {clients.length > 0 && (
               <button
                 onClick={async () => {
@@ -1120,10 +1123,10 @@ export const LicensedClientsModule: React.FC = () => {
                   }
                 }}
                 disabled={loading}
-                className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-sm"
+                className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm"
                 title="Push current list of clients directly to Supabase table"
               >
-                <Database size={14} /> Sync to Supabase
+                <Database size={13} /> Sync to Supabase
               </button>
             )}
             <button
@@ -1133,21 +1136,21 @@ export const LicensedClientsModule: React.FC = () => {
                 setParseErrors([]);
                 setIsImportModalOpen(true);
               }}
-              className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-sm border border-slate-200"
+              className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm border border-slate-200"
             >
-              <Upload size={14} /> Import CSV
+              <Upload size={13} /> Import CSV
             </button>
             <button
               onClick={downloadAllAsCSV}
-              className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-sm border border-slate-200"
+              className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm border border-slate-200"
             >
-              <Download size={14} /> Export CSV
+              <Download size={13} /> Export CSV
             </button>
             <button
               onClick={openAddModal}
-              className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-md"
+              className="flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md"
             >
-              <Plus size={14} /> Add Client
+              <Plus size={13} /> Add Client
             </button>
           </div>
         </div>

@@ -1480,7 +1480,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                 </div>
 
                 {/* Import/Export buttons */}
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {returns.length > 0 && (
                     <button
                       onClick={async () => {
@@ -1497,10 +1497,10 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                         }
                       }}
                       disabled={loading}
-                      className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest px-4 py-2.5 rounded-xl transition-all shadow-sm"
+                      className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm"
                       title="Push current list of returns directly to Supabase table"
                     >
-                      <Database size={14} /> Sync to Supabase
+                      <Database size={13} /> Sync to Supabase
                     </button>
                   )}
                   <button
@@ -1510,21 +1510,21 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       setImportErrors([]);
                       setIsImportModalOpen(true);
                     }}
-                    className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest px-4 py-2.5 rounded-xl transition-all shadow-sm border border-slate-200"
+                    className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm border border-slate-200"
                   >
-                    <Upload size={14} /> Import returns CSV
+                    <Upload size={13} /> Import CSV
                   </button>
                   <button
                     onClick={exportAllReturnsCSV}
-                    className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest px-4 py-2.5 rounded-xl transition-all shadow-sm border border-slate-200"
+                    className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm border border-slate-200"
                   >
-                    <Download size={14} /> Export CSV
+                    <Download size={13} /> Export CSV
                   </button>
                   <button
                     onClick={() => openAddModal()}
-                    className="flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest px-5 py-2.5 rounded-xl transition-all shadow-md"
+                    className="flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md"
                   >
-                    <Plus size={14} /> File Return
+                    <Plus size={13} /> File Return
                   </button>
                 </div>
               </div>

@@ -112,7 +112,9 @@ const safeSetLocalStorage = (key: string, value: string) => {
 const clientToDb = (client: any) => {
   if (!client) return client;
   const pNo = String(client.permitNumber || client.permitnumber || client.id || '').trim();
-  
+  const rawId = String(client.id || '').trim();
+  const idVal = rawId || (pNo ? `${pNo}_${Math.random().toString(36).substring(2, 6)}` : `CLI-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
+
   let branchesVal: any[] = [];
   if (Array.isArray(client.branches)) {
     branchesVal = client.branches;
@@ -125,7 +127,7 @@ const clientToDb = (client: any) => {
   }
 
   const out: any = {
-    id: String(client.id || pNo).trim(),
+    id: idVal,
     clientname: String(client.clientName ?? client.clientname ?? '').trim(),
     premisename: String(client.premiseName ?? client.premisename ?? '').trim(),
     premisecategory: String(client.premiseCategory ?? client.premisecategory ?? 'Milk Bar').trim(),
@@ -1764,7 +1766,15 @@ export const DBService = {
 
     try {
       console.log("[DBService] Attempting Supabase bulk upsert...", clientsList.length);
-      const dbClients = clientsList.map(c => clientToDb(c));
+      const seenIds = new Set<string>();
+      const dbClients = clientsList.map((c, idx) => {
+        const dbObj = clientToDb(c);
+        if (!dbObj.id || seenIds.has(dbObj.id)) {
+          dbObj.id = `${dbObj.permitnumber || dbObj.id || 'CLI'}_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
+        }
+        seenIds.add(dbObj.id);
+        return dbObj;
+      });
       
       // Batch in chunks of 50 for max reliability
       const chunkSize = 50;
