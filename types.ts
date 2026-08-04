@@ -396,6 +396,8 @@ export interface DataValidation {
   status: 'Approved' | 'Pending' | 'Action Required';
   remarks?: string;
   monthsCount?: number; // Number of individual months / sales entries validated within this form
+  pdfPath?: string;
+  rawData?: any;
 }
 
 export const getIndividualValidationsCount = (v: DataValidation): number => {

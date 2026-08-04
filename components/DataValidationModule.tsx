@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
-import { supabase } from './lib/supabase';
+import { supabase, viewPdf as sharedViewPdf } from './lib/supabase';
 import { DBService } from '../services/db';
 import { LicensedClient, ClientReturn, formatDateToDDMMYYYY, formatPermitNumber } from '../types';
 import { 
@@ -720,7 +720,7 @@ export function DataValidationModule() {
               parsed.forEach(res => {
                 allExtractedMonths.push({ 
                   period: res.period, 
-                  pdfPath: item.pdf_path, 
+                  pdfPath: item.pdf_path || item.raw_data?.pdf_path || item.raw_data?.pdfPath || item.raw_data?.pdf, 
                   score: res.score,
                   rawData: item.raw_data
                 });
@@ -1883,39 +1883,7 @@ export function DataValidationModule() {
   };
 
   const viewPdf = async (path: string) => {
-    if (!path) return;
-    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
-      window.open(path, '_blank');
-      return;
-    }
-    if (!supabase) return;
-
-    let cleanPath = path;
-    if (cleanPath.startsWith('ValidationPdfs/')) {
-      cleanPath = cleanPath.replace('ValidationPdfs/', '');
-    } else if (cleanPath.startsWith('validation-pdfs/')) {
-      cleanPath = cleanPath.replace('validation-pdfs/', '');
-    }
-
-    try {
-      // Create a signed URL that expires in 60 seconds for security
-      const { data, error } = await supabase.storage
-        .from('ValidationPdfs')
-        .createSignedUrl(cleanPath, 60);
-      
-      if (error) {
-        console.error('Error creating signed URL:', error);
-        alert(`Could not retrieve PDF: ${error.message}`);
-        return;
-      }
-
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, '_blank');
-      }
-    } catch (err: any) {
-      console.error('Failed to view PDF:', err);
-      alert('Failed to retrieve PDF document.');
-    }
+    return sharedViewPdf(path);
   };
 
   const dataURIToBlob = (dataURI: string) => {

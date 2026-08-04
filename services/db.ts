@@ -2138,7 +2138,9 @@ export const DBService = {
               validatedAt: r.date || '',
               status: 'Approved' as const,
               remarks: raw.comments || '',
-              monthsCount: mCount
+              monthsCount: mCount,
+              pdfPath: r.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf,
+              rawData: raw
             };
           });
 
@@ -2234,7 +2236,9 @@ export const DBService = {
           validatedAt: r.date || '',
           status: 'Approved' as const,
           remarks: raw.comments || '',
-          monthsCount: mCount
+          monthsCount: mCount,
+          pdfPath: r.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf,
+          rawData: raw
         };
       });
 
