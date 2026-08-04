@@ -2095,6 +2095,14 @@ export function DataValidationModule() {
             console.error('PDF upload process failed:', uploadErr);
           }
 
+          // Include PDF data and reference directly inside raw_data payload for kdb_validations
+          const payloadRawData = {
+            ...updatedData,
+            pdf: pdf,
+            pdf_path: pdfPath,
+            pdfPath: pdfPath
+          };
+
           let supabaseError;
           if (isAmendment) {
             const { error } = await supabase
@@ -2108,8 +2116,7 @@ export function DataValidationModule() {
                 location: updatedData.location,
                 county: updatedData.county,
                 total_penalty: totalPenalty,
-                pdf_path: pdfPath, // Store reference to updated file
-                raw_data: updatedData // Store full JSON for backup
+                raw_data: payloadRawData // Store full JSON including PDF data in table
               })
               .match({
                 premise_name: updatedData.premiseName,
@@ -2130,8 +2137,7 @@ export function DataValidationModule() {
                 location: updatedData.location,
                 county: updatedData.county,
                 total_penalty: totalPenalty,
-                pdf_path: pdfPath, // Store reference to the file
-                raw_data: updatedData // Store full JSON for backup
+                raw_data: payloadRawData // Store full JSON including PDF data in table
               }]);
             supabaseError = error;
           }
