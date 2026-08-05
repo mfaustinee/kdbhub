@@ -1659,6 +1659,29 @@ export const DBService = {
     try {
       console.log("[DBService] Attempting Supabase upsert to 'licensed_clients' table...", { id: clientRecord.id });
       const dbClient = clientToDb(clientRecord);
+
+      // Match against existing record by ID, permit number, or clientName + premiseName to ensure overwriting instead of duplicating
+      try {
+        const { data: existingList } = await client
+          .from('licensed_clients')
+          .select('id, permitnumber, clientname, premisename');
+        
+        if (existingList && existingList.length > 0) {
+          const match = existingList.find((r: any) => 
+            (r.id && dbClient.id && r.id === dbClient.id) ||
+            (r.permitnumber && dbClient.permitnumber && r.permitnumber.toString().trim().toLowerCase() === dbClient.permitnumber.toString().trim().toLowerCase()) ||
+            (r.clientname && dbClient.clientname && r.clientname.toString().trim().toLowerCase() === dbClient.clientname.toString().trim().toLowerCase() && 
+             r.premisename && dbClient.premisename && r.premisename.toString().trim().toLowerCase() === dbClient.premisename.toString().trim().toLowerCase())
+          );
+          if (match && match.id) {
+            dbClient.id = match.id;
+            clientRecord.id = match.id;
+          }
+        }
+      } catch (matchErr) {
+        console.warn("[DBService] Non-fatal error finding existing client ID match:", matchErr);
+      }
+
       const { error } = await client
         .from('licensed_clients')
         .upsert(dbClient);
@@ -2298,15 +2321,32 @@ export const DBService = {
 
     try {
       const dbObj = toDb(validation);
-      const { error } = await client
+      
+      // Save to data_validations table
+      await client
         .from('data_validations')
         .upsert(dbObj);
 
-      if (error) {
-        console.warn("[DBService] Supabase saveValidation failed, falling back to local.", error);
-        await saveLocal();
-        return;
-      }
+      // Save to kdb_validations table
+      const valPeriod = validation.period ? `${validation.period} ${validation.year}` : '';
+      const rawData = validation.rawData || { ...validation };
+      const kdbRecordId = validation.id || `VAL_${(validation.permitNo || 'NO_PERMIT').replace(/[^a-zA-Z0-9]/g, '_')}_${(valPeriod || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+      await client
+        .from('kdb_validations')
+        .upsert({
+          id: kdbRecordId,
+          validation_period: valPeriod,
+          date: validation.validatedAt,
+          raw_data: rawData,
+          permit_no: validation.permitNo,
+          dbo_name: validation.clientName,
+          premise_name: validation.premiseName,
+          location: validation.location,
+          category: validation.category,
+          contacts: validation.contacts,
+          pdf_path: validation.pdfPath
+        });
     } catch (e) {
       console.warn("[DBService] Supabase saveValidation exception, falling back to local.", e);
       await saveLocal();

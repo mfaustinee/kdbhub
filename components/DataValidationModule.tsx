@@ -5,7 +5,7 @@ import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
 import { supabase, viewPdf as sharedViewPdf } from './lib/supabase';
 import { DBService } from '../services/db';
-import { LicensedClient, ClientReturn, formatDateToDDMMYYYY, formatPermitNumber } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, formatDateToDDMMYYYY, formatPermitNumber } from '../types';
 import { 
   ClipboardCheck, 
   Database, 
@@ -1228,7 +1228,7 @@ export function DataValidationModule() {
         if (item.key === 'permitNo') {
           chosenVal = formatPermitNumber(chosenVal, updatedForm.category || updatedClient.premiseCategory);
           (updatedForm as any)[item.key] = chosenVal;
-          updatedClient.id = chosenVal;
+          updatedClient.id = selectedClient.id;
           updatedClient.permitNumber = chosenVal;
         } else if (item.key === 'expiryDate') {
           const isoVal = formatToYYYYMMDD(chosenVal);
@@ -1966,7 +1966,7 @@ export function DataValidationModule() {
           ...targetClient,
           clientName: updatedData.dboName.trim() || targetClient.clientName,
           premiseName: updatedData.premiseName.trim() || targetClient.premiseName,
-          id: formattedPermitNo || targetClient.id,
+          id: targetClient.id,
           permitNumber: formattedPermitNo || targetClient.permitNumber || targetClient.id,
           location: updatedData.location.trim() || targetClient.location,
           premiseCategory: (updatedData.category as any) || targetClient.premiseCategory,
@@ -2071,6 +2071,8 @@ export function DataValidationModule() {
             pdfPath: pdfPath
           };
 
+          const valRecordId = `VAL_${(updatedData.permitNo || 'NO_PERMIT').replace(/[^a-zA-Z0-9]/g, '_')}_${(updatedData.validationPeriod || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
+
           let supabaseError;
           if (isAmendment) {
             const { error } = await supabase
@@ -2094,7 +2096,8 @@ export function DataValidationModule() {
           } else {
             const { error } = await supabase
               .from('kdb_validations')
-              .insert([{
+              .upsert([{
+                id: valRecordId,
                 dbo_name: updatedData.dboName,
                 premise_name: updatedData.premiseName,
                 branch: updatedData.branch,
@@ -2111,6 +2114,32 @@ export function DataValidationModule() {
           }
           
           if (supabaseError) console.error('Supabase save error:', supabaseError);
+
+          // Sync through DBService as well
+          const dataValObject: DataValidation = {
+            id: valRecordId,
+            clientId: updatedData.permitNo || '',
+            clientName: updatedData.dboName || '',
+            premiseName: updatedData.premiseName || '',
+            permitNo: updatedData.permitNo || '',
+            location: updatedData.location || '',
+            category: updatedData.category || '',
+            contacts: updatedData.contacts || '',
+            expiryDate: updatedData.expiryDate || '',
+            year: new Date(updatedData.date).getFullYear() || 2026,
+            period: updatedData.validationPeriod || '',
+            quantityDeclared: updatedData.sales?.[0]?.qtyDeclared || '',
+            unitPrice: parseFloat(updatedData.sales?.[0]?.buyingPrice) || 0,
+            totalSales: updatedData.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0,
+            validatorName: updatedData.complianceOfficer || '',
+            validatedAt: updatedData.date || new Date().toISOString(),
+            status: 'Approved',
+            remarks: updatedData.comments || '',
+            monthsCount: Array.isArray(updatedData.sales) && updatedData.sales.length > 0 ? updatedData.sales.length : 1,
+            pdfPath: pdfPath || pdf,
+            rawData: payloadRawData
+          };
+          await DBService.saveValidation(dataValObject);
         } catch (err) {
           console.error('Supabase integration failed:', err);
         }
