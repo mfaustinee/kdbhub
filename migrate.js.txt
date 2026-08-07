@@ -1,0 +1,57 @@
+const { createClient } = require('@supabase/supabase-js');
+
+// 1. Old Project Credentials
+const OLD_SUPABASE_URL = 'https://ngwjvxfqgxaemrhwcjah.supabase.co';
+const OLD_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5nd2p2eGZxZ3hhZW1yaHdjamFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5Nzg0MzQsImV4cCI6MjA5MDU1NDQzNH0.U3GpxazzAO52duLEvZRc2VIX2GH1VUSs5-PWeoeNA5Y';
+const oldSupabase = createClient(OLD_SUPABASE_URL, OLD_SUPABASE_KEY);
+
+// 2. New Project Credentials
+const NEW_SUPABASE_URL = 'https://odolazcniphinupgyaqo.supabase.co';
+const NEW_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9kb2xhemNuaXBoaW51cGd5YXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjAzMjQsImV4cCI6MjA4Njk5NjMyNH0.CgWtTe7SPOAGTb6hqbwgLu-U9d6uWaaOtjjn-VwV4wU';
+const newSupabase = createClient(NEW_SUPABASE_URL, NEW_SUPABASE_KEY);
+
+async function migrateValidations() {
+  console.log("Fetching legacy validations from old project...");
+
+  // Fetch rows from old table name (e.g. 'data_validations' or 'kdb_validations')
+  const { data: oldRows, error: fetchErr } = await oldSupabase
+    .from('kdb_validations')
+    .select('*');
+
+  if (fetchErr) {
+    console.error("Error fetching from old project:", fetchErr);
+    return;
+  }
+
+  console.log(`Found ${oldRows.length} records. Mapping columns to new schema...`);
+
+  // Map old columns to new column names
+  const mappedRows = oldRows.map(row => {
+    const raw = row.raw_data || {};
+    return {
+      id: row.id,
+      validation_period: row.validation_period || raw.validationPeriod || 'Monthly',
+      date: row.date || raw.date || new Date().toISOString().split('T')[0],
+      permit_no: row.permit_no || raw.permitNo || raw.permitNumber || '',
+      dbo_name: row.dbo_name || raw.dboName || raw.clientName || '',
+      premise_name: row.premise_name || raw.premiseName || '',
+      location: row.location || raw.location || '',
+      category: row.category || raw.category || '',
+      contacts: row.contacts || raw.contacts || '',
+      raw_data: raw
+    };
+  });
+
+  // Upsert into new project
+  const { data, error: insertErr } = await newSupabase
+    .from('kdb_validations')
+    .upsert(mappedRows, { onConflict: 'id' });
+
+  if (insertErr) {
+    console.error("Error inserting into new project:", insertErr);
+  } else {
+    console.log(`Successfully migrated ${mappedRows.length} validation records!`);
+  }
+}
+
+migrateValidations();
