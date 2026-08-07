@@ -26,7 +26,8 @@ import {
   Image as ImageIcon,
   History,
   Info,
-  Edit2
+  Edit2,
+  Building2
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -1186,13 +1187,13 @@ export function DataValidationModule() {
     };
 
     const points = [
-      { key: 'dboName', label: 'Name of DBO (clientname)', validationVal: currentForm.dboName || '', clientVal: client.clientName || '' },
-      { key: 'premiseName', label: 'Premise Name (premisename)', validationVal: currentForm.premiseName || '', clientVal: client.premiseName || '' },
-      { key: 'permitNo', label: 'Permit Number (permitnumber)', validationVal: currentForm.permitNo || '', clientVal: client.permitNumber || client.id || '' },
-      { key: 'location', label: 'Location (location)', validationVal: currentForm.location || '', clientVal: client.location || '' },
-      { key: 'category', label: 'Category (premisecategory)', validationVal: currentForm.category || '', clientVal: client.premiseCategory || '' },
-      { key: 'contacts', label: 'Contacts (tel / contactperson)', validationVal: currentForm.contacts || '', clientVal: client.tel || client.contactPerson || '' },
-      { key: 'expiryDate', label: 'Expiry Date (expirydate)', validationVal: currentForm.expiryDate || '', clientVal: client.expiryDate || '' }
+      { key: 'dboName', label: '1. Name of DBO (clientname)', validationVal: currentForm.dboName || '', clientVal: client.clientName || '' },
+      { key: 'premiseName', label: '2. Premise / Branch Name (premisename)', validationVal: currentForm.premiseName || '', clientVal: client.premiseName || '' },
+      { key: 'permitNo', label: '3. Permit Number (permitnumber)', validationVal: currentForm.permitNo || '', clientVal: client.permitNumber || client.id || '' },
+      { key: 'location', label: '4. Location / Branch Address (location)', validationVal: currentForm.location || '', clientVal: client.location || '' },
+      { key: 'category', label: '5. Category (premisecategory)', validationVal: currentForm.category || '', clientVal: client.premiseCategory || '' },
+      { key: 'contacts', label: '6. Contacts (tel / contactperson)', validationVal: currentForm.contacts || '', clientVal: client.tel || client.contactPerson || '' },
+      { key: 'expiryDate', label: '7. Expiry Date (expirydate)', validationVal: currentForm.expiryDate || '', clientVal: client.expiryDate || '' }
     ];
 
     const mismatches = points.filter(p => !isMatch(p.key, p.validationVal, p.clientVal));
@@ -1206,6 +1207,11 @@ export function DataValidationModule() {
       setShowReconciliation(false);
       setReconciliationResolved(true);
     }
+  };
+
+  const handleSelectBranchForReconciliation = (branch: LicensedClient) => {
+    setSelectedClient(branch);
+    checkReconciliation(branch, formData);
   };
 
   const handleResolveReconciliation = async () => {
@@ -4268,21 +4274,157 @@ export function DataValidationModule() {
           {showReconciliation && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
               <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
-                <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-4 text-white">
-                  <h3 className="text-lg font-black tracking-tight">7-Point Profile Reconciliation Required</h3>
-                  <p className="text-xs text-amber-100 font-medium">Conflicting data points identified between Data Validation input and core Clients database.</p>
+                <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-4 text-white flex justify-between items-center">
+                  <div>
+                    <h3 className="text-lg font-black tracking-tight">7-Point Profile & Branch Reconciliation Required</h3>
+                    <p className="text-xs text-amber-100 font-medium">Conflicting data points identified between Data Validation input and core Clients database.</p>
+                  </div>
+                  {selectedClient && (
+                    <span className="bg-amber-700/50 text-white font-mono text-[10px] px-3 py-1 rounded-full border border-amber-400/30 font-bold">
+                      DBO: {selectedClient.clientName}
+                    </span>
+                  )}
                 </div>
                 
                 <div className="p-6 overflow-y-auto space-y-6 flex-grow">
+                  {/* Branch Selection & Context Card for 7-Point Reconciliation */}
+                  {selectedClient && (
+                    <div className="p-5 bg-gradient-to-br from-blue-50/90 to-indigo-50/50 rounded-2xl border border-blue-100 space-y-4 text-left">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100/80 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-5 h-5 text-blue-600" />
+                          <div>
+                            <h4 className="text-xs font-black text-blue-950 uppercase tracking-wider">
+                              DBO Branches & Premises Registry
+                            </h4>
+                            <p className="text-[11px] text-blue-700 font-medium">
+                              Select a branch below to load its specific premise name, permit number, and location into the 7-point reconciliation list.
+                            </p>
+                          </div>
+                        </div>
+                        <span className="self-start sm:self-auto text-[10px] text-blue-800 font-bold bg-blue-100 px-3 py-1 rounded-full border border-blue-200">
+                          Active Branch: {selectedClient.premiseName || 'Primary Premise'}
+                        </span>
+                      </div>
+
+                      {/* Gather and list all branches under DBO displaying Premise Name, Permit Number, Location */}
+                      {(() => {
+                        const cleanDboName = (selectedClient.clientName || '').toLowerCase().trim();
+                        
+                        // 1. Gather matching clients from global clients list
+                        const relatedClients = clients.filter(c => (c.clientName || '').toLowerCase().trim() === cleanDboName);
+                        
+                        // 2. Map branches sub-array if present on selectedClient
+                        const mappedSubBranches: LicensedClient[] = (selectedClient.branches || []).map((sb, idx) => ({
+                          ...selectedClient,
+                          id: sb.permitNumber || sb.id || `SUB_BR_${idx}_${selectedClient.id}`,
+                          permitNumber: sb.permitNumber || selectedClient.permitNumber,
+                          premiseName: sb.premiseName || selectedClient.premiseName,
+                          location: sb.location || selectedClient.location,
+                        }));
+
+                        // Merge into unique branch list by permit number or premise name
+                        const allBranchesMap = new Map<string, LicensedClient>();
+                        [...relatedClients, ...mappedSubBranches].forEach(b => {
+                          const key = (b.permitNumber || b.id || b.premiseName || '').toLowerCase().trim();
+                          if (key && !allBranchesMap.has(key)) {
+                            allBranchesMap.set(key, b);
+                          }
+                        });
+                        
+                        const selectedKey = (selectedClient.permitNumber || selectedClient.id || selectedClient.premiseName || '').toLowerCase().trim();
+                        if (selectedKey && !allBranchesMap.has(selectedKey)) {
+                          allBranchesMap.set(selectedKey, selectedClient);
+                        }
+
+                        const branchList = Array.from(allBranchesMap.values());
+
+                        return (
+                          <div className="space-y-2">
+                            <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider block">
+                              Registered Premises / Branches ({branchList.length}): Click any branch to reconcile
+                            </span>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                              {branchList.map((branchItem, bIdx) => {
+                                const isCurrentActive = 
+                                  (branchItem.id && selectedClient.id && branchItem.id === selectedClient.id) ||
+                                  (branchItem.permitNumber && selectedClient.permitNumber && branchItem.permitNumber.toString().trim().toLowerCase() === selectedClient.permitNumber.toString().trim().toLowerCase()) ||
+                                  (branchItem.premiseName && selectedClient.premiseName && branchItem.premiseName.toString().trim().toLowerCase() === selectedClient.premiseName.toString().trim().toLowerCase());
+
+                                return (
+                                  <button
+                                    key={bIdx}
+                                    type="button"
+                                    onClick={() => handleSelectBranchForReconciliation(branchItem)}
+                                    className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 relative overflow-hidden group ${
+                                      isCurrentActive
+                                        ? 'bg-blue-600 text-white border-blue-700 shadow-md ring-2 ring-blue-300'
+                                        : 'bg-white hover:bg-blue-50/80 text-slate-800 border-blue-100 hover:border-blue-300'
+                                    }`}
+                                  >
+                                    <div className="space-y-1.5">
+                                      {/* 1. Premise Name */}
+                                      <div className="flex justify-between items-start gap-1">
+                                        <span className={`text-xs font-bold leading-snug line-clamp-2 ${isCurrentActive ? 'text-white' : 'text-slate-900 group-hover:text-blue-900'}`}>
+                                          {branchItem.premiseName || 'Unnamed Premise'}
+                                        </span>
+                                        {isCurrentActive && (
+                                          <span className="bg-emerald-500 text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 shadow-xs">
+                                            Active
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* 2. Permit Number */}
+                                      <div className="flex items-center gap-1.5 text-[11px]">
+                                        <span className={`font-medium ${isCurrentActive ? 'text-blue-100' : 'text-slate-400'}`}>Permit:</span>
+                                        <span className={`font-mono font-bold ${isCurrentActive ? 'text-white' : 'text-blue-700'}`}>
+                                          {branchItem.permitNumber || branchItem.id || 'N/A'}
+                                        </span>
+                                      </div>
+
+                                      {/* 3. Location */}
+                                      <div className="flex items-center gap-1.5 text-[11px]">
+                                        <span className={`font-medium ${isCurrentActive ? 'text-blue-100' : 'text-slate-400'}`}>Location:</span>
+                                        <span className={`font-semibold ${isCurrentActive ? 'text-blue-50' : 'text-slate-700'}`}>
+                                          {branchItem.location || 'N/A'} {branchItem.county ? `(${branchItem.county})` : ''}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    <div className={`pt-2 border-t text-[10px] font-bold flex items-center justify-between ${
+                                      isCurrentActive ? 'border-blue-500/60 text-blue-100' : 'border-slate-100 text-blue-600 group-hover:text-blue-700'
+                                    }`}>
+                                      <span>{isCurrentActive ? 'Loaded in 7-Point Recon' : 'Click to Load in Recon'}</span>
+                                      <span>&rarr;</span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
                   <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    The following fields do not match. For each mismatch, select which value is the absolute latest source of truth. 
+                    The following 7-point fields do not match. For each mismatch, select which value is the absolute latest source of truth. 
                     Selecting a value will update BOTH this validation form and the core licensed clients registry in Supabase.
                   </p>
 
                   <div className="space-y-4">
                     {mismatchFields.map((item, idx) => (
                       <div key={item.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3 text-left">
-                        <span className="text-xs font-bold text-slate-800 tracking-tight block uppercase">{item.label}</span>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold text-slate-800 tracking-tight block uppercase">{item.label}</span>
+                          {(item.key === 'premiseName' || item.key === 'location') && (
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                              Branch Data Point
+                            </span>
+                          )}
+                        </div>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {/* Validation Value Option */}
