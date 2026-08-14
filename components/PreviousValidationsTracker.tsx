@@ -158,7 +158,8 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
         setIsCheckingHistory(false);
         return;
       }
-      if (!supabase || !formData.premiseName || formData.premiseName.trim().length < 2) {
+      const rawSearch = (formData.premiseName || '').trim();
+      if (!rawSearch || rawSearch.length < 2) {
         setLastCollections([]);
         setHistoryError(null);
         return;
@@ -167,26 +168,27 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
       setIsCheckingHistory(true);
       setHistoryError(null);
       try {
-        const searchTerm = formData.premiseName.trim();
+        const cleanSearch = rawSearch.replace(/["']/g, '').trim();
         const { data, error } = await supabase
           .from('kdb_validations')
           .select('validation_period, date, premise_name, raw_data, pdf_path')
-          .ilike('premise_name', searchTerm) // Exact case-insensitive match
+          .ilike('premise_name', `%${cleanSearch}%`)
           .order('date', { ascending: false })
-          .limit(50);
+          .limit(25);
 
         if (error) throw error;
 
-        if (data) {
-          const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any }[] = [];
+        if (data && data.length > 0) {
+          const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any; matchedPremise?: string }[] = [];
 
           data.forEach(item => {
             if (item.validation_period) {
               allExtractedMonths.push({
                 period: item.validation_period,
                 pdfPath: item.pdf_path,
-                score: new Date(item.date).getTime(),
-                rawData: item.raw_data
+                score: new Date(item.date).getTime() || 0,
+                rawData: item.raw_data,
+                matchedPremise: item.premise_name
               });
             }
           });
@@ -194,8 +196,8 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
           // Deduplicate and select latest 3
           const deduplicated: Record<string, any> = {};
           allExtractedMonths.forEach(m => {
-            const key = m.period.toLowerCase();
-            if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath)) {
+            const key = m.period.toLowerCase().trim();
+            if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath) || m.score > deduplicated[key].score) {
               deduplicated[key] = m;
             }
           });
@@ -209,12 +211,14 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
             date: '',
             fullPeriod: m.period,
             displayString: m.period,
-            matchedPremise: data[0]?.premise_name,
+            matchedPremise: m.matchedPremise || data[0]?.premise_name,
             pdfPath: m.pdfPath,
             rawData: m.rawData
           }));
 
           setLastCollections(history);
+        } else {
+          setLastCollections([]);
         }
       } catch (err: any) {
         console.error('Error fetching history:', err);
@@ -224,7 +228,7 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
       }
     };
 
-    const timer = setTimeout(fetchHistory, 800); // Debounce search
+    const timer = setTimeout(fetchHistory, 250); // Snappy 250ms debounce
     return () => clearTimeout(timer);
   }, [formData.premiseName, hasAutofilled]);
 
@@ -237,7 +241,8 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
         setIsCheckingDbo(false);
         return;
       }
-      if (!supabase || !formData.dboName || formData.dboName.trim().length < 2) {
+      const rawSearch = (formData.dboName || '').trim();
+      if (!rawSearch || rawSearch.length < 2) {
         setLastDboRecords([]);
         setDboError(null);
         return;
@@ -246,13 +251,13 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
       setIsCheckingDbo(true);
       setDboError(null);
       try {
-        const searchTerm = formData.dboName.trim();
+        const cleanSearch = rawSearch.replace(/["']/g, '').trim();
         const { data, error } = await supabase
           .from('kdb_validations')
           .select('dbo_name, premise_name, category, permit_no, location, county, raw_data, date')
-          .ilike('dbo_name', `%${searchTerm}%`)
+          .ilike('dbo_name', `%${cleanSearch}%`)
           .order('date', { ascending: false })
-          .limit(10);
+          .limit(15);
 
         if (error) throw error;
         
@@ -279,7 +284,7 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
       }
     };
 
-    const timer = setTimeout(fetchDboHistory, 350); // Debounce search
+    const timer = setTimeout(fetchDboHistory, 250); // Snappy 250ms debounce
     return () => clearTimeout(timer);
   }, [formData.dboName, hasAutofilled]);
 

@@ -37,6 +37,40 @@ import {
 // Replace this with your actual Supabase public URL
 const KDB_LOGO_URL = "https://odolazcniphinupgyaqo.supabase.co/storage/v1/object/sign/Pdf%20logo/KDB-LOGOx100h.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV8zNDNkNjNiOC1jY2RlLTQwYTgtOGVmMS1lN2UyY2NjNzQ0NjUiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJQZGYgbG9nby9LREItTE9HT3gxMDBoLnBuZyIsImlhdCI6MTc3NDQwODY3MywiZXhwIjoyMDg5NzY4NjczfQ.r_8Gre72kWfCNdIGpiNEePogU0ieuPOJYqAyvqJ7YsQ";
 
+let cachedLogoImage: HTMLImageElement | null = null;
+let logoFetchPromise: Promise<HTMLImageElement | null> | null = null;
+
+const getCachedLogo = async (): Promise<HTMLImageElement | null> => {
+  if (cachedLogoImage) return cachedLogoImage;
+  if (logoFetchPromise) return logoFetchPromise;
+
+  logoFetchPromise = new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    const timer = setTimeout(() => {
+      resolve(null); // Fast 1.2s timeout so PDF generation never hangs
+    }, 1200);
+
+    img.onload = () => {
+      clearTimeout(timer);
+      cachedLogoImage = img;
+      resolve(img);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(null);
+    };
+    img.src = KDB_LOGO_URL;
+  });
+
+  return logoFetchPromise;
+};
+
+// Start preloading logo immediately
+if (typeof window !== 'undefined') {
+  getCachedLogo();
+}
+
 interface IntakeEntry {
   month: string;
   year: string;
@@ -845,7 +879,7 @@ export function DataValidationModule() {
       }
     };
 
-    const timer = setTimeout(fetchHistory, 400); // 400ms debounce
+    const timer = setTimeout(fetchHistory, 250); // Snappy 250ms debounce
     return () => clearTimeout(timer);
   }, [formData.premiseName, formData.permitNo, formData.dboName]);
 
@@ -1010,7 +1044,7 @@ export function DataValidationModule() {
       }
     };
 
-    const timer = setTimeout(fetchDboHistory, 350); // 350ms debounce
+    const timer = setTimeout(fetchDboHistory, 250); // Snappy 250ms debounce
     return () => clearTimeout(timer);
   }, [formData.dboName, clients, hasAutofilledDbo]);
 
@@ -1906,23 +1940,14 @@ export function DataValidationModule() {
     const doc = new jsPDF();
     let currentY = 130;
 
-    // Helper to load image
-    const loadImage = (url: string): Promise<HTMLImageElement> => {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'Anonymous';
-        img.onload = () => resolve(img);
-        img.onerror = (e) => reject(e);
-        img.src = url;
-      });
-    };
-
     try {
-      const logo = await loadImage(KDB_LOGO_URL);
-      // Center the logo (x, y, width, height)
-      doc.addImage(logo, 'PNG', 85, 10, 40, 25);
+      const logo = await getCachedLogo();
+      if (logo) {
+        // Center the logo (x, y, width, height)
+        doc.addImage(logo, 'PNG', 85, 10, 40, 25);
+      }
     } catch (e) {
-      console.error("Could not load KDB logo for PDF", e);
+      console.warn("Could not load KDB logo for PDF", e);
     }
 
     const checkPageBreak = (neededHeight: number) => {
@@ -2391,7 +2416,7 @@ export function DataValidationModule() {
       // Prepare payload & PDF reference
       let pdfPath = null;
 
-      // 1. Upload PDF & Sync to Supabase if configured
+      // 1. Upload PDF & Sync to Supabase storage (with 2.5s fast timeout)
       if (supabase) {
         try {
           const pdfBlob = dataURIToBlob(pdf);
@@ -2399,22 +2424,30 @@ export function DataValidationModule() {
             ? `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_Amended_v2_${Date.now()}.pdf`
             : `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
 
-          for (const bucket of ['validationPdfs', 'ValidationPdfs', 'validation-pdfs']) {
-            try {
-              const { data: uploadData, error: uploadError } = await supabase.storage
-                .from(bucket)
-                .upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: false });
+          const uploadPromise = (async () => {
+            for (const bucket of ['ValidationPdfs', 'validationPdfs', 'validation-pdfs']) {
+              try {
+                const { data: uploadData, error: uploadError } = await supabase.storage
+                  .from(bucket)
+                  .upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: false });
 
-              if (!uploadError && uploadData?.path) {
-                pdfPath = uploadData.path;
-                break;
+                if (!uploadError && uploadData?.path) {
+                  return uploadData.path;
+                }
+              } catch (bErr) {
+                // Continue to next bucket
               }
-            } catch (bErr) {
-              console.warn(`Upload to bucket ${bucket} error:`, bErr);
             }
-          }
+            return null;
+          })();
+
+          // Wait at most 2500ms for storage upload so user submission never stalls
+          pdfPath = await Promise.race([
+            uploadPromise,
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
+          ]);
         } catch (uploadErr) {
-          console.error('PDF upload process failed:', uploadErr);
+          console.warn('PDF upload warning:', uploadErr);
         }
       }
 
@@ -2427,7 +2460,9 @@ export function DataValidationModule() {
 
       const valRecordId = `VAL_${(updatedData.permitNo || 'NO_PERMIT').replace(/[^a-zA-Z0-9]/g, '_')}_${(updatedData.validationPeriod || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
 
-      if (supabase) {
+      // 2. Direct Supabase kdb_validations sync
+      const supabaseSyncPromise = (async () => {
+        if (!supabase) return;
         try {
           if (isAmendment) {
             const { error: updateErr } = await supabase
@@ -2439,6 +2474,7 @@ export function DataValidationModule() {
                 category: updatedData.category,
                 permit_no: updatedData.permitNo,
                 location: updatedData.location,
+                county: updatedData.county,
                 contacts: updatedData.contacts,
                 validation_period: updatedData.validationPeriod,
                 pdf_path: pdfPath,
@@ -2461,6 +2497,7 @@ export function DataValidationModule() {
                 category: updatedData.category,
                 permit_no: updatedData.permitNo,
                 location: updatedData.location,
+                county: updatedData.county,
                 contacts: updatedData.contacts,
                 pdf_path: pdfPath,
                 raw_data: payloadRawData
@@ -2470,9 +2507,9 @@ export function DataValidationModule() {
         } catch (sbErr) {
           console.error('Supabase kdb_validations save error:', sbErr);
         }
-      }
+      })();
 
-      // Always save to DBService for guaranteed local persistence & history tracking
+      // 3. Always save to DBService for guaranteed local persistence & history tracking
       const dataValObject: DataValidation = {
         id: valRecordId,
         clientId: updatedData.permitNo || '',
@@ -2496,17 +2533,23 @@ export function DataValidationModule() {
         pdfPath: pdfPath || pdf,
         rawData: payloadRawData
       };
-      await DBService.saveValidation(dataValObject);
-      await DBService.getValidations(true);
 
-      // 2. Submit to Google Sheets (Original)
-      const res = await fetch('/api/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: updatedData, pdf, isAmendment }),
-      });
+      // 4. Concurrent execution of DBService save, Google Sheets submission, and Supabase sync
+      const [, submitRes] = await Promise.all([
+        Promise.all([DBService.saveValidation(dataValObject), supabaseSyncPromise]),
+        fetch('/api/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: updatedData, pdf, isAmendment }),
+        })
+      ]);
 
-      if (res.ok) {
+      // Revalidate cache in background without blocking UI
+      setTimeout(() => {
+        DBService.getValidations(true).catch(e => console.warn('Background getValidations error:', e));
+      }, 50);
+
+      if (submitRes.ok) {
         setStatus({ type: 'success', message: 'Data successfully synced! Your PDF is downloading...' });
         
         // Trigger PDF Download
@@ -2527,7 +2570,7 @@ export function DataValidationModule() {
         setFormData(initialData);
         setStep(0); // Go back to start
       } else {
-        const error: any = await res.json();
+        const error: any = await submitRes.json();
         throw new Error(error.error || 'Submission failed');
       }
     } catch (err: any) {

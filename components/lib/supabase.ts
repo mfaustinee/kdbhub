@@ -1,68 +1,117 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-let supabaseInstance: any = null;
+let supabaseInstance: SupabaseClient | null = null;
+let initPromise: Promise<SupabaseClient | null> | null = null;
 
-const getSupabaseInstance = () => {
+export const initSupabase = async (): Promise<SupabaseClient | null> => {
   if (supabaseInstance) return supabaseInstance;
   if ((window as any).__supabaseInstance) {
     supabaseInstance = (window as any).__supabaseInstance;
     return supabaseInstance;
   }
+  if (initPromise) return initPromise;
 
-  const env = (window as any)._env_ || {};
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL || '';
-  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || '';
-
-  if (supabaseUrl && supabaseKey) {
+  initPromise = (async () => {
     try {
-      supabaseInstance = createClient(supabaseUrl, supabaseKey);
-      (window as any).__supabaseInstance = supabaseInstance;
+      let env = (window as any)._env_;
+      if (!env) {
+        try {
+          const res = await fetch('/api/config');
+          if (res.ok) {
+            env = await res.json();
+            (window as any)._env_ = env;
+          }
+        } catch (fetchErr) {
+          console.warn('[Supabase] Config fetch error:', fetchErr);
+        }
+      }
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || env?.VITE_SUPABASE_URL || '';
+      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || env?.VITE_SUPABASE_ANON_KEY || '';
+
+      if (supabaseUrl && supabaseKey) {
+        supabaseInstance = createClient(supabaseUrl, supabaseKey);
+        (window as any).__supabaseInstance = supabaseInstance;
+        console.log('[Supabase] Client initialized successfully:', supabaseUrl);
+        return supabaseInstance;
+      } else {
+        console.warn('[Supabase] Missing credentials:', { url: !!supabaseUrl, key: !!supabaseKey });
+      }
     } catch (e) {
-      console.error("[Supabase Proxy] Init error:", e);
+      console.error('[Supabase] Init error:', e);
     }
-  }
-  return supabaseInstance;
+    return null;
+  })();
+
+  return initPromise;
+};
+
+// Start eager initialization immediately on import
+if (typeof window !== 'undefined') {
+  initSupabase();
+}
+
+export const getSupabase = async (): Promise<SupabaseClient | null> => {
+  if (supabaseInstance) return supabaseInstance;
+  return await initSupabase();
 };
 
 export const supabase = new Proxy({}, {
   get(target, prop) {
-    const instance = getSupabaseInstance();
-    if (!instance) {
-      // If supabase is not yet configured, return a dummy function/object to prevent crashing
-      return (...args: any[]) => {
-        const nextInstance = getSupabaseInstance();
-        if (nextInstance && typeof nextInstance[prop] === 'function') {
-          return nextInstance[prop](...args);
-        }
-        return {
-          from: () => ({
-            select: () => ({
-              ilike: () => ({
-                order: () => ({
-                  limit: () => Promise.resolve({ data: [], error: null })
-                })
-              }),
-              or: () => ({
-                order: () => ({
-                  limit: () => Promise.resolve({ data: [], error: null })
-                })
-              })
-            })
-          }),
-          storage: {
-            from: () => ({
-              upload: () => Promise.resolve({ data: null, error: new Error('Supabase not configured') }),
-              createSignedUrl: () => Promise.resolve({ data: null, error: new Error('Supabase not configured') })
-            })
+    if (supabaseInstance) {
+      const val = (supabaseInstance as any)[prop];
+      return typeof val === 'function' ? val.bind(supabaseInstance) : val;
+    }
+    if ((window as any).__supabaseInstance) {
+      supabaseInstance = (window as any).__supabaseInstance;
+      const val = (supabaseInstance as any)[prop];
+      return typeof val === 'function' ? val.bind(supabaseInstance) : val;
+    }
+
+    // Dynamic chainable Proxy that handles any chain until awaited
+    return (...args: any[]) => {
+      const createAsyncChain = (chainFn: (client: SupabaseClient) => any) => {
+        const handler: any = {
+          get(chainTarget: any, nextProp: string) {
+            if (nextProp === 'then') {
+              return (resolve: any, reject: any) => {
+                getSupabase().then(client => {
+                  if (!client) {
+                    resolve({ data: null, error: new Error('Supabase client unavailable') });
+                    return;
+                  }
+                  try {
+                    const result = chainFn(client);
+                    if (result && typeof result.then === 'function') {
+                      result.then(resolve, reject);
+                    } else {
+                      resolve({ data: result, error: null });
+                    }
+                  } catch (err) {
+                    reject(err);
+                  }
+                }).catch(reject);
+              };
+            }
+            return (...nextArgs: any[]) => {
+              return createAsyncChain((client: SupabaseClient) => {
+                const intermediate = chainFn(client);
+                if (intermediate && typeof intermediate[nextProp] === 'function') {
+                  return intermediate[nextProp](...nextArgs);
+                }
+                return intermediate;
+              });
+            };
           }
         };
+        return new Proxy({}, handler);
       };
-    }
-    const value = instance[prop];
-    if (typeof value === 'function') {
-      return value.bind(instance);
-    }
-    return value;
+
+      return createAsyncChain((client: SupabaseClient) => {
+        const fn = (client as any)[prop];
+        return typeof fn === 'function' ? fn.apply(client, args) : fn;
+      });
+    };
   }
 }) as any;
 
@@ -74,7 +123,8 @@ export const resolvePdfUrl = async (pathOrIdentifier: string): Promise<string | 
     return pathOrIdentifier;
   }
 
-  if (!supabase) {
+  const client = await getSupabase();
+  if (!client) {
     return null;
   }
 
@@ -84,11 +134,10 @@ export const resolvePdfUrl = async (pathOrIdentifier: string): Promise<string | 
 
   // 2. CHECK THE kdb_validations TABLE IN SUPABASE FIRST
   try {
-    // Exact match lookup first to avoid PostgREST syntax errors with spaces/special characters
-    const { data: records, error: dbError } = await supabase
+    const { data: records, error: dbError } = await client
       .from('kdb_validations')
       .select('pdf_path, raw_data, id, premise_name, validation_period')
-      .eq('pdf_path', targetPath)
+      .or(`pdf_path.eq.${targetPath},id.eq.${targetPath}`)
       .limit(5);
 
     if (!dbError && records && records.length > 0) {
@@ -109,10 +158,10 @@ export const resolvePdfUrl = async (pathOrIdentifier: string): Promise<string | 
     console.warn('[PDF Lookup] kdb_validations table check warning:', err);
   }
 
-  // 3. CHECK STORAGE BUCKETS (validationPdfs / ValidationPdfs) IN SUPABASE
-  for (const bucketName of ['validationPdfs', 'ValidationPdfs', 'validation-pdfs']) {
+  // 3. CHECK STORAGE BUCKETS (ValidationPdfs / validation-pdfs) IN SUPABASE
+  for (const bucketName of ['ValidationPdfs', 'validationPdfs', 'validation-pdfs']) {
     try {
-      const { data: signedData, error: signedError } = await supabase.storage
+      const { data: signedData, error: signedError } = await client.storage
         .from(bucketName)
         .createSignedUrl(targetPath, 3600);
 
@@ -120,37 +169,15 @@ export const resolvePdfUrl = async (pathOrIdentifier: string): Promise<string | 
         return signedData.signedUrl;
       }
 
-      const { data: publicData } = supabase.storage
+      const { data: publicData } = client.storage
         .from(bucketName)
         .getPublicUrl(targetPath);
 
       if (publicData?.publicUrl) {
         return publicData.publicUrl;
       }
-
-      const { data: filesList, error: listError } = await supabase.storage
-        .from(bucketName)
-        .list('', { limit: 100 });
-
-      if (!listError && filesList && filesList.length > 0) {
-        const searchKey = targetPath.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const matchedFile = filesList.find((f: any) => {
-          const fileNameKey = f.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-          return fileNameKey.includes(searchKey) || (searchKey.length >= 4 && searchKey.includes(fileNameKey));
-        });
-
-        if (matchedFile) {
-          const { data: matchedSigned, error: matchError } = await supabase.storage
-            .from(bucketName)
-            .createSignedUrl(matchedFile.name, 3600);
-
-          if (!matchError && matchedSigned?.signedUrl) {
-            return matchedSigned.signedUrl;
-          }
-        }
-      }
     } catch (err) {
-      console.warn(`[PDF Lookup] ${bucketName} storage bucket check warning:`, err);
+      // Continue to next bucket
     }
   }
 
