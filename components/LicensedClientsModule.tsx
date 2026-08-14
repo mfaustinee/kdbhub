@@ -24,7 +24,8 @@ import {
   Upload,
   Download,
   AlertCircle,
-  Check
+  Check,
+  Database
 } from 'lucide-react';
 
 export const LicensedClientsModule: React.FC = () => {
@@ -761,8 +762,11 @@ export const LicensedClientsModule: React.FC = () => {
             clientRecordsMap.set(clientKey, updatedClient);
           } else {
             // First row for this client in CSV -> Primary LicensedClient record
+            const clientUniqueId = formattedPermitNo 
+              ? `${formattedPermitNo}_${rowNum}_${Math.random().toString(36).substring(2, 6)}` 
+              : `CLI-${Date.now()}-${rowNum}-${Math.random().toString(36).substring(2, 6)}`;
             const mainClient: LicensedClient = {
-              id: formattedPermitNo,
+              id: clientUniqueId,
               permitNumber: formattedPermitNo,
               clientName: cName,
               premiseName: pName,
@@ -923,55 +927,55 @@ export const LicensedClientsModule: React.FC = () => {
   });
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-4 animate-in fade-in duration-500">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-[32px] p-8 text-white relative overflow-hidden shadow-xl">
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-4 sm:p-5 text-white relative overflow-hidden shadow-md">
         <div className="absolute right-0 bottom-0 opacity-10 translate-y-6 translate-x-6 pointer-events-none">
-          <Building size={320} className="text-white" />
+          <Building size={200} className="text-white" />
         </div>
-        <div className="max-w-2xl">
-          <div className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider mb-3">
-            <Sparkles size={12} /> Live Licensed Registry
+        <div className="max-w-xl">
+          <div className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider mb-2">
+            <Sparkles size={11} /> Live Licensed Registry
           </div>
-          <h1 className="text-3xl font-black tracking-tight">Licensed Clients Database</h1>
-          <p className="text-sm text-slate-300 mt-2 leading-relaxed">
-            Manage your licensed dairies, milk bars, cooling stations, and processors. Track their operational lifespan, levy qualification, and cooling infrastructure capacity.
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight">Licensed Clients Database</h1>
+          <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+            Manage your licensed dairies, milk bars, cooling stations, and processors. Track operational lifespan, levy qualification, and cooling capacity.
           </p>
         </div>
       </div>
 
       {/* 3 Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Licensed Entities</p>
-            <h3 className="text-3xl font-black text-slate-800">{totalCount}</h3>
-            <p className="text-[10px] text-slate-400 font-medium">Active in KDB system</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Licensed Entities</p>
+            <h3 className="text-base sm:text-lg font-bold text-slate-800">{totalCount}</h3>
+            <p className="text-[9px] text-slate-400 font-medium">Active in KDB system</p>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-700">
-            <Layers size={22} />
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qualifies for Returns (QFR)</p>
-            <h3 className="text-3xl font-black text-emerald-600">{totalQFR}</h3>
-            <p className="text-[10px] text-emerald-600/70 font-semibold uppercase tracking-wider">Required to file</p>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-            <TrendingUp size={22} />
+          <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-700">
+            <Layers size={18} />
           </div>
         </div>
 
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Exempt / Non-Qualifying (DNQ-R)</p>
-            <h3 className="text-3xl font-black text-amber-600">{totalDNQR}</h3>
-            <p className="text-[10px] text-amber-600/70 font-semibold uppercase tracking-wider">No returns filing required</p>
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Qualifies for Returns (QFR)</p>
+            <h3 className="text-base sm:text-lg font-bold text-emerald-600">{totalQFR}</h3>
+            <p className="text-[9px] text-emerald-600/70 font-semibold uppercase tracking-wider">Required to file</p>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-600">
-            <XCircle size={22} />
+          <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
+            <TrendingUp size={18} />
+          </div>
+        </div>
+
+        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Exempt / Non-Qualifying (DNQ-R)</p>
+            <h3 className="text-base sm:text-lg font-bold text-amber-600">{totalDNQR}</h3>
+            <p className="text-[9px] text-amber-600/70 font-semibold uppercase tracking-wider">No returns filing required</p>
+          </div>
+          <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
+            <XCircle size={18} />
           </div>
         </div>
       </div>
@@ -1042,55 +1046,55 @@ export const LicensedClientsModule: React.FC = () => {
       <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 space-y-6">
         
         {/* Toolbar & Filters */}
-        <div className="flex flex-col lg:flex-row gap-4 justify-between">
-          <div className="flex flex-col sm:flex-row gap-3 flex-grow">
+        <div className="flex flex-col xl:flex-row gap-3 justify-between items-stretch xl:items-center">
+          <div className="flex flex-wrap sm:flex-nowrap gap-2 flex-grow items-center">
             {/* Search */}
-            <div className="relative flex-grow max-w-md">
-              <Search className="absolute left-4.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <div className="relative flex-grow min-w-[200px] max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
               <input
                 type="text"
-                placeholder="Search by client, premise, contact, address..."
+                placeholder="Search clients, premises, contacts..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
-                className="w-full pl-11 pr-5 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs"
+                className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs"
               />
             </div>
             
             {/* Category Filter */}
-            <div className="relative">
+            <div className="relative min-w-[130px]">
               <select
                 value={categoryFilter}
                 onChange={e => setCategoryFilter(e.target.value)}
-                className="appearance-none w-full pl-5 pr-10 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs cursor-pointer"
+                className="appearance-none w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs cursor-pointer"
               >
                 <option value="All">All Categories</option>
                 {categories.map(cat => (
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
-              <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
 
             {/* Levy Filter */}
-            <div className="relative">
+            <div className="relative min-w-[130px]">
               <select
                 value={levyFilter}
                 onChange={e => setLevyFilter(e.target.value)}
-                className="appearance-none w-full pl-5 pr-10 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs cursor-pointer"
+                className="appearance-none w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs cursor-pointer"
               >
                 <option value="All">All Levy Statuses</option>
                 <option value="QFR">Qualifies (QFR)</option>
                 <option value="DNQ-R">Exempt (DNQ-R)</option>
               </select>
-              <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
 
             {/* Status Filter */}
-            <div className="relative">
+            <div className="relative min-w-[120px]">
               <select
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
-                className="appearance-none w-full pl-5 pr-10 py-3 rounded-2xl border bg-slate-50 focus:bg-white focus:ring-4 focus:ring-slate-950/5 outline-none transition-all font-bold text-slate-800 text-xs cursor-pointer"
+                className="appearance-none w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-slate-900/10 outline-none transition-all font-semibold text-slate-800 text-xs cursor-pointer"
               >
                 <option value="All">All Permits</option>
                 <option value="active">Valid Permits</option>
@@ -1098,11 +1102,33 @@ export const LicensedClientsModule: React.FC = () => {
                 <option value="operating">Operating Premises</option>
                 <option value="closed">Closed Premises</option>
               </select>
-              <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {clients.length > 0 && (
+              <button
+                onClick={async () => {
+                  if (!confirm(`Push all ${clients.length} clients to Supabase now?`)) return;
+                  setLoading(true);
+                  try {
+                    await DBService.saveClientsBulk(clients);
+                    await fetchClients();
+                    alert(`Successfully pushed ${clients.length} clients to Supabase!`);
+                  } catch (err: any) {
+                    alert(`Sync failed: ${err?.message || 'Check connection'}`);
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm"
+                title="Push current list of clients directly to Supabase table"
+              >
+                <Database size={13} /> Sync to Supabase
+              </button>
+            )}
             <button
               onClick={() => {
                 setCsvFile(null);
@@ -1110,21 +1136,21 @@ export const LicensedClientsModule: React.FC = () => {
                 setParseErrors([]);
                 setIsImportModalOpen(true);
               }}
-              className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-sm border border-slate-200"
+              className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm border border-slate-200"
             >
-              <Upload size={14} /> Import CSV
+              <Upload size={13} /> Import CSV
             </button>
             <button
               onClick={downloadAllAsCSV}
-              className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-sm border border-slate-200"
+              className="flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm border border-slate-200"
             >
-              <Download size={14} /> Export CSV
+              <Download size={13} /> Export CSV
             </button>
             <button
               onClick={openAddModal}
-              className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded-2xl transition-all shadow-md"
+              className="flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-md"
             >
-              <Plus size={14} /> Add Client
+              <Plus size={13} /> Add Client
             </button>
           </div>
         </div>
@@ -1572,6 +1598,8 @@ export const LicensedClientsModule: React.FC = () => {
                     <input
                       required
                       type="date"
+                      min="2021-01-01"
+                      max={`${new Date().getFullYear() + 1}-12-31`}
                       value={expiryDate}
                       onChange={e => {
                         const newDate = e.target.value;

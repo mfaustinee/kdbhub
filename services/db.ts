@@ -111,27 +111,41 @@ const safeSetLocalStorage = (key: string, value: string) => {
 // Custom translators for LicensedClient to map cleanly to the 19 actual Supabase columns
 const clientToDb = (client: any) => {
   if (!client) return client;
-  const pNo = client.permitNumber || client.permitnumber || client.id || '';
+  const pNo = String(client.permitNumber || client.permitnumber || client.id || '').trim();
+  const rawId = String(client.id || '').trim();
+  const idVal = rawId || (pNo ? `${pNo}_${Math.random().toString(36).substring(2, 6)}` : `CLI-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
+
+  let branchesVal: any[] = [];
+  if (Array.isArray(client.branches)) {
+    branchesVal = client.branches;
+  } else if (typeof client.branches === 'string' && client.branches.trim() !== '') {
+    try {
+      branchesVal = JSON.parse(client.branches);
+    } catch {
+      branchesVal = [];
+    }
+  }
+
   const out: any = {
-    id: client.id || pNo,
-    clientname: client.clientName ?? client.clientname ?? '',
-    premisename: client.premiseName ?? client.premisename ?? '',
-    premisecategory: client.premiseCategory ?? client.premisecategory ?? 'Milk Bar',
+    id: idVal,
+    clientname: String(client.clientName ?? client.clientname ?? '').trim(),
+    premisename: String(client.premiseName ?? client.premisename ?? '').trim(),
+    premisecategory: String(client.premiseCategory ?? client.premisecategory ?? 'Milk Bar').trim(),
     startyear: Number(client.startYear ?? client.startyear ?? new Date().getFullYear()),
-    startmonth: String(client.startMonth ?? client.startmonth ?? 'January'),
+    startmonth: String(client.startMonth ?? client.startmonth ?? 'January').trim(),
     endyear: (client.endYear !== undefined && client.endYear !== null && !isNaN(Number(client.endYear))) ? Number(client.endYear) : null,
-    endmonth: client.endMonth ?? client.endmonth ?? null,
-    tel: client.tel ?? '',
-    contactperson: client.contactPerson ?? client.contactperson ?? '',
-    location: client.location ?? '',
-    county: client.county ?? '',
+    endmonth: client.endMonth ? String(client.endMonth).trim() : null,
+    tel: String(client.tel ?? '').trim(),
+    contactperson: String(client.contactPerson ?? client.contactperson ?? '').trim(),
+    location: String(client.location ?? '').trim() || 'N/A',
+    county: String(client.county ?? '').trim() || 'N/A',
     coolingcapacity: (client.coolingCapacity !== undefined && client.coolingCapacity !== null && !isNaN(Number(client.coolingCapacity))) ? Number(client.coolingCapacity) : null,
-    permitstatus: client.permitStatus ?? client.permitstatus ?? 'valid',
-    operationalstatus: client.operationalStatus ?? client.operationalstatus ?? 'operating',
-    levyinfo: client.levyInfo ?? client.levyinfo ?? '',
-    expirydate: client.expiryDate ?? client.expirydate ?? '',
+    permitstatus: String(client.permitStatus ?? client.permitstatus ?? 'valid').trim(),
+    operationalstatus: String(client.operationalStatus ?? client.operationalstatus ?? 'operating').trim(),
+    levyinfo: String(client.levyInfo ?? client.levyinfo ?? '').trim(),
+    expirydate: String(client.expiryDate ?? client.expirydate ?? '').trim(),
     permitnumber: pNo,
-    branches: typeof client.branches === 'string' ? client.branches : JSON.stringify(client.branches || [])
+    branches: branchesVal
   };
   return out;
 };
@@ -139,22 +153,22 @@ const clientToDb = (client: any) => {
 const returnToDb = (r: any) => {
   if (!r) return r;
   return {
-    id: r.id || `RET-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-    clientid: r.clientId ?? r.clientid ?? '',
-    clientname: r.clientName ?? r.clientname ?? '',
+    id: String(r.id || `RET-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`).trim(),
+    clientid: String(r.clientId ?? r.clientid ?? '').trim(),
+    clientname: String(r.clientName ?? r.clientname ?? '').trim(),
     year: Number(r.year ?? 2026),
-    period: String(r.period ?? 'January'),
+    period: String(r.period ?? 'January').trim(),
     qty: Number(r.qty ?? 0),
     invoiceamount: Number(r.invoiceAmount ?? r.invoiceamount ?? 0),
-    returndate: String(r.returnDate ?? r.returndate ?? new Date().toISOString().slice(0, 10)),
+    returndate: String(r.returnDate ?? r.returndate ?? new Date().toISOString().slice(0, 10)).trim(),
     paymentamount: Number(r.paymentAmount ?? r.paymentamount ?? 0),
-    paymentdate: String(r.paymentDate ?? r.paymentdate ?? ''),
-    txnref: r.txnRef ?? r.txnref ?? '',
+    paymentdate: String(r.paymentDate ?? r.paymentdate ?? '').trim(),
+    txnref: String(r.txnRef ?? r.txnref ?? '').trim(),
     lesscf: Number(r.lessCF ?? r.lesscf ?? 0),
     outstandingbalance: Number(r.outstandingBalance ?? r.outstandingbalance ?? 0),
     agingdays: Number(r.agingDays ?? r.agingdays ?? 0),
-    paymentstatus: String(r.paymentStatus ?? r.paymentstatus ?? 'Unpaid'),
-    comments: r.comments ?? ''
+    paymentstatus: String(r.paymentStatus ?? r.paymentstatus ?? 'Unpaid').trim(),
+    comments: String(r.comments ?? '').trim()
   };
 };
 
@@ -1645,6 +1659,29 @@ export const DBService = {
     try {
       console.log("[DBService] Attempting Supabase upsert to 'licensed_clients' table...", { id: clientRecord.id });
       const dbClient = clientToDb(clientRecord);
+
+      // Match against existing record by ID, permit number, or clientName + premiseName to ensure overwriting instead of duplicating
+      try {
+        const { data: existingList } = await client
+          .from('licensed_clients')
+          .select('id, permitnumber, clientname, premisename');
+        
+        if (existingList && existingList.length > 0) {
+          const match = existingList.find((r: any) => 
+            (r.id && dbClient.id && r.id === dbClient.id) ||
+            (r.permitnumber && dbClient.permitnumber && r.permitnumber.toString().trim().toLowerCase() === dbClient.permitnumber.toString().trim().toLowerCase()) ||
+            (r.clientname && dbClient.clientname && r.clientname.toString().trim().toLowerCase() === dbClient.clientname.toString().trim().toLowerCase() && 
+             r.premisename && dbClient.premisename && r.premisename.toString().trim().toLowerCase() === dbClient.premisename.toString().trim().toLowerCase())
+          );
+          if (match && match.id) {
+            dbClient.id = match.id;
+            clientRecord.id = match.id;
+          }
+        }
+      } catch (matchErr) {
+        console.warn("[DBService] Non-fatal error finding existing client ID match:", matchErr);
+      }
+
       const { error } = await client
         .from('licensed_clients')
         .upsert(dbClient);
@@ -1752,7 +1789,15 @@ export const DBService = {
 
     try {
       console.log("[DBService] Attempting Supabase bulk upsert...", clientsList.length);
-      const dbClients = clientsList.map(c => clientToDb(c));
+      const seenIds = new Set<string>();
+      const dbClients = clientsList.map((c, idx) => {
+        const dbObj = clientToDb(c);
+        if (!dbObj.id || seenIds.has(dbObj.id)) {
+          dbObj.id = `${dbObj.permitnumber || dbObj.id || 'CLI'}_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
+        }
+        seenIds.add(dbObj.id);
+        return dbObj;
+      });
       
       // Batch in chunks of 50 for max reliability
       const chunkSize = 50;
@@ -2017,7 +2062,7 @@ export const DBService = {
     }
   },
 
-  async getValidations(): Promise<DataValidation[]> {
+  async getValidations(forceRefresh: boolean = false): Promise<DataValidation[]> {
     const cached = localStorage.getItem('kdb_validations_cache');
 
     const template: DataValidation = {
@@ -2073,6 +2118,7 @@ export const DBService = {
             const mCount = r.months_count || r.monthsCount || (Array.isArray(r.raw_data?.sales) && r.raw_data.sales.length > 0 ? r.raw_data.sales.length : 1);
             return { ...item, monthsCount: mCount };
           });
+
           const mapped2 = list2.map(r => {
             let year = 2026;
             let period = r.validation_period || '';
@@ -2091,7 +2137,7 @@ export const DBService = {
               }
             }
 
-            const raw = r.raw_data || {};
+            const raw = typeof r.raw_data === 'string' ? (() => { try { return JSON.parse(r.raw_data); } catch { return {}; } })() : (r.raw_data || {});
             const qDeclared = raw.sales?.[0]?.qtyDeclared || '';
             const bPrice = parseFloat(raw.sales?.[0]?.buyingPrice) || 0;
             const total = raw.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0;
@@ -2116,7 +2162,9 @@ export const DBService = {
               validatedAt: r.date || '',
               status: 'Approved' as const,
               remarks: raw.comments || '',
-              monthsCount: mCount
+              monthsCount: mCount,
+              pdfPath: r.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf,
+              rawData: raw
             };
           });
 
@@ -2140,7 +2188,7 @@ export const DBService = {
       }
     };
 
-    if (cached) {
+    if (!forceRefresh && cached) {
       setTimeout(revalidate, 50);
       try {
         return JSON.parse(cached);
@@ -2187,7 +2235,7 @@ export const DBService = {
           }
         }
 
-        const raw = r.raw_data || {};
+        const raw = typeof r.raw_data === 'string' ? (() => { try { return JSON.parse(r.raw_data); } catch { return {}; } })() : (r.raw_data || {});
         const qDeclared = raw.sales?.[0]?.qtyDeclared || '';
         const bPrice = parseFloat(raw.sales?.[0]?.buyingPrice) || 0;
         const total = raw.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0;
@@ -2212,7 +2260,9 @@ export const DBService = {
           validatedAt: r.date || '',
           status: 'Approved' as const,
           remarks: raw.comments || '',
-          monthsCount: mCount
+          monthsCount: mCount,
+          pdfPath: r.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf,
+          rawData: raw
         };
       });
 
@@ -2250,40 +2300,67 @@ export const DBService = {
       updateLocalStorageCollection('kdb_validations_cache', validation, 'id');
     };
 
-    // Update local validations cache immediately to prevent layout shifts or stale loads
+    // 1. Always update local validations cache immediately to prevent layout shifts or stale loads
+    let list: DataValidation[] = [];
     const currentCache = localStorage.getItem('kdb_validations_cache');
     if (currentCache) {
       try {
-        const list = JSON.parse(currentCache) as DataValidation[];
-        const index = list.findIndex(v => v.id === validation.id);
-        if (index > -1) list[index] = validation;
-        else list.push(validation);
-        localStorage.setItem('kdb_validations_cache', JSON.stringify(list));
+        list = JSON.parse(currentCache) as DataValidation[];
       } catch (e) {
-        console.error("[DBService] Error writing to validation cache", e);
+        list = [];
       }
     }
+    const index = list.findIndex(v => v.id === validation.id);
+    if (index > -1) list[index] = validation;
+    else list.unshift(validation); // add to beginning
+    safeSetLocalStorage('kdb_validations_cache', JSON.stringify(list));
 
+    // 2. Always persist to local backend API file store
+    await saveLocal();
+
+    // 3. Persist to Supabase if configured
     const client = await getSupabase();
-    if (!client) {
-      await saveLocal();
-      return;
-    }
+    if (!client) return;
 
     try {
       const dbObj = toDb(validation);
-      const { error } = await client
+      
+      // Save to data_validations table
+      await client
         .from('data_validations')
         .upsert(dbObj);
 
-      if (error) {
-        console.warn("[DBService] Supabase saveValidation failed, falling back to local.", error);
-        await saveLocal();
-        return;
+      // Save to kdb_validations table
+      let valPeriod = validation.period || '';
+      if (valPeriod && validation.year && !valPeriod.includes(String(validation.year))) {
+        valPeriod = `${valPeriod} ${validation.year}`;
+      }
+      const rawData = validation.rawData || { ...validation };
+      const kdbRecordId = validation.id || `VAL_${(validation.permitNo || 'NO_PERMIT').replace(/[^a-zA-Z0-9]/g, '_')}_${(valPeriod || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+      const { error: kdbErr } = await client
+        .from('kdb_validations')
+        .upsert({
+          id: kdbRecordId,
+          validation_period: valPeriod,
+          date: validation.validatedAt,
+          raw_data: rawData,
+          permit_no: validation.permitNo,
+          dbo_name: validation.clientName,
+          premise_name: validation.premiseName,
+          location: validation.location,
+          category: validation.category,
+          contacts: validation.contacts,
+          pdf_path: validation.pdfPath
+        });
+
+      if (kdbErr) {
+        console.error("[DBService] Supabase kdb_validations upsert ERROR:", kdbErr.message);
+      } else {
+        console.log("[DBService] Supabase kdb_validations upsert SUCCESS:", kdbRecordId);
       }
     } catch (e) {
-      console.warn("[DBService] Supabase saveValidation exception, falling back to local.", e);
-      await saveLocal();
+      console.warn("[DBService] Supabase saveValidation exception:", e);
     }
   },
 

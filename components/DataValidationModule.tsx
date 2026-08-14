@@ -3,9 +3,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
-import { supabase } from './lib/supabase';
+import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
-import { LicensedClient, ClientReturn, formatDateToDDMMYYYY, formatPermitNumber } from '../types';
+import { PreviousValidationsTracker } from './PreviousValidationsTracker';
+import { LicensedClient, ClientReturn, DataValidation, formatDateToDDMMYYYY, formatPermitNumber, clampYear } from '../types';
 import { 
   ClipboardCheck, 
   Database, 
@@ -26,7 +27,11 @@ import {
   Image as ImageIcon,
   History,
   Info,
-  Edit2
+  Edit2,
+  Building2,
+  RotateCcw,
+  ShieldCheck,
+  ArrowDown
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -163,23 +168,71 @@ const getLocalDate = () => {
   return localDate.toISOString().split('T')[0];
 };
 
+const isClosedStatus = (status?: string): boolean => {
+  if (!status) return false;
+  const s = status.toLowerCase().trim();
+  return (
+    s === 'closed' ||
+    s === 'closed down' ||
+    s === 'closeddown' ||
+    s === 'cessation' ||
+    s === 'ceased' ||
+    s === 'inactive' ||
+    s === 'non-operational' ||
+    s === 'non operational' ||
+    s.includes('close') ||
+    s.includes('ceas')
+  );
+};
+
+const getCategoryShortCode = (cat: string): string => {
+  if (!cat) return '';
+  const s = cat.toLowerCase().trim();
+  if (s.includes('cooling plant') || s.includes('coolingplant') || s.includes('cp>') || s.includes('cp<') || s.includes('cp ')) return 'coolingplant';
+  if (s.includes('importer') || s.includes('imp')) return 'importer';
+  if (s.includes('distributor') || s.includes('dist')) return 'distributor';
+  if (s.includes('contractor') || s.includes('cont')) return 'contractor';
+  if (s.includes('manufacturer') || s.includes('mfr')) return 'manufacturer';
+  return s.replace(/[^a-z0-9]/g, '');
+};
+
 const formatToYYYYMMDD = (val: string): string => {
   if (!val) return '';
   const trimmed = val.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
-    const [d, m, y] = trimmed.split('/');
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  if (!trimmed || trimmed.toLowerCase() === 'not filed' || trimmed.toLowerCase() === 'n/a') return '';
+
+  let day = '01';
+  let month = '01';
+  let yearNum = new Date().getFullYear();
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    const parts = trimmed.split('T')[0].split('-');
+    yearNum = parseInt(parts[0], 10);
+    month = parts[1].padStart(2, '0');
+    day = parts[2].padStart(2, '0');
+  } else if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(trimmed)) {
+    const parts = trimmed.split('/');
+    day = parts[0].padStart(2, '0');
+    month = parts[1].padStart(2, '0');
+    yearNum = parseInt(parts[2], 10);
+  } else if (/^\d{1,2}-\d{1,2}-\d{2,4}$/.test(trimmed)) {
+    const parts = trimmed.split('-');
+    day = parts[0].padStart(2, '0');
+    month = parts[1].padStart(2, '0');
+    yearNum = parseInt(parts[2], 10);
+  } else {
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      day = String(parsed.getDate()).padStart(2, '0');
+      month = String(parsed.getMonth() + 1).padStart(2, '0');
+      yearNum = parsed.getFullYear();
+    } else {
+      return '';
+    }
   }
-  if (/^\d{2}-\d{2}-\d{4}$/.test(trimmed)) {
-    const [d, m, y] = trimmed.split('-');
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-  const parsed = new Date(trimmed);
-  if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString().split('T')[0];
-  }
-  return trimmed;
+
+  const clampedYear = clampYear(yearNum);
+  return `${clampedYear}-${month}-${day}`;
 };
 
 const normStr = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -199,11 +252,109 @@ const MONTH_MAP: Record<string, string> = {
   dec: 'december', december: 'december', '12': 'december'
 };
 
+export const toSentenceCase = (str?: string): string => {
+  if (!str) return '';
+  return str
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
 const normMonth = (m?: string | number) => {
   if (!m) return '';
   const str = m.toString().toLowerCase().trim();
   const firstToken = str.split(/[\s_\-/]+/)[0];
   return MONTH_MAP[firstToken] || MONTH_MAP[str] || str;
+};
+
+export function getNextValidationMonth(latestPeriod?: string): string | null {
+  if (!latestPeriod) return null;
+  const clean = latestPeriod.trim();
+  if (!clean) return null;
+
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  const monthAbbrs = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+  // Extract year if present
+  const yearMatch = clean.match(/\b(20\d\d)\b/);
+  let year = yearMatch ? parseInt(yearMatch[1], 10) : new Date().getFullYear();
+  if (isNaN(year)) {
+    year = new Date().getFullYear();
+  }
+
+  // Find month index
+  let monthIndex = -1;
+  const lower = clean.toLowerCase();
+  for (let i = 0; i < 12; i++) {
+    const mName = months[i].toLowerCase();
+    const mAbbr = monthAbbrs[i];
+    const regex = new RegExp(`\\b(${mName}|${mAbbr})\\b`, 'i');
+    if (regex.test(clean) || lower.includes(mName)) {
+      monthIndex = i;
+      break;
+    }
+  }
+
+  if (monthIndex === -1) {
+    const tokens = clean.split(/[\s_\-/,]+/);
+    for (const tok of tokens) {
+      const tNorm = tok.toLowerCase().trim();
+      const idx = months.findIndex(m => m.toLowerCase() === tNorm || m.toLowerCase().startsWith(tNorm));
+      if (idx !== -1 && tNorm.length >= 3) {
+        monthIndex = idx;
+        break;
+      }
+    }
+  }
+
+  if (monthIndex !== -1) {
+    let nextMonthIndex = monthIndex + 1;
+    let nextYear = isNaN(year) ? new Date().getFullYear() : year;
+    if (nextMonthIndex > 11) {
+      nextMonthIndex = 0;
+      nextYear += 1;
+    }
+    return `${months[nextMonthIndex]} ${nextYear}`;
+  }
+
+  return null;
+}
+
+const getNextMonthToValidate = (latestPeriod: string): string | null => {
+  return getNextValidationMonth(latestPeriod);
+};
+
+const getPeriodTimestamp = (periodStr: string, fallbackDate?: string): number => {
+  if (periodStr) {
+    const clean = periodStr.trim();
+    const parts = clean.split(/\s+/);
+    if (parts.length >= 2) {
+      const month = parts[0];
+      const year = parts[parts.length - 1];
+      const parsed = new Date(`${month} 1, ${year}`);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.getTime();
+      }
+    }
+    const parsed = new Date(`${clean} 1`);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.getTime();
+    }
+    const yearMatch = clean.match(/\b(20\d\d)\b/);
+    if (yearMatch) {
+      return parseInt(yearMatch[1], 10) * 10000;
+    }
+  }
+  if (fallbackDate) {
+    const t = new Date(fallbackDate).getTime();
+    if (!isNaN(t)) return t;
+  }
+  return 0;
 };
 
 const findMatchingReturn = (
@@ -368,7 +519,15 @@ export function DataValidationModule() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState<{ type: 'success' | 'error' | null; message: string }>({ type: null, message: '' });
   const [step, setStep] = useState(0);
+
+  // Scroll to top of the page smoothly whenever the user changes step (next / back)
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+  }, [step]);
+
   const [pdfPreview, setPdfPreview] = useState<string | null>(null);
+  const [pdfModalUrl, setPdfModalUrl] = useState<string | null>(null);
+  const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [lastCollections, setLastCollections] = useState<{ month: string, year: string, date: string, fullPeriod: string, displayString: string, matchedPremise?: string, pdfPath?: string, rawData?: any }[]>([]);
   const [isCheckingHistory, setIsCheckingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -389,6 +548,7 @@ export function DataValidationModule() {
   const [hasDraft, setHasDraft] = useState(false);
   const [failedFields, setFailedFields] = useState<string[]>([]);
   const [isAmendment, setIsAmendment] = useState(false);
+  const [hasAutofilledDbo, setHasAutofilledDbo] = useState(false);
 
   const [globalUnit, setGlobalUnit] = useState<'L' | 'Kg'>('L');
 
@@ -528,10 +688,14 @@ export function DataValidationModule() {
     verifyApi();
   }, []);
 
-  // Fetch last 3 months history for the Premise
+  // Fetch last 3 months history for Premise Validation & PDF History
   useEffect(() => {
     const fetchHistory = async () => {
-      if (!supabase || !formData.premiseName || formData.premiseName.trim().length < 3) {
+      const pName = (formData.premiseName || '').trim();
+      const pNo = (formData.permitNo || '').trim();
+      const dbo = (formData.dboName || '').trim();
+
+      if (!pName && !pNo && !dbo) {
         setLastCollections([]);
         setHistoryError(null);
         return;
@@ -539,222 +703,140 @@ export function DataValidationModule() {
 
       setIsCheckingHistory(true);
       setHistoryError(null);
+
       try {
-        const searchTerm = formData.premiseName.trim();
-        // Use partial matching with wildcards for long names
-        const { data, error } = await supabase
-          .from('kdb_validations')
-          .select('validation_period, date, premise_name, raw_data, pdf_path')
-          .ilike('premise_name', `%${searchTerm}%`)
-          .order('date', { ascending: false })
-          .limit(50); // Fetch more records to ensure we get all historical months
-
-        if (error) throw error;
-
-        if (data) {
-          const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any }[] = [];
-          
-          const extractPeriodsFromString = (str: string): { period: string; score: number }[] => {
-            if (!str) return [];
-            const results: { period: string; score: number }[] = [];
+        const allVals = await DBService.getValidations();
+        let sbVals: any[] = [];
+        if (supabase) {
+          try {
+            const searchTerms: string[] = [];
+            if (pName && pName.length >= 2) searchTerms.push(`premise_name.ilike.%${pName.replace(/["']/g, '').trim()}%`);
+            if (pNo && pNo.length >= 2) searchTerms.push(`permit_no.ilike.%${pNo.replace(/["']/g, '').trim()}%`);
+            if (dbo && dbo.length >= 2) searchTerms.push(`dbo_name.ilike.%${dbo.replace(/["']/g, '').trim()}%`);
             
-            const fullMonths = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
-            const shortMonths = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-            
-            // Clean up and lowercase to keep parsing simple
-            const cleanStr = str.toLowerCase().replace(/[^a-z0-9]/g, ' ');
-            const words = cleanStr.split(/\s+/).filter(Boolean);
-            
-            // Find 4-digit years or 2-digit years
-            const years: number[] = [];
-            words.forEach(w => {
-              const num = parseInt(w, 10);
-              if (!isNaN(num)) {
-                if (num >= 2000 && num <= 2100) {
-                  years.push(num);
-                } else if (num >= 20 && num <= 99 && w.length === 2) {
-                  years.push(2000 + num);
-                }
-              }
-            });
-
-            const defaultYear = years.length > 0 ? years[years.length - 1] : new Date().getFullYear();
-            
-            // Find all month words
-            const foundMonths: { name: string; index: number; wordPosition: number }[] = [];
-            words.forEach((w, idx) => {
-              let mIdx = fullMonths.indexOf(w);
-              if (mIdx === -1) {
-                if (w === 'sept') {
-                  mIdx = 8;
-                } else {
-                  mIdx = shortMonths.indexOf(w);
-                }
-              }
-              if (mIdx !== -1) {
-                foundMonths.push({
-                  name: fullMonths[mIdx],
-                  index: mIdx,
-                  wordPosition: idx
-                });
-              }
-            });
-
-            if (foundMonths.length === 0) {
-              return [];
+            if (searchTerms.length > 0) {
+              const { data: sbData } = await supabase
+                .from('kdb_validations')
+                .select('*')
+                .or(searchTerms.join(','))
+                .order('date', { ascending: false })
+                .limit(25);
+              if (sbData) sbVals = sbData;
             }
-
-            const isRange = str.includes('-') || str.toLowerCase().includes('to') || str.toLowerCase().includes('through');
-            
-            // Handle cross-year and single-year ranges like "Oct - Dec 24" or "Oct 24 to Feb 25"
-            if (foundMonths.length === 2 && isRange) {
-              const m1 = foundMonths[0];
-              const m2 = foundMonths[1];
-              
-              const getYearForMonth = (wordPos: number) => {
-                if (years.length === 0) return defaultYear;
-                let closestYear = years[0];
-                let minDistance = Infinity;
-                words.forEach((w, wIdx) => {
-                  const num = parseInt(w, 10);
-                  if (!isNaN(num)) {
-                    let yVal = num;
-                    if (num >= 20 && num <= 99 && w.length === 2) {
-                      yVal = 2000 + num;
-                    }
-                    if (yVal >= 2000 && yVal <= 2100) {
-                      const dist = Math.abs(wIdx - wordPos);
-                      if (dist < minDistance) {
-                        minDistance = dist;
-                        closestYear = yVal;
-                      }
-                    }
-                  }
-                });
-                return closestYear;
-              };
-
-              const y1 = getYearForMonth(m1.wordPosition);
-              const y2 = getYearForMonth(m2.wordPosition);
-              const score1 = y1 * 12 + m1.index;
-              const score2 = y2 * 12 + m2.index;
-              
-              if (score1 <= score2) {
-                for (let s = score1; s <= score2; s++) {
-                  const y = Math.floor(s / 12);
-                  const mIdx = s % 12;
-                  const monthName = fullMonths[mIdx];
-                  const capMonthName = monthName.charAt(0).toUpperCase() + monthName.slice(1);
-                  results.push({
-                    period: `${capMonthName} ${y}`,
-                    score: s
-                  });
-                }
-                return results;
-              }
-            }
-
-            // Normal individual mapping
-            foundMonths.forEach((m) => {
-              let associatedYear = defaultYear;
-              if (years.length > 0) {
-                let minDistance = Infinity;
-                words.forEach((w, wIdx) => {
-                  const num = parseInt(w, 10);
-                  if (!isNaN(num)) {
-                    let yVal = num;
-                    if (num >= 20 && num <= 99 && w.length === 2) {
-                      yVal = 2000 + num;
-                    }
-                    if (yVal >= 2000 && yVal <= 2100) {
-                      const dist = Math.abs(wIdx - m.wordPosition);
-                      if (dist < minDistance) {
-                        minDistance = dist;
-                        associatedYear = yVal;
-                      }
-                    }
-                  }
-                });
-              }
-
-              const capMonthName = m.name.charAt(0).toUpperCase() + m.name.slice(1);
-              results.push({
-                period: `${capMonthName} ${associatedYear}`,
-                score: associatedYear * 12 + m.index
-              });
-            });
-
-            return results;
-          };
-
-          data.forEach(item => {
-            const raw = item.raw_data as any;
-            const periodsInThisRecord: string[] = [];
-            
-            if (raw) {
-              const isCoolingPlant = raw.category === 'CP>5,000 L/D' || raw.category === 'CP<5,000 L/D' || raw.category === 'Processor';
-              
-              if (isCoolingPlant && !raw.hasLocalSales && raw.intakes && raw.intakes.length > 0) {
-                raw.intakes.forEach((i: any) => {
-                  if (i.month && i.year) {
-                    periodsInThisRecord.push(`${i.month} ${i.year}`);
-                  }
-                });
-              } else if (raw.sales && raw.sales.length > 0) {
-                raw.sales.forEach((s: any) => {
-                  if (s.month && s.year) {
-                    periodsInThisRecord.push(`${s.month} ${s.year}`);
-                  }
-                });
-              }
-            }
-            
-            // Always fallback / include the validation_period itself
-            if (item.validation_period) {
-              periodsInThisRecord.push(item.validation_period);
-            }
-            
-            // Score and parse each period
-            periodsInThisRecord.forEach(p => {
-              const parsed = extractPeriodsFromString(p);
-              parsed.forEach(res => {
-                allExtractedMonths.push({ 
-                  period: res.period, 
-                  pdfPath: item.pdf_path, 
-                  score: res.score,
-                  rawData: item.raw_data
-                });
-              });
-            });
-          });
-
-          // Deduplicate based on period, keeping the one with a PDF if possible
-          const deduplicated: Record<string, { period: string; pdfPath?: string; score: number; rawData?: any }> = {};
-          allExtractedMonths.forEach(m => {
-            const key = m.period.toLowerCase();
-            if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath)) {
-              deduplicated[key] = m;
-            }
-          });
-
-          // Convert to array and sort descending by chronological score (newest first)
-          const sortedList = Object.values(deduplicated).sort((a, b) => b.score - a.score);
-
-          // Get absolute top 3 newest months
-          const top3 = sortedList.slice(0, 3);
-
-          const history = top3.map(m => ({
-            month: '', 
-            year: '',
-            date: '',
-            fullPeriod: m.period,
-            displayString: m.period,
-            matchedPremise: data[0]?.premise_name,
-            pdfPath: m.pdfPath,
-            rawData: m.rawData
-          }));
-          setLastCollections(history);
+          } catch (spErr) {
+            console.warn('[fetchHistory] Supabase direct query note:', spErr);
+          }
         }
+
+        const pNorm = normStr(pName);
+        const pNoNorm = normStr(pNo);
+        const dboNorm = normStr(dbo);
+
+        const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any; matchedPremise?: string }[] = [];
+
+        if (allVals && allVals.length > 0) {
+          allVals.forEach(v => {
+            const raw = v.rawData || {};
+            const vPName = normStr(v.premiseName || raw.premiseName || raw.premise_name);
+            const vPNo = normStr(v.permitNo || v.clientId || raw.permitNo || raw.permit_no);
+            const vDbo = normStr(v.clientName || raw.dboName || raw.dbo_name || raw.clientName);
+
+            // Independent matching for premise name, permit number, or DBO name
+            const isPremiseMatch = pNorm && (vPName === pNorm || vPName.includes(pNorm) || pNorm.includes(vPName));
+            const isPermitMatch = pNoNorm && (vPNo === pNoNorm || vPNo.includes(pNoNorm));
+            const isDboMatch = dboNorm && (vDbo === dboNorm || vDbo.includes(dboNorm) || dboNorm.includes(vDbo));
+
+            const isMatch = isPremiseMatch || isPermitMatch || isDboMatch;
+
+            if (isMatch) {
+              const pdfRef = v.pdfPath || raw.pdf_path || raw.pdfPath || raw.pdf;
+              let fullPeriod = v.period || raw.validationPeriod || raw.period || '';
+              if (fullPeriod) {
+                fullPeriod = fullPeriod.trim();
+                if (v.year && !fullPeriod.includes(String(v.year))) {
+                  fullPeriod = `${fullPeriod} ${v.year}`;
+                }
+              } else if (v.validatedAt || raw.date) {
+                const d = new Date(v.validatedAt || raw.date);
+                if (!isNaN(d.getTime())) {
+                  fullPeriod = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
+                }
+              }
+
+              if (fullPeriod) {
+                allExtractedMonths.push({
+                  period: fullPeriod,
+                  pdfPath: pdfRef,
+                  score: getPeriodTimestamp(fullPeriod, v.validatedAt || raw.date),
+                  rawData: raw,
+                  matchedPremise: v.premiseName || raw.premiseName || pName
+                });
+              }
+            }
+          });
+        }
+
+        if (sbVals && sbVals.length > 0) {
+          sbVals.forEach(v => {
+            const raw = typeof v.raw_data === 'string' ? (() => { try { return JSON.parse(v.raw_data); } catch { return {}; } })() : (v.raw_data || {});
+            const vPName = normStr(v.premise_name || raw.premiseName || raw.premise_name);
+            const vPNo = normStr(v.permit_no || raw.permitNo || raw.permit_no);
+            const vDbo = normStr(v.dbo_name || raw.dboName || raw.dbo_name);
+
+            // Independent matching
+            const isPremiseMatch = pNorm && (vPName === pNorm || vPName.includes(pNorm) || pNorm.includes(vPName));
+            const isPermitMatch = pNoNorm && (vPNo === pNoNorm || vPNo.includes(pNoNorm));
+            const isDboMatch = dboNorm && (vDbo === dboNorm || vDbo.includes(dboNorm) || dboNorm.includes(vDbo));
+
+            const isMatch = isPremiseMatch || isPermitMatch || isDboMatch;
+
+            if (isMatch) {
+              const pdfRef = v.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf;
+              let fullPeriod = v.validation_period || raw.validationPeriod || raw.period || '';
+              if (fullPeriod) {
+                fullPeriod = fullPeriod.trim();
+              } else if (v.date || raw.date) {
+                const d = new Date(v.date || raw.date);
+                if (!isNaN(d.getTime())) {
+                  fullPeriod = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
+                }
+              }
+
+              if (fullPeriod) {
+                allExtractedMonths.push({
+                  period: fullPeriod,
+                  pdfPath: pdfRef,
+                  score: getPeriodTimestamp(fullPeriod, v.date || raw.date),
+                  rawData: raw,
+                  matchedPremise: v.premise_name || raw.premiseName || pName
+                });
+              }
+            }
+          });
+        }
+
+        // Deduplicate by normalized period
+        const deduplicated: Record<string, any> = {};
+        allExtractedMonths.forEach(m => {
+          const key = m.period.toLowerCase().trim();
+          if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath) || m.score > deduplicated[key].score) {
+            deduplicated[key] = m;
+          }
+        });
+
+        const sortedList = Object.values(deduplicated).sort((a: any, b: any) => b.score - a.score);
+        const top3 = sortedList.slice(0, 3);
+
+        const history = top3.map((m: any) => ({
+          month: '', year: '', date: '',
+          fullPeriod: m.period,
+          displayString: m.period.replace(/(\b\d{4}\b)\s+\1/g, '$1'),
+          matchedPremise: m.matchedPremise || pName,
+          pdfPath: m.pdfPath,
+          rawData: m.rawData
+        }));
+
+        setLastCollections(history);
       } catch (err: any) {
         console.error('Error fetching history:', err);
         setHistoryError(err.message || 'Failed to fetch history');
@@ -763,14 +845,20 @@ export function DataValidationModule() {
       }
     };
 
-    const timer = setTimeout(fetchHistory, 800); // Debounce lookup
+    const timer = setTimeout(fetchHistory, 400); // 400ms debounce
     return () => clearTimeout(timer);
-  }, [formData.premiseName]);
+  }, [formData.premiseName, formData.permitNo, formData.dboName]);
 
-  // Fetch previous validations by DBO Name
+  // Fetch previous validations by DBO Name (loosened matching)
   useEffect(() => {
     const fetchDboHistory = async () => {
-      if (!supabase || !formData.dboName || formData.dboName.trim().length < 3) {
+      if (hasAutofilledDbo) {
+        setIsCheckingDbo(false);
+        return;
+      }
+
+      const searchTerm = (formData.dboName || '').trim();
+      if (!searchTerm || searchTerm.length < 2) {
         setLastDboRecords([]);
         setDboError(null);
         return;
@@ -778,30 +866,142 @@ export function DataValidationModule() {
 
       setIsCheckingDbo(true);
       setDboError(null);
-      try {
-        const searchTerm = formData.dboName.trim();
-        const { data, error } = await supabase
-          .from('kdb_validations')
-          .select('dbo_name, premise_name, category, permit_no, location, county, raw_data, date')
-          .ilike('dbo_name', `%${searchTerm}%`)
-          .order('date', { ascending: false })
-          .limit(10);
 
-        if (error) throw error;
-        
-        // Deduplicate records by unique premise, permit to yield cleanest autofill options
-        if (data) {
-          const uniqueMap: Record<string, any> = {};
-          data.forEach(item => {
-            const key = `${item.premise_name || ''}-${item.permit_no || ''}`.toLowerCase().trim();
-            if (!uniqueMap[key]) {
-              uniqueMap[key] = item;
+      try {
+        const uniqueMap: Record<string, any> = {};
+        const cleanSearch = searchTerm.replace(/["']/g, '').trim();
+        const searchTokens = cleanSearch.toLowerCase().split(/\s+/).filter(t => t.length >= 2);
+
+        // Build set of closed client identifiers
+        const closedSet = new Set(
+          (clients || [])
+            .filter(c => isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus))
+            .flatMap(c => [
+              normStr(c.clientName),
+              normStr(c.premiseName),
+              normStr(c.id),
+              normStr(c.permitNumber)
+            ])
+            .filter(Boolean)
+        );
+
+        // A. Query Supabase
+        if (supabase) {
+          try {
+            const { data, error } = await supabase
+              .from('kdb_validations')
+              .select('dbo_name, premise_name, category, permit_no, location, county, raw_data, date')
+              .ilike('dbo_name', `%${cleanSearch}%`)
+              .order('date', { ascending: false })
+              .limit(15);
+
+            if (!error && data) {
+              data.forEach(item => {
+                const itemDbo = normStr(item.dbo_name);
+                const itemPrem = normStr(item.premise_name);
+                const itemPerm = normStr(item.permit_no);
+                if (closedSet.has(itemDbo) || closedSet.has(itemPrem) || closedSet.has(itemPerm)) {
+                  return; // Skip closed clients/premises
+                }
+                const key = `${item.premise_name || ''}-${item.permit_no || ''}`.toLowerCase().trim();
+                if (!uniqueMap[key]) {
+                  uniqueMap[key] = {
+                    ...item,
+                    county: toSentenceCase(item.county || 'Kericho')
+                  };
+                }
+              });
             }
-          });
-          setLastDboRecords(Object.values(uniqueMap).slice(0, 5));
-        } else {
-          setLastDboRecords([]);
+          } catch (spErr) {
+            console.warn('[DboHistory] Supabase query warning:', spErr);
+          }
         }
+
+        // B. Query Local DBService Validations
+        try {
+          const localVals = await DBService.getValidations();
+          if (localVals && localVals.length > 0) {
+            const normSearch = normStr(searchTerm);
+
+            localVals.forEach(v => {
+              const vDbo = normStr(v.clientName);
+              const vPName = normStr(v.premiseName);
+              const vPermit = normStr(v.permitNo || v.clientId);
+
+              if (closedSet.has(vDbo) || closedSet.has(vPName) || closedSet.has(vPermit)) {
+                return; // Skip closed clients/premises
+              }
+
+              // Loosened match on DBO name
+              const isMatch = (normSearch && (vDbo.includes(normSearch) || normSearch.includes(vDbo))) ||
+                              (searchTokens.length > 0 && searchTokens.some(tok => vDbo.includes(tok)));
+
+              if (isMatch) {
+                const key = `${v.premiseName || ''}-${v.permitNo || ''}`.toLowerCase().trim();
+                if (!uniqueMap[key]) {
+                  uniqueMap[key] = {
+                    dbo_name: v.clientName,
+                    premise_name: v.premiseName,
+                    category: v.category,
+                    permit_no: v.permitNo,
+                    location: v.location,
+                    county: toSentenceCase((v.rawData && v.rawData.county) || 'Kericho'),
+                    raw_data: v.rawData || {},
+                    date: v.validatedAt
+                  };
+                }
+              }
+            });
+          }
+        } catch (dbErr) {
+          console.warn('[DboHistory] Local DB lookup warning:', dbErr);
+        }
+
+        // C. Also check active clients registry list
+        try {
+          if (clients && clients.length > 0) {
+            const normSearch = normStr(searchTerm);
+
+            clients.forEach(c => {
+              if (isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus)) return;
+
+              const cDbo = normStr(c.clientName);
+
+              // Loosened match on DBO name
+              const isMatch = (normSearch && (cDbo.includes(normSearch) || normSearch.includes(cDbo))) ||
+                              (searchTokens.length > 0 && searchTokens.some(tok => cDbo.includes(tok)));
+
+              if (isMatch) {
+                const key = `${c.premiseName || ''}-${c.id || ''}`.toLowerCase().trim();
+                if (!uniqueMap[key]) {
+                  uniqueMap[key] = {
+                    dbo_name: c.clientName,
+                    premise_name: c.premiseName,
+                    category: c.premiseCategory,
+                    permit_no: c.id,
+                    location: c.location,
+                    county: toSentenceCase(c.county || 'Kericho'),
+                    raw_data: {
+                      dboName: c.clientName,
+                      premiseName: c.premiseName,
+                      category: c.premiseCategory,
+                      permitNo: c.id,
+                      location: c.location,
+                      county: toSentenceCase(c.county || 'Kericho'),
+                      contacts: c.tel,
+                      expiryDate: c.expiryDate
+                    },
+                    date: c.startDate || new Date().toISOString()
+                  };
+                }
+              }
+            });
+          }
+        } catch (clientErr) {
+          console.warn('[DboHistory] Client registry lookup warning:', clientErr);
+        }
+
+        setLastDboRecords(Object.values(uniqueMap).slice(0, 8));
       } catch (err: any) {
         console.error('Error fetching DBO history:', err);
         setDboError(err.message || 'Failed to fetch DBO history');
@@ -810,9 +1010,9 @@ export function DataValidationModule() {
       }
     };
 
-    const timer = setTimeout(fetchDboHistory, 500); // 500ms debounce
+    const timer = setTimeout(fetchDboHistory, 350); // 350ms debounce
     return () => clearTimeout(timer);
-  }, [formData.dboName]);
+  }, [formData.dboName, clients, hasAutofilledDbo]);
 
   // Load saved draft on mount
   useEffect(() => {
@@ -889,7 +1089,7 @@ export function DataValidationModule() {
       premiseName: raw.premiseName || record.premise_name || formData.premiseName,
       category: raw.category || record.category || formData.category,
       contacts: raw.contacts || formData.contacts,
-      county: raw.county || record.county || formData.county,
+      county: toSentenceCase(raw.county || record.county || formData.county || 'Kericho'),
       location: raw.location || record.location || formData.location,
       expiryDate: formattedExpiry,
       validationPeriod: isAmendment ? (raw.validationPeriod || formData.validationPeriod || currentMonthYear) : (formData.validationPeriod || currentMonthYear),
@@ -902,7 +1102,9 @@ export function DataValidationModule() {
       setIsValidationPeriodEdited(true);
     }
 
-    // Clear matches to hide suggestions
+    // Mark as autofilled to stop checking previous validations
+    setHasAutofilledDbo(true);
+    setIsCheckingDbo(false);
     setLastDboRecords([]);
     
     // Clear any failed fields
@@ -910,13 +1112,12 @@ export function DataValidationModule() {
       'dboName', 'permitNo', 'premiseName', 'category', 'contacts', 'county', 'location', 'expiryDate'
     ].includes(f)));
 
-    // Trigger reconciliation check with clients table
+    // Match selected client for manual reconciliation trigger
     if (clients.length > 0) {
       const matched = findMatchingClient(permitNo, record.dbo_name || '');
       if (matched) {
         setSelectedClient(matched);
         setValidationPremiseMode('main');
-        checkReconciliation(matched, nextForm);
       }
     }
   };
@@ -938,7 +1139,6 @@ export function DataValidationModule() {
     if (matched) {
       setSelectedClient(matched);
       setValidationPremiseMode('main');
-      checkReconciliation(matched, formData);
     }
   };
 
@@ -955,19 +1155,9 @@ export function DataValidationModule() {
         permitNo: selectedClient.id || '',
         category: selectedClient.premiseCategory || 'Milk Bar',
         location: selectedClient.location || '',
-        county: selectedClient.county || 'Kericho',
+        county: toSentenceCase(selectedClient.county || 'Kericho'),
         expiryDate: clientExpiry
       }));
-      // Trigger reconciliation check
-      checkReconciliation(selectedClient, {
-        ...formData,
-        premiseName: selectedClient.premiseName || '',
-        permitNo: selectedClient.id || '',
-        category: selectedClient.premiseCategory || 'Milk Bar',
-        location: selectedClient.location || '',
-        county: selectedClient.county || 'Kericho',
-        expiryDate: clientExpiry
-      });
     } else if (mode.startsWith('branch-')) {
       // Find branch
       const branchId = mode.replace('branch-', '');
@@ -979,7 +1169,7 @@ export function DataValidationModule() {
           permitNo: branch.permitNumber,
           category: branch.premiseCategory,
           location: branch.location,
-          county: branch.county,
+          county: toSentenceCase(branch.county || 'Kericho'),
           expiryDate: formatToYYYYMMDD(branch.expiryDate || '')
         }));
       }
@@ -1100,7 +1290,8 @@ export function DataValidationModule() {
 
   const findMatchingClient = (pNo: string, name: string) => {
     if (clients.length === 0) return null;
-    const cleanStr = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const activeClients = clients.filter(c => !isClosedStatus(c.operationalStatus) && !isClosedStatus(c.permitStatus));
+    const cleanStr = (s: string) => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
     const cleanPermit = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
 
     const pTerm = cleanPermit(pNo);
@@ -1108,32 +1299,23 @@ export function DataValidationModule() {
 
     if (!pTerm && !nTerm) return null;
 
-    // 1. Try to find exact permit match (excluding non-alphas)
+    // 1. Try exact permit match
     if (pTerm) {
-      const match = clients.find(c => cleanPermit(c.id) === pTerm);
+      const match = activeClients.find(c => cleanPermit(c.id) === pTerm || cleanPermit(c.permitNumber) === pTerm);
       if (match) return match;
     }
 
-    // 2. Try to find exact name match (excluding spaces/case)
+    // 2. Try EXACT DBO name match (case-insensitive, normalized whitespace)
     if (nTerm) {
-      const match = clients.find(c => cleanStr(c.clientName) === nTerm);
+      const match = activeClients.find(c => cleanStr(c.clientName) === nTerm);
       if (match) return match;
     }
 
     // 3. Try partial/relaxed permit match
     if (pTerm) {
-      const match = clients.find(c => {
-        const cP = cleanPermit(c.id);
-        return cP.includes(pTerm) || pTerm.includes(cP);
-      });
-      if (match) return match;
-    }
-
-    // 4. Try partial/relaxed name match
-    if (nTerm) {
-      const match = clients.find(c => {
-        const cN = cleanStr(c.clientName);
-        return cN.includes(nTerm) || nTerm.includes(cN);
+      const match = activeClients.find(c => {
+        const cP = cleanPermit(c.id) || cleanPermit(c.permitNumber);
+        return cP && (cP.includes(pTerm) || pTerm.includes(cP));
       });
       if (match) return match;
     }
@@ -1143,36 +1325,76 @@ export function DataValidationModule() {
 
   // 7-point split-screen mismatch checker logic
   const checkReconciliation = (client: LicensedClient, currentForm: FormData) => {
+    // Automatically populate any blank form fields from client profile
+    const formToUse = { ...currentForm };
+    let formUpdated = false;
+
+    if (!formToUse.dboName && client.clientName) {
+      formToUse.dboName = client.clientName;
+      formUpdated = true;
+    }
+    if (!formToUse.premiseName && client.premiseName) {
+      formToUse.premiseName = client.premiseName;
+      formUpdated = true;
+    }
+    if (!formToUse.permitNo && (client.permitNumber || client.id)) {
+      formToUse.permitNo = client.permitNumber || client.id;
+      formUpdated = true;
+    }
+    if (!formToUse.location && client.location) {
+      formToUse.location = client.location;
+      formUpdated = true;
+    }
+    if (!formToUse.category && client.premiseCategory) {
+      formToUse.category = client.premiseCategory;
+      formUpdated = true;
+    }
+    if (!formToUse.contacts && (client.tel || client.contactPerson)) {
+      formToUse.contacts = client.tel || client.contactPerson || '';
+      formUpdated = true;
+    }
+    if (!formToUse.expiryDate && (client.expiryDate || (client as any).expiry_date)) {
+      formToUse.expiryDate = formatToYYYYMMDD(client.expiryDate || (client as any).expiry_date || '');
+      formUpdated = true;
+    }
+
+    if (formUpdated) {
+      setFormData(formToUse);
+    }
+
     const isMatch = (key: string, vVal: string, cVal: string) => {
       const v = (vVal || '').trim();
       const c = (cVal || '').trim();
       
-      if (!v && !c) return true; // both empty or null is a match
-      if (!v || !c) return false; // one is empty and other isn't, so mismatch
+      // If either side is empty or both are empty, treat as match (blank field takes client/form value)
+      if (!v || !c) return true;
       
-      const cleanStr = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const cleanStr = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
       const cleanPermit = (s: string) => s.toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
 
       if (key === 'category') {
-        const normV = v.toLowerCase().includes('cooling plant') || v.toLowerCase().includes('cp>') || v.toLowerCase().includes('cp<') || v.toLowerCase().includes('cp ') ? 'coolingplant' : cleanStr(v);
-        const normC = c.toLowerCase().includes('cooling plant') || c.toLowerCase().includes('cp>') || c.toLowerCase().includes('cp<') || c.toLowerCase().includes('cp ') ? 'coolingplant' : cleanStr(c);
-        return normV === normC;
+        const codeV = getCategoryShortCode(v);
+        const codeC = getCategoryShortCode(c);
+        if (codeV === codeC) return true;
+        return cleanStr(v) === cleanStr(c);
       }
       
       if (key === 'permitNo') {
         const pV = cleanPermit(v);
         const pC = cleanPermit(c);
+        if (!pV || !pC) return true;
         return pV === pC || pV.includes(pC) || pC.includes(pV);
       }
 
       if (key === 'contacts') {
-        // Strip non-numeric characters for phone numbers
         const pV = v.replace(/[^0-9]/g, '');
         const pC = c.replace(/[^0-9]/g, '');
-        if (pV && pC) {
-          // Compare last 9 digits to ignore country codes (e.g., +254 vs 07)
-          return pV.slice(-9) === pC.slice(-9);
+        if (pV.length >= 7 && pC.length >= 7) {
+          if (pV.slice(-9) === pC.slice(-9)) return true;
         }
+        const cV = cleanStr(v);
+        const cC = cleanStr(c);
+        return cV === cC || cV.includes(cC) || cC.includes(cV);
       }
 
       if (key === 'expiryDate') {
@@ -1181,24 +1403,32 @@ export function DataValidationModule() {
         if (normV && normC) return normV === normC;
         return cleanStr(v) === cleanStr(c);
       }
-      
-      return cleanStr(v) === cleanStr(c);
+
+      if (key === 'location') {
+        const cV = cleanStr(v);
+        const cC = cleanStr(c);
+        return cV === cC || cV.includes(cC) || cC.includes(cV);
+      }
+
+      const cV = cleanStr(v);
+      const cC = cleanStr(c);
+      return cV === cC || cV.includes(cC) || cC.includes(cV);
     };
 
     const points = [
-      { key: 'dboName', label: 'Name of DBO (clientname)', validationVal: currentForm.dboName || '', clientVal: client.clientName || '' },
-      { key: 'premiseName', label: 'Premise Name (premisename)', validationVal: currentForm.premiseName || '', clientVal: client.premiseName || '' },
-      { key: 'permitNo', label: 'Permit Number (permitnumber)', validationVal: currentForm.permitNo || '', clientVal: client.permitNumber || client.id || '' },
-      { key: 'location', label: 'Location (location)', validationVal: currentForm.location || '', clientVal: client.location || '' },
-      { key: 'category', label: 'Category (premisecategory)', validationVal: currentForm.category || '', clientVal: client.premiseCategory || '' },
-      { key: 'contacts', label: 'Contacts (tel / contactperson)', validationVal: currentForm.contacts || '', clientVal: client.tel || client.contactPerson || '' },
-      { key: 'expiryDate', label: 'Expiry Date (expirydate)', validationVal: currentForm.expiryDate || '', clientVal: client.expiryDate || '' }
+      { key: 'dboName', label: '1. Name of DBO (clientname)', validationVal: formToUse.dboName || '', clientVal: client.clientName || '' },
+      { key: 'premiseName', label: '2. Premise / Branch Name (premisename)', validationVal: formToUse.premiseName || '', clientVal: client.premiseName || '' },
+      { key: 'permitNo', label: '3. Permit Number (permitnumber)', validationVal: formToUse.permitNo || '', clientVal: client.permitNumber || client.id || '' },
+      { key: 'location', label: '4. Location / Branch Address (location)', validationVal: formToUse.location || '', clientVal: client.location || '' },
+      { key: 'category', label: '5. Category (premisecategory)', validationVal: formToUse.category || '', clientVal: client.premiseCategory || '' },
+      { key: 'contacts', label: '6. Contacts (tel / contactperson)', validationVal: formToUse.contacts || '', clientVal: client.tel || client.contactPerson || '' },
+      { key: 'expiryDate', label: '7. Expiry Date (expirydate)', validationVal: formToUse.expiryDate || '', clientVal: client.expiryDate || (client as any).expiry_date || '' }
     ];
 
     const mismatches = points.filter(p => !isMatch(p.key, p.validationVal, p.clientVal));
     
     if (mismatches.length > 0) {
-      setMismatchFields(mismatches.map(m => ({ ...m, selectedVal: undefined })));
+      setMismatchFields(mismatches.map(m => ({ ...m, selectedVal: 'client' })));
       setShowReconciliation(true);
       setReconciliationResolved(false);
     } else {
@@ -1206,6 +1436,58 @@ export function DataValidationModule() {
       setShowReconciliation(false);
       setReconciliationResolved(true);
     }
+  };
+
+  const handleTriggerManualReconciliation = () => {
+    const cleanPermitHelper = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+    let matched = selectedClient || findMatchingClient(formData.permitNo, formData.dboName);
+    if (!matched && clients.length > 0) {
+      const pTerm = cleanPermitHelper(formData.permitNo);
+      const dboTerm = (formData.dboName || '').toLowerCase().trim();
+      const premTerm = (formData.premiseName || '').toLowerCase().trim();
+      
+      matched = clients.find(c => {
+        const cPermit = cleanPermitHelper(c.permitNumber || c.id);
+        const cName = (c.clientName || '').toLowerCase().trim();
+        const cPremise = (c.premiseName || '').toLowerCase().trim();
+        if (pTerm && cPermit && (cPermit.includes(pTerm) || pTerm.includes(cPermit))) return true;
+        if (dboTerm && cName && (cName.includes(dboTerm) || dboTerm.includes(cName))) return true;
+        if (premTerm && cPremise && (cPremise.includes(premTerm) || premTerm.includes(cPremise))) return true;
+        return false;
+      }) || clients[0];
+    }
+
+    if (!matched) {
+      setStatus({ 
+        type: 'error', 
+        message: 'No registered client profile found. Please select or enter a client name/permit number to reconcile.' 
+      });
+      return;
+    }
+
+    setSelectedClient(matched);
+    const points = [
+      { key: 'dboName', label: '1. Name of DBO (clientname)', validationVal: formData.dboName || '', clientVal: matched.clientName || '' },
+      { key: 'premiseName', label: '2. Premise / Branch Name (premisename)', validationVal: formData.premiseName || '', clientVal: matched.premiseName || '' },
+      { key: 'permitNo', label: '3. Permit Number (permitnumber)', validationVal: formData.permitNo || '', clientVal: matched.permitNumber || matched.id || '' },
+      { key: 'location', label: '4. Location / Branch Address (location)', validationVal: formData.location || '', clientVal: matched.location || '' },
+      { key: 'category', label: '5. Category (premisecategory)', validationVal: formData.category || '', clientVal: matched.premiseCategory || '' },
+      { key: 'contacts', label: '6. Contacts (tel / contactperson)', validationVal: formData.contacts || '', clientVal: matched.tel || matched.contactPerson || '' },
+      { key: 'expiryDate', label: '7. Expiry Date (expirydate)', validationVal: formData.expiryDate || '', clientVal: matched.expiryDate || (matched as any).expiry_date || '' }
+    ];
+
+    setMismatchFields(points.map(m => ({ ...m, selectedVal: 'client' })));
+    setShowReconciliation(true);
+    setReconciliationResolved(false);
+    setStatus({ 
+      type: 'success', 
+      message: `Initiated 7-Point Reconciliation for "${matched.clientName || 'Client Profile'}". Review both data sources below.` 
+    });
+  };
+
+  const handleSelectBranchForReconciliation = (branch: LicensedClient) => {
+    setSelectedClient(branch);
+    checkReconciliation(branch, formData);
   };
 
   const handleResolveReconciliation = async () => {
@@ -1228,7 +1510,7 @@ export function DataValidationModule() {
         if (item.key === 'permitNo') {
           chosenVal = formatPermitNumber(chosenVal, updatedForm.category || updatedClient.premiseCategory);
           (updatedForm as any)[item.key] = chosenVal;
-          updatedClient.id = chosenVal;
+          updatedClient.id = selectedClient.id;
           updatedClient.permitNumber = chosenVal;
         } else if (item.key === 'expiryDate') {
           const isoVal = formatToYYYYMMDD(chosenVal);
@@ -1457,6 +1739,9 @@ export function DataValidationModule() {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
     setFailedFields(prev => prev.filter(f => f !== name));
+    if (name === 'dboName' || name === 'premiseName') {
+      setHasAutofilledDbo(false);
+    }
     if (name === 'validationPeriod') {
       setIsValidationPeriodEdited(true);
     }
@@ -1492,18 +1777,25 @@ export function DataValidationModule() {
         });
       }
       if (formData.hasLocalSales) {
+        const isBranchValidation = validationPremiseMode.startsWith('branch-');
         formData.sales.forEach((sale, idx) => {
           if (!sale.month) missing.push(`sale-${idx}-month`);
           if (!sale.year) missing.push(`sale-${idx}-year`);
-          if (!sale.qtyDeclared || sale.qtyDeclared.trim() === '') missing.push(`sale-${idx}-qtyDeclared`);
-          if (!sale.verifiedQty || sale.verifiedQty.trim() === '') missing.push(`sale-${idx}-verifiedQty`);
+          if (!isBranchValidation && (!sale.qtyDeclared || sale.qtyDeclared.trim() === '')) {
+            missing.push(`sale-${idx}-qtyDeclared`);
+          }
+          if (!sale.verifiedQty || sale.verifiedQty.trim() === '') {
+            missing.push(`sale-${idx}-verifiedQty`);
+          }
           
           const isLastMonth = idx === formData.sales.length - 1;
-          if (isLastMonth) {
+          if (!isBranchValidation && isLastMonth) {
             if (!sale.projectedQty || sale.projectedQty.trim() === '') missing.push(`sale-${idx}-projectedQty`);
           }
           
-          if (!sale.buyingPrice || sale.buyingPrice.trim() === '') missing.push(`sale-${idx}-buyingPrice`);
+          if (!isBranchValidation && (!sale.buyingPrice || sale.buyingPrice.trim() === '')) {
+            missing.push(`sale-${idx}-buyingPrice`);
+          }
           
           if (formData.natureOfProduce.length > 0) {
             const currentPrices = parseSellingPrices(sale.sellingPrice || '');
@@ -1884,37 +2176,64 @@ export function DataValidationModule() {
 
   const viewPdf = async (path: string) => {
     if (!path) return;
-    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) {
-      window.open(path, '_blank');
-      return;
-    }
-    if (!supabase) return;
 
-    let cleanPath = path;
-    if (cleanPath.startsWith('ValidationPdfs/')) {
-      cleanPath = cleanPath.replace('ValidationPdfs/', '');
-    } else if (cleanPath.startsWith('validation-pdfs/')) {
-      cleanPath = cleanPath.replace('validation-pdfs/', '');
-    }
-
+    setIsLoadingPdf(true);
     try {
-      // Create a signed URL that expires in 60 seconds for security
-      const { data, error } = await supabase.storage
-        .from('ValidationPdfs')
-        .createSignedUrl(cleanPath, 60);
-      
-      if (error) {
-        console.error('Error creating signed URL:', error);
-        alert(`Could not retrieve PDF: ${error.message}`);
+      // 1. Direct base64 data URI or HTTP link
+      if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) {
+        setPdfModalUrl(path);
         return;
       }
 
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, '_blank');
+      const targetPath = path.replace(/^(validationPdfs\/|validation-pdfs\/|ValidationPdfs\/)/i, '').trim();
+
+      // 2. Try Supabase Storage Signed URL across bucket variations
+      if (supabase) {
+        for (const bucket of ['validationPdfs', 'ValidationPdfs', 'validation-pdfs']) {
+          try {
+            const { data, error } = await supabase.storage
+              .from(bucket)
+              .createSignedUrl(targetPath, 120);
+
+            if (!error && data?.signedUrl) {
+              setPdfModalUrl(data.signedUrl);
+              return;
+            }
+          } catch (e) {
+            console.warn(`Bucket ${bucket} check error:`, e);
+          }
+        }
       }
-    } catch (err: any) {
-      console.error('Failed to view PDF:', err);
-      alert('Failed to retrieve PDF document.');
+
+      // 3. Try resolvePdfUrl helper
+      const resolvedUrl = await resolvePdfUrl(path);
+      if (resolvedUrl) {
+        setPdfModalUrl(resolvedUrl);
+        return;
+      }
+
+      // 4. Fallback: search local DBService validations for inline PDF base64 string or matching record
+      const allVals = await DBService.getValidations();
+      const match = allVals.find(v => 
+        v.pdfPath === path || 
+        v.id === path || 
+        (v.rawData as any)?.pdf_path === path || 
+        (v.rawData as any)?.pdfPath === path ||
+        (v.rawData as any)?.pdf === path
+      );
+
+      const inline = match?.pdfPath || (match?.rawData as any)?.pdf || (match?.rawData as any)?.pdfData;
+      if (inline) {
+        setPdfModalUrl(inline);
+        return;
+      }
+
+      setStatus({ type: 'error', message: `Could not load PDF document for "${path}".` });
+    } catch (err) {
+      console.error('Error resolving PDF:', err);
+      setStatus({ type: 'error', message: 'Failed to load PDF preview.' });
+    } finally {
+      setIsLoadingPdf(false);
     }
   };
 
@@ -1998,7 +2317,7 @@ export function DataValidationModule() {
           ...targetClient,
           clientName: updatedData.dboName.trim() || targetClient.clientName,
           premiseName: updatedData.premiseName.trim() || targetClient.premiseName,
-          id: formattedPermitNo || targetClient.id,
+          id: targetClient.id,
           permitNumber: formattedPermitNo || targetClient.permitNumber || targetClient.id,
           location: updatedData.location.trim() || targetClient.location,
           premiseCategory: (updatedData.category as any) || targetClient.premiseCategory,
@@ -2069,78 +2388,116 @@ export function DataValidationModule() {
         setClients(refreshedClients);
       }
 
-      // 1. Submit to Supabase (New)
+      // Prepare payload & PDF reference
+      let pdfPath = null;
+
+      // 1. Upload PDF & Sync to Supabase if configured
       if (supabase) {
         try {
-          // Upload PDF to Supabase Storage
-          let pdfPath = null;
-          try {
-            const pdfBlob = dataURIToBlob(pdf);
-            const fileName = isAmendment
-              ? `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_Amended_v2_${Date.now()}.pdf`
-              : `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
-            const { data: uploadData, error: uploadError } = await supabase.storage
-              .from('ValidationPdfs')
-              .upload(fileName, pdfBlob, {
-                contentType: 'application/pdf',
-                upsert: false
-              });
-            
-            if (uploadError) {
-              console.error('Supabase PDF upload error:', uploadError);
-            } else {
-              pdfPath = uploadData.path;
-            }
-          } catch (uploadErr) {
-            console.error('PDF upload process failed:', uploadErr);
-          }
+          const pdfBlob = dataURIToBlob(pdf);
+          const fileName = isAmendment
+            ? `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_Amended_v2_${Date.now()}.pdf`
+            : `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
 
-          let supabaseError;
+          for (const bucket of ['validationPdfs', 'ValidationPdfs', 'validation-pdfs']) {
+            try {
+              const { data: uploadData, error: uploadError } = await supabase.storage
+                .from(bucket)
+                .upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: false });
+
+              if (!uploadError && uploadData?.path) {
+                pdfPath = uploadData.path;
+                break;
+              }
+            } catch (bErr) {
+              console.warn(`Upload to bucket ${bucket} error:`, bErr);
+            }
+          }
+        } catch (uploadErr) {
+          console.error('PDF upload process failed:', uploadErr);
+        }
+      }
+
+      const payloadRawData = {
+        ...updatedData,
+        pdf: pdf,
+        pdf_path: pdfPath,
+        pdfPath: pdfPath
+      };
+
+      const valRecordId = `VAL_${(updatedData.permitNo || 'NO_PERMIT').replace(/[^a-zA-Z0-9]/g, '_')}_${(updatedData.validationPeriod || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+      if (supabase) {
+        try {
           if (isAmendment) {
-            const { error } = await supabase
+            const { error: updateErr } = await supabase
               .from('kdb_validations')
               .update({
                 dbo_name: updatedData.dboName,
-                branch: updatedData.branch,
+                premise_name: updatedData.premiseName,
                 date: updatedData.date,
                 category: updatedData.category,
                 permit_no: updatedData.permitNo,
                 location: updatedData.location,
-                county: updatedData.county,
-                total_penalty: totalPenalty,
-                pdf_path: pdfPath, // Store reference to updated file
-                raw_data: updatedData // Store full JSON for backup
+                contacts: updatedData.contacts,
+                validation_period: updatedData.validationPeriod,
+                pdf_path: pdfPath,
+                raw_data: payloadRawData
               })
               .match({
                 premise_name: updatedData.premiseName,
                 validation_period: updatedData.validationPeriod
               });
-            supabaseError = error;
+            if (updateErr) console.error('Supabase kdb_validations update error:', updateErr);
           } else {
-            const { error } = await supabase
+            const { error: upsertErr } = await supabase
               .from('kdb_validations')
-              .insert([{
+              .upsert([{
+                id: valRecordId,
                 dbo_name: updatedData.dboName,
                 premise_name: updatedData.premiseName,
-                branch: updatedData.branch,
                 date: updatedData.date,
                 validation_period: updatedData.validationPeriod,
                 category: updatedData.category,
                 permit_no: updatedData.permitNo,
                 location: updatedData.location,
-                county: updatedData.county,
-                total_penalty: totalPenalty,
-                pdf_path: pdfPath, // Store reference to the file
-                raw_data: updatedData // Store full JSON for backup
+                contacts: updatedData.contacts,
+                pdf_path: pdfPath,
+                raw_data: payloadRawData
               }]);
-            supabaseError = error;
+            if (upsertErr) console.error('Supabase kdb_validations upsert error:', upsertErr);
           }
-          
-          if (supabaseError) console.error('Supabase save error:', supabaseError);
-        } catch (err) {
-          console.error('Supabase integration failed:', err);
+        } catch (sbErr) {
+          console.error('Supabase kdb_validations save error:', sbErr);
         }
       }
+
+      // Always save to DBService for guaranteed local persistence & history tracking
+      const dataValObject: DataValidation = {
+        id: valRecordId,
+        clientId: updatedData.permitNo || '',
+        clientName: updatedData.dboName || '',
+        premiseName: updatedData.premiseName || '',
+        permitNo: updatedData.permitNo || '',
+        location: updatedData.location || '',
+        category: updatedData.category || '',
+        contacts: updatedData.contacts || '',
+        expiryDate: updatedData.expiryDate || '',
+        year: new Date(updatedData.date).getFullYear() || 2026,
+        period: updatedData.validationPeriod || '',
+        quantityDeclared: updatedData.sales?.[0]?.qtyDeclared || '',
+        unitPrice: parseFloat(updatedData.sales?.[0]?.buyingPrice) || 0,
+        totalSales: updatedData.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0,
+        validatorName: updatedData.complianceOfficer || '',
+        validatedAt: updatedData.date || new Date().toISOString(),
+        status: 'Approved',
+        remarks: updatedData.comments || '',
+        monthsCount: Array.isArray(updatedData.sales) && updatedData.sales.length > 0 ? updatedData.sales.length : 1,
+        pdfPath: pdfPath || pdf,
+        rawData: payloadRawData
+      };
+      await DBService.saveValidation(dataValObject);
+      await DBService.getValidations(true);
 
       // 2. Submit to Google Sheets (Original)
       const res = await fetch('/api/submit', {
@@ -2312,19 +2669,102 @@ export function DataValidationModule() {
     }
   };
 
+  const handleClearAndRefresh = () => {
+    if (window.confirm("Are you sure you want to clear all form entries and refresh the page?")) {
+      localStorage.removeItem('kdb_validation_form_draft');
+      localStorage.removeItem('kdb_validation_form_draft_step');
+      localStorage.removeItem('kdb_validations_cache');
+      sessionStorage.clear();
+      setFormData(initialData);
+      setStep(0);
+      window.location.reload();
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#f5f5f4] text-[#1a1a1a] font-sans p-2 md:p-4">
       <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <header className="mb-4 text-center">
-          <div className="flex justify-center mb-2">
-            <div className="bg-white p-2 md:p-3 rounded-xl shadow-sm border border-black/5 flex items-center gap-2">
-              <Database className="w-6 h-6 text-blue-600" />
-              <h1 className="text-xl font-bold tracking-tight uppercase">Kenya Dairy Board</h1>
+        {/* Connection Status & Quick Reset Banner */}
+        <div className="mb-4 bg-white rounded-xl p-3 md:p-4 shadow-sm border border-black/5 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-3 w-full sm:w-auto">
+            <div className="flex items-center gap-2">
+              <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+              <div>
+                <p className="text-xs font-semibold text-gray-900">Google Sheets Sync</p>
+                <p className="text-[10px] text-gray-500">{isConnected ? 'Service Account Active' : 'Credentials Missing'}</p>
+              </div>
             </div>
+            {isConnected && (
+              <div className="flex items-center gap-1.5 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Ready to Sync</span>
+              </div>
+            )}
           </div>
-          <p className="text-[10px] font-medium text-gray-500 uppercase tracking-widest">Data Validation Form</p>
-        </header>
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
+            {step > 0 && (
+              <div className="flex items-center bg-gray-100/90 p-0.5 rounded-lg border border-gray-200 text-xs shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (step === 1) setStep(0);
+                    else if (step === 2) setStep(1);
+                    else if (step === 3) setStep(2);
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
+                  title="Go back to previous step"
+                  id="top-banner-back-btn"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Back</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (step === 1) {
+                      validateStep(1) && setStep(2);
+                    } else if (step === 2) {
+                      validateStep(2) && setStep(3);
+                    } else if (step === 3) {
+                      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+                    }
+                  }}
+                  className="flex items-center gap-1 px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
+                  title={step === 3 ? "Scroll to Submit section" : "Go to next step"}
+                  id="top-banner-next-btn"
+                >
+                  <span>{step === 3 ? "To Submit" : "Next"}</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+
+                <span className="w-px h-3.5 bg-gray-300 mx-0.5" />
+
+                <button
+                  type="button"
+                  onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })}
+                  className="flex items-center gap-1 px-2.5 py-1 text-gray-500 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
+                  title="Scroll smoothly to bottom of page"
+                  id="top-banner-scroll-bottom-btn"
+                >
+                  <ArrowDown className="w-3.5 h-3.5" />
+                  <span>Bottom</span>
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleClearAndRefresh}
+              className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
+              title="Clear all form entries and reload page"
+              id="clear-entries-refresh-btn"
+            >
+              <RotateCcw className="w-4 h-4 text-rose-600" />
+              Clear Entries & Refresh Page
+            </button>
+          </div>
+        </div>
 
         {/* Draft Restore Alert */}
         <AnimatePresence>
@@ -2431,25 +2871,6 @@ export function DataValidationModule() {
           )}
         </AnimatePresence>
 
-        {/* Connection Status */}
-        <div className="mb-4 bg-white rounded-xl p-4 shadow-sm border border-black/5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-              <div>
-                <p className="text-xs font-semibold">Google Sheets Sync</p>
-                <p className="text-[10px] text-gray-500">{isConnected ? 'Service Account Active' : 'Credentials Missing'}</p>
-              </div>
-            </div>
-            {isConnected && (
-              <div className="flex items-center gap-1.5 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
-                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Ready to Sync</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* Form Container */}
         <div className="bg-white rounded-2xl shadow-lg border border-black/5 overflow-hidden">
           {/* Progress Bar */}
@@ -2493,9 +2914,20 @@ export function DataValidationModule() {
                   exit={{ opacity: 0, x: -20 }}
                   className="space-y-6"
                 >
-                  <div className="flex items-center gap-2 mb-6">
-                    <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">1</div>
-                    <h2 className="text-lg font-bold">General Information</h2>
+                  <div className="flex items-center justify-between gap-3 mb-6 pb-3 border-b border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">1</div>
+                      <h2 className="text-lg font-bold">General Information</h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleTriggerManualReconciliation}
+                      className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                      id="step1-manual-reconcile-btn"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                      7-Point Reconciliation Check
+                    </button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -2549,6 +2981,8 @@ export function DataValidationModule() {
                       <input
                         type="date"
                         name="expiryDate"
+                        min="2021-01-01"
+                        max={`${new Date().getFullYear() + 1}-12-31`}
                         value={formData.expiryDate}
                         onChange={handleChange}
                         className={getInputClass('expiryDate')}
@@ -2563,17 +2997,9 @@ export function DataValidationModule() {
                         value={formData.dboName}
                         onChange={handleChange}
                         onBlur={handleInputBlur}
-                        list="clients-names"
                         className={getInputClass('dboName')}
                         placeholder="Enter DBO name..."
                       />
-                      <datalist id="clients-names">
-                        {clients
-                          .filter(c => c.operationalStatus !== 'closed')
-                          .map(c => (
-                            <option key={c.id} value={c.clientName} />
-                          ))}
-                      </datalist>
                       {isCheckingDbo && (
                         <p className="text-[10px] text-blue-500 font-medium mt-1 flex items-center gap-1 animate-pulse">
                           <Loader2 className="w-3 h-3 animate-spin" />
@@ -2631,25 +3057,14 @@ export function DataValidationModule() {
                       </AnimatePresence>
 
                       {lastCollections.length > 0 && (() => {
-                        const latest = lastCollections[0].fullPeriod;
-                        const parts = latest.split(' ');
-                        if (parts.length >= 2) {
-                          const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-                          const monthIndex = months.indexOf(parts[0]);
-                          if (monthIndex !== -1) {
-                            let nextMonthIndex = monthIndex + 1;
-                            let nextYear = parseInt(parts[1]);
-                            if (nextMonthIndex > 11) {
-                              nextMonthIndex = 0;
-                              nextYear += 1;
-                            }
-                            return (
-                              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-tight mt-1 flex items-center gap-1">
-                                <CheckCircle2 className="w-3 h-3" />
-                                Next month to validate: {months[nextMonthIndex]} {nextYear}
-                              </p>
-                            );
-                          }
+                        const nextMonthStr = getNextMonthToValidate(lastCollections[0].fullPeriod);
+                        if (nextMonthStr) {
+                          return (
+                            <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-tight mt-1.5 flex items-center gap-1 bg-emerald-50/80 px-2.5 py-1 rounded-md border border-emerald-200/60 w-fit">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              Next Month to Validate: <span className="text-emerald-900 font-extrabold">{nextMonthStr}</span>
+                            </p>
+                          );
                         }
                         return null;
                       })()}
@@ -2724,52 +3139,66 @@ export function DataValidationModule() {
                             {historyError}
                           </motion.div>
                         )}
-                        {lastCollections.length > 0 && (
-                          <motion.div
-                            initial={{ opacity: 0, y: -10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="mt-2 p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2"
-                          >
-                            <Info className="w-4 h-4 text-blue-600 mt-0.5" />
-                            <div>
-                                <p className="text-[11px] font-bold text-blue-800 uppercase tracking-tight">
-                                  Recent History for {lastCollections[0]?.matchedPremise || formData.premiseName}
-                                </p>
-                                <div className="text-[10px] text-blue-600 mt-1 flex flex-wrap gap-x-2 gap-y-1">
-                                  Last 3 validated months: {lastCollections.map((c, i) => (
-                                    <div key={i} className="flex items-center gap-1.5 flex-wrap">
-                                      <span className="font-semibold">{c.displayString}</span>
-                                      <div className="flex items-center gap-1">
-                                        {c.pdfPath && (
-                                          <button
-                                            type="button"
-                                            onClick={() => viewPdf(c.pdfPath!)}
-                                            className="text-[9px] bg-blue-100 hover:bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors"
-                                            title="View PDF"
-                                          >
-                                            <FileText className="w-2.5 h-2.5" />
-                                            PDF
-                                          </button>
-                                        )}
-                                        {c.rawData && (
-                                          <button
-                                            type="button"
-                                            onClick={() => handleRecallSubmission(c.rawData)}
-                                            className="text-[9px] bg-amber-100 hover:bg-amber-200 text-amber-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-medium"
-                                            title="Amend this submission"
-                                          >
-                                            <Edit2 className="w-2.5 h-2.5" />
-                                            Amend
-                                          </button>
-                                        )}
+                        {lastCollections.length > 0 && (() => {
+                          const nextMonthStr = getNextMonthToValidate(lastCollections[0].fullPeriod);
+                          return (
+                            <motion.div
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="mt-2 p-3 bg-blue-50 rounded-xl border border-blue-100 space-y-2.5"
+                            >
+                              <div className="flex items-start gap-2">
+                                <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                                <div>
+                                  <p className="text-[11px] font-bold text-blue-800 uppercase tracking-tight">
+                                    Recent History for {lastCollections[0]?.matchedPremise || formData.premiseName}
+                                  </p>
+                                  <div className="text-[10px] text-blue-600 mt-1 flex flex-wrap gap-x-2 gap-y-1">
+                                    Last 3 validated months: {lastCollections.map((c, i) => (
+                                      <div key={i} className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-semibold">{c.displayString}</span>
+                                        <div className="flex items-center gap-1">
+                                          {c.pdfPath && (
+                                            <button
+                                              type="button"
+                                              onClick={() => viewPdf(c.pdfPath!)}
+                                              className="text-[9px] bg-blue-100 hover:bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
+                                              title="View PDF"
+                                            >
+                                              <FileText className="w-2.5 h-2.5" />
+                                              PDF
+                                            </button>
+                                          )}
+                                          {c.rawData && (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRecallSubmission(c.rawData)}
+                                              className="text-[9px] bg-amber-100 hover:bg-amber-200 text-amber-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
+                                              title="Amend this submission"
+                                            >
+                                              <Edit2 className="w-2.5 h-2.5" />
+                                              Amend
+                                            </button>
+                                          )}
+                                        </div>
+                                        {i < lastCollections.length - 1 && <span className="text-blue-300">|</span>}
                                       </div>
-                                      {i < lastCollections.length - 1 && <span className="text-blue-300">|</span>}
-                                    </div>
-                                  ))}
+                                    ))}
+                                  </div>
                                 </div>
-                            </div>
-                          </motion.div>
-                        )}
+                              </div>
+
+                              {nextMonthStr && (
+                                <div className="pt-2 border-t border-blue-100/80 flex items-center gap-2 text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                  <span className="text-[11px] font-bold uppercase tracking-tight">
+                                    Next Month to Validate: <span className="text-emerald-950 font-black ml-1">{nextMonthStr}</span>
+                                  </span>
+                                </div>
+                              )}
+                            </motion.div>
+                          );
+                        })()}
                         {!isCheckingHistory && formData.premiseName.length >= 3 && lastCollections.length === 0 && (
                           <motion.div
                             initial={{ opacity: 0 }}
@@ -2891,7 +3320,7 @@ export function DataValidationModule() {
                     <button
                       type="button"
                       onClick={() => validateStep(1) && setStep(2)}
-                      className="flex items-center gap-2 px-8 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
+                      className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm"
                     >
                       Next Step
                       <ChevronRight className="w-4 h-4" />
@@ -2945,13 +3374,18 @@ export function DataValidationModule() {
                   {(formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor') && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-6">
                       <div className="flex items-center justify-between">
-                        <h3 className="font-bold text-blue-600 uppercase text-xs tracking-widest">Total Monthly Intake</h3>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-blue-600 uppercase text-xs tracking-widest">Total Monthly Intake</h3>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
+                            {formData.intakes.length} {formData.intakes.length === 1 ? 'month' : 'months'} added
+                          </span>
+                        </div>
                         <button
                           type="button"
                           onClick={() => setFormData(prev => ({ ...prev, intakes: [...prev.intakes, { month: '', year: new Date().getFullYear().toString(), quantity: '', farmerPrice: '', processor: '', processorPrice: '', avgVolPerDay: '' }] }))}
-                          className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"
+                          className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
                         >
-                          + Add Month
+                          + Add Month ({formData.intakes.length})
                         </button>
                       </div>
                       
@@ -3164,6 +3598,11 @@ export function DataValidationModule() {
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <h3 className="font-bold text-blue-600 uppercase text-xs tracking-widest">Local Sales Data</h3>
+                        {formData.hasLocalSales && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">
+                            {formData.sales.length} {formData.sales.length === 1 ? 'month' : 'months'} added
+                          </span>
+                        )}
                         {(formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor') && (
                           <label className="flex items-center gap-2 cursor-pointer bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
                             <input
@@ -3190,9 +3629,9 @@ export function DataValidationModule() {
                             sellingPrice: '', 
                             avgVolPerDay: '' 
                           }] }))}
-                          className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"
+                          className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
                         >
-                          + Add Month
+                          + Add Month ({formData.sales.length})
                         </button>
                       )}
                     </div>
@@ -3202,12 +3641,28 @@ export function DataValidationModule() {
                         <p className="text-sm text-gray-500 italic">Local sales section is locked/disabled for this entity.</p>
                       </div>
                     ) : (
-                      formData.sales.map((sale, idx) => (
+                      formData.sales.map((sale, idx) => {
+                        const isBranchValidation = validationPremiseMode.startsWith('branch-');
+                        const rowsToDisplay = isBranchValidation ? [
+                          { label: 'Witnessed Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                          { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
+                          { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                        ] : [
+                          { label: 'Quantity Declared', name: 'qtyDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                          { label: 'Witnessed/Verified Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                          { label: 'Projected Quantity for Month', name: 'projectedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                          { label: 'Under Declared Volume (Auto)', name: 'underDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs', readOnly: true },
+                          { label: 'Buying Price (Per Records)', name: 'buyingPrice', unit: 'Kshs' },
+                          { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
+                          { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                        ];
+
+                        return (
                         <div key={idx} className="p-6 bg-white rounded-2xl border border-gray-200 space-y-4 relative shadow-sm">
                           <button 
                             type="button"
                             onClick={() => setFormData(prev => ({ ...prev, sales: prev.sales.filter((_, i) => i !== idx) }))}
-                            className="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-lg font-bold"
+                            className="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-lg font-bold cursor-pointer"
                           >
                             &times;
                           </button>
@@ -3263,15 +3718,7 @@ export function DataValidationModule() {
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-50">
-                              {[
-                                { label: 'Quantity Declared', name: 'qtyDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                                { label: 'Witnessed/Verified Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                                { label: 'Projected Quantity for Month', name: 'projectedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                                { label: 'Under Declared Volume (Auto)', name: 'underDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs', readOnly: true },
-                                { label: 'Buying Price (Per Records)', name: 'buyingPrice', unit: 'Kshs' },
-                                { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
-                                { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                              ].map((row) => {
+                              {rowsToDisplay.map((row) => {
                                 const isMirroredCategory = formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor';
                                 const hasMatchingIntake = isMirroredCategory && row.name === 'buyingPrice' && formData.intakes.some(
                                   i => i.month && i.year && i.month === sale.month && i.year === sale.year
@@ -3386,7 +3833,8 @@ export function DataValidationModule() {
                           </table>
                         </div>
                       </div>
-                    )))}
+                    );
+                  }))}
                   </div>
 
                   {/* Distribution Details Section (Mini Dairy and Cottage Industry only) */}
@@ -3820,11 +4268,11 @@ export function DataValidationModule() {
                     </motion.div>
                   )}
 
-                  <div className="flex justify-between pt-4">
+                  <div className="flex justify-between items-center gap-3 pt-4">
                     <button
                       type="button"
                       onClick={() => setStep(1)}
-                      className="flex items-center gap-2 px-8 py-3 text-gray-500 font-bold hover:text-black transition-all"
+                      className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-2.5 sm:py-3 text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all text-xs sm:text-sm"
                     >
                       <ChevronLeft className="w-4 h-4" />
                       Back
@@ -3832,7 +4280,7 @@ export function DataValidationModule() {
                     <button
                       type="button"
                       onClick={() => validateStep(2) && setStep(3)}
-                      className="flex items-center gap-2 px-8 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all"
+                      className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm"
                     >
                       Next Step
                       <ChevronRight className="w-4 h-4" />
@@ -4167,12 +4615,12 @@ export function DataValidationModule() {
                   </div>
 
                   <div className="flex flex-col gap-4 pt-6">
-                    <div className="flex justify-between items-center">
-                      <div className="flex gap-3">
+                    <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 sm:gap-4">
+                      <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
                         <button
                           type="button"
                           onClick={() => setStep(2)}
-                          className="flex items-center gap-2 px-6 py-3 text-gray-500 font-bold hover:text-black transition-all"
+                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all border border-gray-200 sm:border-transparent"
                         >
                           <ChevronLeft className="w-4 h-4" />
                           Back
@@ -4180,7 +4628,7 @@ export function DataValidationModule() {
                         <button
                           type="button"
                           onClick={handlePreview}
-                          className="flex items-center gap-2 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-all"
+                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-all text-xs sm:text-sm whitespace-nowrap"
                         >
                           <FileText className="w-4 h-4" />
                           Preview PDF
@@ -4190,7 +4638,7 @@ export function DataValidationModule() {
                       <button
                         type="submit"
                         disabled={isSubmitting}
-                        className={`flex items-center gap-2 px-10 py-4 rounded-2xl font-bold transition-all shadow-lg ${
+                        className={`w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-9 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl font-bold transition-all shadow-md text-xs sm:text-sm ${
                           isSubmitting
                             ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                             : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'
@@ -4198,12 +4646,12 @@ export function DataValidationModule() {
                       >
                         {isSubmitting ? (
                           <>
-                            <Loader2 className="w-5 h-5 animate-spin" />
+                            <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
                             Syncing & Generating PDF...
                           </>
                         ) : (
                           <>
-                            <Save className="w-5 h-5" />
+                            <Save className="w-4 h-4 sm:w-5 sm:h-5" />
                             {isAmendment ? 'Submit Amendment & Overwrite' : 'Submit & Sync to Sheet'}
                           </>
                         )}
@@ -4265,21 +4713,157 @@ export function DataValidationModule() {
           {showReconciliation && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
               <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
-                <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-4 text-white">
-                  <h3 className="text-lg font-black tracking-tight">7-Point Profile Reconciliation Required</h3>
-                  <p className="text-xs text-amber-100 font-medium">Conflicting data points identified between Data Validation input and core Clients database.</p>
+                <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-4 text-white flex justify-between items-center">
+                  <div>
+                    <h3 className="text-lg font-black tracking-tight">7-Point Profile & Branch Reconciliation Required</h3>
+                    <p className="text-xs text-amber-100 font-medium">Conflicting data points identified between Data Validation input and core Clients database.</p>
+                  </div>
+                  {selectedClient && (
+                    <span className="bg-amber-700/50 text-white font-mono text-[10px] px-3 py-1 rounded-full border border-amber-400/30 font-bold">
+                      DBO: {selectedClient.clientName}
+                    </span>
+                  )}
                 </div>
                 
                 <div className="p-6 overflow-y-auto space-y-6 flex-grow">
+                  {/* Branch Selection & Context Card for 7-Point Reconciliation */}
+                  {selectedClient && (
+                    <div className="p-5 bg-gradient-to-br from-blue-50/90 to-indigo-50/50 rounded-2xl border border-blue-100 space-y-4 text-left">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100/80 pb-3">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-5 h-5 text-blue-600" />
+                          <div>
+                            <h4 className="text-xs font-black text-blue-950 uppercase tracking-wider">
+                              DBO Branches & Premises Registry
+                            </h4>
+                            <p className="text-[11px] text-blue-700 font-medium">
+                              Select a branch below to load its specific premise name, permit number, and location into the 7-point reconciliation list.
+                            </p>
+                          </div>
+                        </div>
+                        <span className="self-start sm:self-auto text-[10px] text-blue-800 font-bold bg-blue-100 px-3 py-1 rounded-full border border-blue-200">
+                          Active Branch: {selectedClient.premiseName || 'Primary Premise'}
+                        </span>
+                      </div>
+
+                      {/* Gather and list all branches under DBO displaying Premise Name, Permit Number, Location */}
+                      {(() => {
+                        const cleanDboName = (selectedClient.clientName || '').toLowerCase().trim();
+                        
+                        // 1. Gather matching clients from global clients list
+                        const relatedClients = clients.filter(c => (c.clientName || '').toLowerCase().trim() === cleanDboName);
+                        
+                        // 2. Map branches sub-array if present on selectedClient
+                        const mappedSubBranches: LicensedClient[] = (selectedClient.branches || []).map((sb, idx) => ({
+                          ...selectedClient,
+                          id: sb.permitNumber || sb.id || `SUB_BR_${idx}_${selectedClient.id}`,
+                          permitNumber: sb.permitNumber || selectedClient.permitNumber,
+                          premiseName: sb.premiseName || selectedClient.premiseName,
+                          location: sb.location || selectedClient.location,
+                        }));
+
+                        // Merge into unique branch list by permit number or premise name
+                        const allBranchesMap = new Map<string, LicensedClient>();
+                        [...relatedClients, ...mappedSubBranches].forEach(b => {
+                          const key = (b.permitNumber || b.id || b.premiseName || '').toLowerCase().trim();
+                          if (key && !allBranchesMap.has(key)) {
+                            allBranchesMap.set(key, b);
+                          }
+                        });
+                        
+                        const selectedKey = (selectedClient.permitNumber || selectedClient.id || selectedClient.premiseName || '').toLowerCase().trim();
+                        if (selectedKey && !allBranchesMap.has(selectedKey)) {
+                          allBranchesMap.set(selectedKey, selectedClient);
+                        }
+
+                        const branchList = Array.from(allBranchesMap.values());
+
+                        return (
+                          <div className="space-y-2">
+                            <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider block">
+                              Registered Premises / Branches ({branchList.length}): Click any branch to reconcile
+                            </span>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                              {branchList.map((branchItem, bIdx) => {
+                                const isCurrentActive = 
+                                  (branchItem.id && selectedClient.id && branchItem.id === selectedClient.id) ||
+                                  (branchItem.permitNumber && selectedClient.permitNumber && branchItem.permitNumber.toString().trim().toLowerCase() === selectedClient.permitNumber.toString().trim().toLowerCase()) ||
+                                  (branchItem.premiseName && selectedClient.premiseName && branchItem.premiseName.toString().trim().toLowerCase() === selectedClient.premiseName.toString().trim().toLowerCase());
+
+                                return (
+                                  <button
+                                    key={bIdx}
+                                    type="button"
+                                    onClick={() => handleSelectBranchForReconciliation(branchItem)}
+                                    className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 relative overflow-hidden group ${
+                                      isCurrentActive
+                                        ? 'bg-blue-600 text-white border-blue-700 shadow-md ring-2 ring-blue-300'
+                                        : 'bg-white hover:bg-blue-50/80 text-slate-800 border-blue-100 hover:border-blue-300'
+                                    }`}
+                                  >
+                                    <div className="space-y-1.5">
+                                      {/* 1. Premise Name */}
+                                      <div className="flex justify-between items-start gap-1">
+                                        <span className={`text-xs font-bold leading-snug line-clamp-2 ${isCurrentActive ? 'text-white' : 'text-slate-900 group-hover:text-blue-900'}`}>
+                                          {branchItem.premiseName || 'Unnamed Premise'}
+                                        </span>
+                                        {isCurrentActive && (
+                                          <span className="bg-emerald-500 text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 shadow-xs">
+                                            Active
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* 2. Permit Number */}
+                                      <div className="flex items-center gap-1.5 text-[11px]">
+                                        <span className={`font-medium ${isCurrentActive ? 'text-blue-100' : 'text-slate-400'}`}>Permit:</span>
+                                        <span className={`font-mono font-bold ${isCurrentActive ? 'text-white' : 'text-blue-700'}`}>
+                                          {branchItem.permitNumber || branchItem.id || 'N/A'}
+                                        </span>
+                                      </div>
+
+                                      {/* 3. Location */}
+                                      <div className="flex items-center gap-1.5 text-[11px]">
+                                        <span className={`font-medium ${isCurrentActive ? 'text-blue-100' : 'text-slate-400'}`}>Location:</span>
+                                        <span className={`font-semibold ${isCurrentActive ? 'text-blue-50' : 'text-slate-700'}`}>
+                                          {branchItem.location || 'N/A'} {branchItem.county ? `(${branchItem.county})` : ''}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    <div className={`pt-2 border-t text-[10px] font-bold flex items-center justify-between ${
+                                      isCurrentActive ? 'border-blue-500/60 text-blue-100' : 'border-slate-100 text-blue-600 group-hover:text-blue-700'
+                                    }`}>
+                                      <span>{isCurrentActive ? 'Loaded in 7-Point Recon' : 'Click to Load in Recon'}</span>
+                                      <span>&rarr;</span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
                   <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    The following fields do not match. For each mismatch, select which value is the absolute latest source of truth. 
+                    The following 7-point fields do not match. For each mismatch, select which value is the absolute latest source of truth. 
                     Selecting a value will update BOTH this validation form and the core licensed clients registry in Supabase.
                   </p>
 
                   <div className="space-y-4">
                     {mismatchFields.map((item, idx) => (
                       <div key={item.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3 text-left">
-                        <span className="text-xs font-bold text-slate-800 tracking-tight block uppercase">{item.label}</span>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold text-slate-800 tracking-tight block uppercase">{item.label}</span>
+                          {(item.key === 'premiseName' || item.key === 'location') && (
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
+                              Branch Data Point
+                            </span>
+                          )}
+                        </div>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {/* Validation Value Option */}
@@ -4297,7 +4881,9 @@ export function DataValidationModule() {
                             }`}
                           >
                             <span className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Data Validation Form State</span>
-                            <span className="text-sm font-semibold text-slate-800">{item.validationVal || '(Empty)'}</span>
+                            <span className="text-sm font-semibold text-slate-800">
+                              {item.key === 'expiryDate' ? (formatDateToDDMMYYYY(item.validationVal) || '(Empty)') : (item.validationVal || '(Empty)')}
+                            </span>
                             {item.selectedVal === 'validation' && (
                               <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-blue-600" />
                             )}
@@ -4318,7 +4904,9 @@ export function DataValidationModule() {
                             }`}
                           >
                             <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Licensed Clients Registry</span>
-                            <span className="text-sm font-semibold text-slate-800">{item.clientVal || '(Empty)'}</span>
+                            <span className="text-sm font-semibold text-slate-800">
+                              {item.key === 'expiryDate' ? (formatDateToDDMMYYYY(item.clientVal) || '(Empty)') : (item.clientVal || '(Empty)')}
+                            </span>
                             {item.selectedVal === 'client' && (
                               <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-emerald-600" />
                             )}
@@ -4357,6 +4945,51 @@ export function DataValidationModule() {
                   </button>
                 </div>
               </div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {pdfModalUrl && (
+            <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[90vh] flex flex-col overflow-hidden border border-slate-200"
+              >
+                <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-blue-400" />
+                    <h3 className="font-bold text-sm">Validation PDF Document</h3>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <a
+                      href={pdfModalUrl}
+                      download="Validation_Document.pdf"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
+                    >
+                      Download / Open
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setPdfModalUrl(null)}
+                      className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer text-sm font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                <div className="flex-1 bg-slate-100 p-2 relative">
+                  <iframe
+                    src={pdfModalUrl}
+                    className="w-full h-full rounded-xl border border-slate-200 shadow-inner bg-white"
+                    title="Validation PDF Viewer"
+                  />
+                </div>
+              </motion.div>
             </div>
           )}
         </AnimatePresence>

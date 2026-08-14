@@ -263,6 +263,21 @@ export const parseDDMMYYYY = (dateStr: string | undefined | null): Date | null =
   return isNaN(d.getTime()) ? null : d;
 };
 
+export const clampYear = (yearNum: number): number => {
+  const currentYear = new Date().getFullYear();
+  const minYear = 2021;
+  const maxYear = currentYear + 1;
+  if (isNaN(yearNum) || yearNum === null || yearNum === undefined) return currentYear;
+  let y = Number(yearNum);
+  if (isNaN(y)) return currentYear;
+  if (y >= 0 && y <= 99) {
+    y = 2000 + y;
+  }
+  if (y < minYear) return minYear;
+  if (y > maxYear) return maxYear;
+  return y;
+};
+
 export const formatDateToDDMMYYYY = (dateStr: string | Date | undefined | null): string => {
   if (!dateStr) return '';
   if (typeof dateStr === 'string') {
@@ -272,26 +287,24 @@ export const formatDateToDDMMYYYY = (dateStr: string | Date | undefined | null):
     if (s.includes('/')) {
       const parts = s.split('/');
       if (parts.length === 3) {
-        if (parts[2].trim().length === 4) {
-          const d = parts[0].trim().padStart(2, '0');
-          const m = parts[1].trim().padStart(2, '0');
-          const y = parts[2].trim();
-          return `${d}/${m}/${y}`;
-        }
+        const d = parts[0].trim().padStart(2, '0');
+        const m = parts[1].trim().padStart(2, '0');
+        const y = clampYear(parseInt(parts[2].trim(), 10));
+        return `${d}/${m}/${y}`;
       }
     }
     if (s.includes('-')) {
       const parts = s.split('T')[0].split('-');
       if (parts.length === 3) {
         if (parts[0].trim().length === 4) {
-          const y = parts[0].trim();
+          const y = clampYear(parseInt(parts[0].trim(), 10));
           const m = parts[1].trim().padStart(2, '0');
           const d = parts[2].trim().padStart(2, '0');
           return `${d}/${m}/${y}`;
-        } else if (parts[2].trim().length === 4) {
+        } else {
           const d = parts[0].trim().padStart(2, '0');
           const m = parts[1].trim().padStart(2, '0');
-          const y = parts[2].trim();
+          const y = clampYear(parseInt(parts[2].trim(), 10));
           return `${d}/${m}/${y}`;
         }
       }
@@ -301,19 +314,22 @@ export const formatDateToDDMMYYYY = (dateStr: string | Date | undefined | null):
   if (isNaN(d.getTime())) return String(dateStr);
   const day = String(d.getDate()).padStart(2, '0');
   const month = String(d.getMonth() + 1).padStart(2, '0');
-  const year = d.getFullYear();
+  const year = clampYear(d.getFullYear());
   return `${day}/${month}/${year}`;
 };
 
 export const formatDDMMYYYYToYYYYMMDD = (dateStr: string | undefined | null): string => {
   if (!dateStr) return '';
   const s = dateStr.trim();
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(s)) {
     const [d, m, y] = s.split('/');
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    const clampedY = clampYear(parseInt(y, 10));
+    return `${clampedY}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-    return s.split('T')[0];
+    const parts = s.split('T')[0].split('-');
+    const clampedY = clampYear(parseInt(parts[0], 10));
+    return `${clampedY}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
   }
   return '';
 };
@@ -396,6 +412,8 @@ export interface DataValidation {
   status: 'Approved' | 'Pending' | 'Action Required';
   remarks?: string;
   monthsCount?: number; // Number of individual months / sales entries validated within this form
+  pdfPath?: string;
+  rawData?: any;
 }
 
 export const getIndividualValidationsCount = (v: DataValidation): number => {

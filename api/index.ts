@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { google } from "googleapis";
+import cookieParser from "cookie-parser";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,6 +95,8 @@ async function startServer() {
     logToFile("[Server] JSON middleware added.");
     app.use(express.urlencoded({ limit: '50mb', extended: true }));
     logToFile("[Server] URLencoded middleware added.");
+    app.use(cookieParser());
+    logToFile("[Server] CookieParser middleware added.");
 
     // Request Logger - log API and page requests, excluding individual static bundle assets to keep logs clean
     app.use((req, res, next) => {
@@ -707,10 +710,15 @@ async function startServer() {
           if (!newClient.id) {
             return res.status(400).json({ error: "Missing client ID" });
           }
-          const index = clients.findIndex((c: any) => c.id === newClient.id);
+          const index = clients.findIndex((c: any) => 
+            (c.id && newClient.id && c.id === newClient.id) ||
+            (c.permitNumber && newClient.permitNumber && c.permitNumber.toString().trim().toLowerCase() === newClient.permitNumber.toString().trim().toLowerCase()) ||
+            (c.clientName && newClient.clientName && c.clientName.toString().trim().toLowerCase() === newClient.clientName.toString().trim().toLowerCase() && 
+             c.premiseName && newClient.premiseName && c.premiseName.toString().trim().toLowerCase() === newClient.premiseName.toString().trim().toLowerCase())
+          );
           if (index !== -1) {
-            logToFile(`Updating existing client: ${newClient.id}`);
-            clients[index] = newClient;
+            logToFile(`Updating existing client: ${clients[index].id || newClient.id}`);
+            clients[index] = { ...clients[index], ...newClient, id: clients[index].id || newClient.id };
           } else {
             logToFile(`Adding new client: ${newClient.id}`);
             clients.push(newClient);
@@ -1035,8 +1043,8 @@ async function startServer() {
 
     let spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID || req.body.spreadsheetId;
     if (!spreadsheetId) {
-      logToFile("[API] Submit failed: Spreadsheet ID missing");
-      return res.status(400).json({ error: "Spreadsheet ID missing. Please set GOOGLE_SPREADSHEET_ID environment variable." });
+      logToFile("[API] Google Sheets sync skipped: GOOGLE_SPREADSHEET_ID not configured");
+      return res.status(200).json({ message: "Supabase saved. Google Sheets sync skipped (ID not configured)." });
     }
     spreadsheetId = spreadsheetId.trim().replace(/^["']|["']$/g, '');
 

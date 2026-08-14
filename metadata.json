@@ -1,6 +1,6 @@
 {
   "name": "KDB Hub",
-  "description": "A professional digital platform for Kenya Dairy Board (KDB) operators to manage levy arrears through structured payment agreements and digital signatures.",
+  "description": "Kenya Dairy Board integrated management system with Data Validation, Client Registry, Returns, and reporting engines.",
   "requestFramePermissions": [
     "camera"
   ],

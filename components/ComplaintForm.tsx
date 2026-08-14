@@ -182,47 +182,47 @@ export const ComplaintForm: React.FC<ComplaintFormProps> = ({ onSubmit, onBack }
   ];
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-12" id="complaint_form_root">
+    <div className="max-w-3xl mx-auto px-4 py-6" id="complaint_form_root">
       {isSubmitting && (
-        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[200] flex items-center justify-center p-8">
-          <div className="max-w-md w-full text-center space-y-8 animate-in fade-in zoom-in-95">
+        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+          <div className="max-w-md w-full text-center space-y-6 animate-in fade-in zoom-in-95">
             <div className="relative inline-block">
-              <div className="w-24 h-24 border-4 border-red-500/20 border-t-red-650 rounded-full animate-spin"></div>
+              <div className="w-16 h-16 border-4 border-red-500/20 border-t-red-650 rounded-full animate-spin"></div>
               <div className="absolute inset-0 flex items-center justify-center">
-                <Send className="w-8 h-8 text-red-650 animate-pulse" />
+                <Send className="w-6 h-6 text-red-650 animate-pulse" />
               </div>
             </div>
-            <div className="space-y-2">
-              <h3 className="text-xl font-black text-white uppercase tracking-widest">TRANSMITTING COMPLAINT</h3>
-              <p className="text-red-400 font-bold text-sm h-6">{transmissionStatus}</p>
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">TRANSMITTING COMPLAINT</h3>
+              <p className="text-red-400 font-medium text-xs h-5">{transmissionStatus}</p>
             </div>
           </div>
         </div>
       )}
 
-      <div className="bg-white rounded-[40px] shadow-2xl overflow-hidden border border-slate-100 animate-in fade-in zoom-in-95 duration-500">
-        <div className="bg-red-750 px-10 py-10 text-white flex justify-between items-center" style={{ backgroundColor: '#991b1b' }}>
+      <div className="bg-white rounded-2xl shadow-md overflow-hidden border border-slate-100 animate-in fade-in zoom-in-95 duration-500">
+        <div className="bg-red-750 px-5 py-4 sm:px-6 sm:py-4 text-white flex justify-between items-center" style={{ backgroundColor: '#991b1b' }}>
           <div>
-            <h2 className="text-3xl font-black tracking-tight">Stakeholder Complaints Form</h2>
-            <p className="text-red-100 text-xs font-bold uppercase tracking-widest mt-1 opacity-80">Kenya Dairy Board (KDB)</p>
+            <h2 className="text-base sm:text-lg font-bold tracking-tight">Stakeholder Complaints Form</h2>
+            <p className="text-red-100 text-[10px] font-bold uppercase tracking-wider mt-0.5 opacity-90">Kenya Dairy Board (KDB)</p>
           </div>
-          <div className="bg-white/10 px-4 py-2 rounded-2xl text-[10px] font-black tracking-widest uppercase flex items-center">
-            <FileText className="w-3.5 h-3.5 mr-2" /> Complaint Portal
+          <div className="bg-white/10 px-3 py-1.5 rounded-xl text-[9px] font-bold tracking-wider uppercase flex items-center">
+            <FileText className="w-3.5 h-3.5 mr-1.5" /> Complaint Portal
           </div>
         </div>
 
-        <div className="p-10 border-b bg-red-50/50 text-red-800 text-xs font-medium leading-relaxed px-10 py-6 border-red-100 flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+        <div className="px-5 py-3 border-b bg-red-50/50 text-red-800 text-xs font-medium leading-relaxed border-red-100 flex items-start gap-2.5">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
           <div>
-            <span className="font-bold text-red-900 block mb-1">NB: Formal Complaints Tracking</span>
+            <span className="font-bold text-red-900 block mb-0.5 text-xs">NB: Formal Complaints Tracking</span>
             Use this form to submit stakeholder complaints regarding Kenya Dairy Board regulatory services, staff conduct, licensing delays, quality standards disputes, pricing, or regulatory enforcement concerns. Your report will be thoroughly investigated.
           </div>
         </div>
 
-        <form onSubmit={handleFormSubmit} className="p-10 space-y-10" id="actual_complaint_form">
+        <form onSubmit={handleFormSubmit} className="p-5 sm:p-8 space-y-6" id="actual_complaint_form">
           {formError && (
-            <p className="text-xs text-rose-600 bg-rose-50 p-5 rounded-2xl flex items-center font-bold animate-pulse">
-              <AlertCircle className="w-5 h-5 mr-2 shrink-0 text-rose-500" />
+            <p className="text-xs text-rose-600 bg-rose-50 p-3.5 rounded-xl flex items-center font-semibold animate-pulse">
+              <AlertCircle className="w-4 h-4 mr-2 shrink-0 text-rose-500" />
               {formError}
             </p>
           )}
