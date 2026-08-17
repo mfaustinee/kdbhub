@@ -2588,67 +2588,91 @@ export function DataValidationModule() {
         })();
       }
 
-      const payloadRawData = {
+      const payloadRawData: any = {
         ...updatedData,
         pdf: pdf,
         pdf_path: pdfPath,
         pdfPath: pdfPath
       };
 
-      const valRecordId = `VAL_${(updatedData.permitNo || 'NO_PERMIT').replace(/[^a-zA-Z0-9]/g, '_')}_${(updatedData.validationPeriod || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
+      // Generate valid UUID for Supabase PostgreSQL UUID primary key
+      const valUuid = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+        ? crypto.randomUUID()
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          });
 
-      // 2. Direct Supabase kdb_validations sync
+      payloadRawData.uuid = valUuid;
+
+      // Exact columns matching remote Supabase schema
+      const supabaseRow = {
+        id: valUuid,
+        dbo_name: updatedData.dboName || '',
+        premise_name: updatedData.premiseName || '',
+        branch: updatedData.county ? (updatedData.county.trim() || 'Kericho') : 'Kericho',
+        date: updatedData.date || new Date().toISOString().split('T')[0],
+        validation_period: updatedData.validationPeriod || '',
+        category: updatedData.category || '',
+        permit_no: updatedData.permitNo || '',
+        location: updatedData.location || '',
+        county: updatedData.county?.trim() || 'Kericho',
+        total_penalty: 0,
+        raw_data: payloadRawData,
+        pdf_path: pdfPath
+      };
+
+      // 2. Direct Supabase kdb_validations & data_validations sync
       const supabaseSyncPromise = (async () => {
         if (!supabase) return;
         try {
           if (isAmendment) {
-            const { error: updateErr } = await supabase
-              .from('kdb_validations')
-              .update({
-                dbo_name: updatedData.dboName,
-                premise_name: updatedData.premiseName,
-                date: updatedData.date,
-                category: updatedData.category,
-                permit_no: updatedData.permitNo,
-                location: updatedData.location,
-                county: updatedData.county,
-                contacts: updatedData.contacts,
-                validation_period: updatedData.validationPeriod,
-                pdf_path: pdfPath,
-                raw_data: payloadRawData
-              })
-              .match({
-                premise_name: updatedData.premiseName,
-                validation_period: updatedData.validationPeriod
-              });
-            if (updateErr) console.warn('Supabase kdb_validations update error:', updateErr);
+            const updatePayload = {
+              dbo_name: supabaseRow.dbo_name,
+              premise_name: supabaseRow.premise_name,
+              branch: supabaseRow.branch,
+              date: supabaseRow.date,
+              category: supabaseRow.category,
+              permit_no: supabaseRow.permit_no,
+              location: supabaseRow.location,
+              county: supabaseRow.county,
+              total_penalty: supabaseRow.total_penalty,
+              validation_period: supabaseRow.validation_period,
+              pdf_path: supabaseRow.pdf_path,
+              raw_data: payloadRawData
+            };
+
+            await Promise.allSettled([
+              supabase
+                .from('kdb_validations')
+                .update(updatePayload)
+                .match({
+                  premise_name: updatedData.premiseName,
+                  validation_period: updatedData.validationPeriod
+                }),
+              supabase
+                .from('data_validations')
+                .update(updatePayload)
+                .match({
+                  premise_name: updatedData.premiseName,
+                  validation_period: updatedData.validationPeriod
+                })
+            ]);
           } else {
-            const { error: upsertErr } = await supabase
-              .from('kdb_validations')
-              .upsert([{
-                id: valRecordId,
-                dbo_name: updatedData.dboName,
-                premise_name: updatedData.premiseName,
-                date: updatedData.date,
-                validation_period: updatedData.validationPeriod,
-                category: updatedData.category,
-                permit_no: updatedData.permitNo,
-                location: updatedData.location,
-                county: updatedData.county,
-                contacts: updatedData.contacts,
-                pdf_path: pdfPath,
-                raw_data: payloadRawData
-              }]);
-            if (upsertErr) console.warn('Supabase kdb_validations upsert error:', upsertErr);
+            await Promise.allSettled([
+              supabase.from('kdb_validations').upsert([supabaseRow]),
+              supabase.from('data_validations').upsert([supabaseRow])
+            ]);
           }
         } catch (sbErr) {
-          console.warn('Supabase kdb_validations save error:', sbErr);
+          console.warn('Supabase validation sync error:', sbErr);
         }
       })();
 
       // 3. Always save to DBService for guaranteed local persistence & history tracking
       const dataValObject: DataValidation = {
-        id: valRecordId,
+        id: valUuid,
         clientId: updatedData.permitNo || '',
         clientName: updatedData.dboName || '',
         premiseName: updatedData.premiseName || '',

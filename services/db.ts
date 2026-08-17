@@ -2389,60 +2389,64 @@ export const DBService = {
     if (!client) return;
 
     try {
-      const dbObj = toDb(validation);
-      
-      // Save to data_validations table
-      await client
-        .from('data_validations')
-        .upsert(dbObj);
+      // Ensure valid UUID format for PostgreSQL UUID column
+      const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const uuid = (validation.id && UUID_REGEX.test(validation.id)) 
+        ? validation.id 
+        : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+          ? crypto.randomUUID()
+          : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+              const r = (Math.random() * 16) | 0;
+              const v = c === 'x' ? r : (r & 0x3) | 0x8;
+              return v.toString(16);
+            });
 
-      // Save to kdb_validations table
       let valPeriod = validation.period || '';
       if (valPeriod && validation.year && !valPeriod.includes(String(validation.year))) {
         valPeriod = `${valPeriod} ${validation.year}`;
       }
-      const rawData = validation.rawData || { ...validation };
-      const kdbRecordId = validation.id || `VAL_${(validation.permitNo || 'NO_PERMIT').replace(/[^a-zA-Z0-9]/g, '_')}_${(valPeriod || Date.now()).toString().replace(/[^a-zA-Z0-9]/g, '_')}`;
 
+      const rawData = validation.rawData || { ...validation };
+      rawData.uuid = uuid;
+      if (!rawData.id) rawData.id = validation.id;
+
+      // Exact columns matching remote Supabase schema
+      const supabaseRow = {
+        id: uuid,
+        dbo_name: validation.clientName || rawData.dboName || '',
+        premise_name: validation.premiseName || rawData.premiseName || '',
+        branch: (validation as any).branch || rawData.branch || 'Kericho',
+        date: validation.validatedAt || rawData.date || new Date().toISOString().split('T')[0],
+        validation_period: valPeriod,
+        category: validation.category || rawData.category || '',
+        permit_no: validation.permitNo || rawData.permitNo || '',
+        location: validation.location || rawData.location || '',
+        county: (validation as any).county || rawData.county || 'Kericho',
+        total_penalty: Number((validation as any).totalPenalty || rawData.totalPenalty || 0) || 0,
+        raw_data: rawData,
+        pdf_path: validation.pdfPath || rawData.pdf_path || rawData.pdfPath || null
+      };
+
+      // Save to kdb_validations table
       const { error: kdbErr } = await client
         .from('kdb_validations')
-        .upsert({
-          id: kdbRecordId,
-          validation_period: valPeriod,
-          date: validation.validatedAt,
-          raw_data: rawData,
-          permit_no: validation.permitNo,
-          dbo_name: validation.clientName,
-          premise_name: validation.premiseName,
-          location: validation.location,
-          category: validation.category,
-          contacts: validation.contacts,
-          pdf_path: validation.pdfPath
-        });
+        .upsert([supabaseRow]);
 
       if (kdbErr) {
-        console.warn("[DBService] Supabase kdb_validations upsert attempt:", kdbErr.message);
-        // Fallback: try update by premise_name + validation_period or id
-        try {
-          await client
-            .from('kdb_validations')
-            .update({
-              validation_period: valPeriod,
-              date: validation.validatedAt,
-              raw_data: rawData,
-              permit_no: validation.permitNo,
-              dbo_name: validation.clientName,
-              location: validation.location,
-              category: validation.category,
-              contacts: validation.contacts,
-              pdf_path: validation.pdfPath
-            })
-            .or(`id.eq.${kdbRecordId},premise_name.eq.${validation.premiseName}`);
-        } catch (updateErr) {
-          console.warn("[DBService] Supabase kdb_validations update fallback error:", updateErr);
-        }
+        console.warn("[DBService] Supabase kdb_validations upsert error:", kdbErr.message);
       } else {
-        console.log("[DBService] Supabase kdb_validations upsert SUCCESS:", kdbRecordId);
+        console.log("[DBService] Supabase kdb_validations upsert SUCCESS:", uuid);
+      }
+
+      // Save to data_validations table
+      const { error: dvErr } = await client
+        .from('data_validations')
+        .upsert([supabaseRow]);
+
+      if (dvErr) {
+        console.warn("[DBService] Supabase data_validations upsert error:", dvErr.message);
+      } else {
+        console.log("[DBService] Supabase data_validations upsert SUCCESS:", uuid);
       }
     } catch (e) {
       console.warn("[DBService] Supabase saveValidation exception:", e);
@@ -2474,10 +2478,19 @@ export const DBService = {
     }
 
     try {
-      await Promise.allSettled([
-        client.from('data_validations').delete().eq('id', id),
-        client.from('kdb_validations').delete().eq('id', id)
-      ]);
+      const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (UUID_REGEX.test(id)) {
+        await Promise.allSettled([
+          client.from('data_validations').delete().eq('id', id),
+          client.from('kdb_validations').delete().eq('id', id)
+        ]);
+      } else {
+        // Match by permit_no or raw_data id
+        await Promise.allSettled([
+          client.from('data_validations').delete().or(`permit_no.eq.${id},premise_name.eq.${id}`),
+          client.from('kdb_validations').delete().or(`permit_no.eq.${id},premise_name.eq.${id}`)
+        ]);
+      }
       await deleteLocal();
     } catch (e) {
       console.warn("[DBService] Supabase deleteValidation exception, falling back to local.", e);
@@ -2519,16 +2532,46 @@ export const DBService = {
     }
 
     try {
-      const dbObjs = validationsList.map(v => toDb(v));
-      const { error } = await client
-        .from('data_validations')
-        .upsert(dbObjs);
+      const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const dbObjs = validationsList.map(validation => {
+        const uuid = (validation.id && UUID_REGEX.test(validation.id)) 
+          ? validation.id 
+          : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+            ? crypto.randomUUID()
+            : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                const r = (Math.random() * 16) | 0;
+                const v = c === 'x' ? r : (r & 0x3) | 0x8;
+                return v.toString(16);
+              });
 
-      if (error) {
-        console.warn("[DBService] Supabase saveValidationsBulk failed, falling back to local.", error);
-        await saveLocal();
-        return;
-      }
+        let valPeriod = validation.period || '';
+        if (valPeriod && validation.year && !valPeriod.includes(String(validation.year))) {
+          valPeriod = `${valPeriod} ${validation.year}`;
+        }
+        const rawData = validation.rawData || { ...validation };
+        rawData.uuid = uuid;
+
+        return {
+          id: uuid,
+          dbo_name: validation.clientName || rawData.dboName || '',
+          premise_name: validation.premiseName || rawData.premiseName || '',
+          branch: (validation as any).branch || rawData.branch || 'Kericho',
+          date: validation.validatedAt || rawData.date || new Date().toISOString().split('T')[0],
+          validation_period: valPeriod,
+          category: validation.category || rawData.category || '',
+          permit_no: validation.permitNo || rawData.permitNo || '',
+          location: validation.location || rawData.location || '',
+          county: (validation as any).county || rawData.county || 'Kericho',
+          total_penalty: Number((validation as any).totalPenalty || rawData.totalPenalty || 0) || 0,
+          raw_data: rawData,
+          pdf_path: validation.pdfPath || rawData.pdf_path || null
+        };
+      });
+
+      await Promise.allSettled([
+        client.from('kdb_validations').upsert(dbObjs),
+        client.from('data_validations').upsert(dbObjs)
+      ]);
     } catch (e) {
       console.warn("[DBService] Supabase saveValidationsBulk exception, falling back to local.", e);
       await saveLocal();

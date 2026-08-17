@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { google } from "googleapis";
 import cookieParser from "cookie-parser";
+import { createClient } from "@supabase/supabase-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -716,12 +717,52 @@ async function startServer() {
 
         let validationsList = await readJsonArrayFile(VALIDATIONS_FILE);
 
+        const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const ensureUuid = (id?: string) => {
+          if (id && UUID_REGEX.test(id)) return id;
+          return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          });
+        };
+
+        const formatSupabaseRow = (v: any) => {
+          const uuid = ensureUuid(v.id || v.raw_data?.uuid || v.rawData?.uuid);
+          let valPeriod = v.period || v.validationPeriod || v.validation_period || '';
+          const yearVal = v.year || (v.date ? new Date(v.date).getFullYear() : null);
+          if (valPeriod && yearVal && !valPeriod.includes(String(yearVal))) {
+            valPeriod = `${valPeriod} ${yearVal}`;
+          }
+          const rawData = v.rawData || v.raw_data || { ...v };
+          rawData.uuid = uuid;
+
+          return {
+            id: uuid,
+            dbo_name: v.clientName || v.dboName || v.dbo_name || '',
+            premise_name: v.premiseName || v.premise_name || '',
+            branch: v.branch || rawData.branch || 'Kericho',
+            date: v.validatedAt || v.date || new Date().toISOString().split('T')[0],
+            validation_period: valPeriod,
+            category: v.category || rawData.category || '',
+            permit_no: v.permitNo || v.permit_no || '',
+            location: v.location || rawData.location || '',
+            county: v.county || rawData.county || 'Kericho',
+            total_penalty: Number(v.totalPenalty || v.total_penalty || rawData.totalPenalty) || 0,
+            raw_data: rawData,
+            pdf_path: v.pdfPath || v.pdf_path || rawData.pdfPath || null
+          };
+        };
+
+        const itemsToSync: any[] = [];
+
         if (Array.isArray(req.body)) {
           validationsList = req.body;
+          req.body.forEach(item => itemsToSync.push(formatSupabaseRow(item)));
         } else {
           const newValidation = req.body;
           if (!newValidation.id) {
-            return res.status(400).json({ error: "Missing validation ID" });
+            newValidation.id = ensureUuid();
           }
           const index = validationsList.findIndex((v: any) => v.id === newValidation.id);
           if (index !== -1) {
@@ -731,10 +772,28 @@ async function startServer() {
             logToFile(`Adding new validation: ${newValidation.id}`);
             validationsList.push(newValidation);
           }
+          itemsToSync.push(formatSupabaseRow(newValidation));
         }
 
         await fs.promises.writeFile(VALIDATIONS_FILE, JSON.stringify(validationsList, null, 2));
-        logToFile(`Successfully saved validations`);
+        logToFile(`Successfully saved validations locally`);
+
+        // Asynchronously sync to Supabase if configured
+        if (sUrl && sKey && itemsToSync.length > 0) {
+          (async () => {
+            try {
+              const serverSupabase = createClient(sUrl, sKey);
+              await Promise.allSettled([
+                serverSupabase.from('kdb_validations').upsert(itemsToSync),
+                serverSupabase.from('data_validations').upsert(itemsToSync)
+              ]);
+              logToFile(`[Server] Synced ${itemsToSync.length} validation(s) to Supabase tables`);
+            } catch (sbErr: any) {
+              logToFile(`[Server] Warning: Background Supabase validation sync: ${sbErr.message}`);
+            }
+          })();
+        }
+
         res.json({ success: true });
       } catch (error: any) {
         logToFile(`CRITICAL Error saving validations: ${error.message}`);
@@ -752,6 +811,29 @@ async function startServer() {
         
         await fs.promises.writeFile(VALIDATIONS_FILE, JSON.stringify(filtered, null, 2));
         logToFile(`Successfully deleted validation ${id}`);
+
+        if (sUrl && sKey) {
+          (async () => {
+            try {
+              const serverSupabase = createClient(sUrl, sKey);
+              const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+              if (UUID_REGEX.test(id)) {
+                await Promise.allSettled([
+                  serverSupabase.from('data_validations').delete().eq('id', id),
+                  serverSupabase.from('kdb_validations').delete().eq('id', id)
+                ]);
+              } else {
+                await Promise.allSettled([
+                  serverSupabase.from('data_validations').delete().or(`permit_no.eq.${id},premise_name.eq.${id}`),
+                  serverSupabase.from('kdb_validations').delete().or(`permit_no.eq.${id},premise_name.eq.${id}`)
+                ]);
+              }
+            } catch (sbErr) {
+              logToFile(`[Server] Supabase delete validation warning: ${sbErr}`);
+            }
+          })();
+        }
+
         res.json({ success: true });
       } catch (error: any) {
         logToFile(`CRITICAL Error deleting validation: ${error.message}`);
