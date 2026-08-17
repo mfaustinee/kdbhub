@@ -732,19 +732,189 @@ export function DataValidationModule() {
     verifyApi();
   }, []);
 
-  // Fetch last 3 months history for Premise Validation & PDF History
-  useEffect(() => {
-    const fetchHistory = async () => {
-      const pName = (formData.premiseName || '').trim();
-      const pNo = (formData.permitNo || '').trim();
-      const dbo = (formData.dboName || '').trim();
+  // Fast helper to compute premise validation history from any list of records
+  const extractPremiseHistory = (vals: any[], pName: string, pNo: string, dbo: string) => {
+    const pNorm = normStr(pName);
+    const pNoNorm = normStr(pNo);
+    const dboNorm = normStr(dbo);
 
-      if (!pName && !pNo && !dbo) {
-        setLastCollections([]);
-        setHistoryError(null);
-        return;
+    const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any; matchedPremise?: string }[] = [];
+
+    if (vals && vals.length > 0) {
+      vals.forEach(v => {
+        const raw = typeof v.raw_data === 'string' ? (() => { try { return JSON.parse(v.raw_data); } catch { return {}; } })() : (v.rawData || v.raw_data || {});
+        const vPName = normStr(v.premiseName || v.premise_name || raw.premiseName || raw.premise_name);
+        const vPNo = normStr(v.permitNo || v.permit_no || v.clientId || raw.permitNo || raw.permit_no);
+        const vDbo = normStr(v.clientName || v.dbo_name || raw.dboName || raw.dbo_name || raw.clientName);
+
+        // Independent matching for premise name, permit number, or DBO name
+        const isPremiseMatch = pNorm && (vPName === pNorm || vPName.includes(pNorm) || pNorm.includes(vPName));
+        const isPermitMatch = pNoNorm && (vPNo === pNoNorm || vPNo.includes(pNoNorm));
+        const isDboMatch = dboNorm && (vDbo === dboNorm || vDbo.includes(dboNorm) || dboNorm.includes(vDbo));
+
+        if (isPremiseMatch || isPermitMatch || isDboMatch) {
+          const pdfRef = v.pdfPath || v.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf;
+          let fullPeriod = v.period || v.validation_period || raw.validationPeriod || raw.period || '';
+          if (fullPeriod) {
+            fullPeriod = fullPeriod.trim();
+            if (v.year && !fullPeriod.includes(String(v.year))) {
+              fullPeriod = `${fullPeriod} ${v.year}`;
+            }
+          } else if (v.validatedAt || v.date || raw.date) {
+            const d = new Date(v.validatedAt || v.date || raw.date);
+            if (!isNaN(d.getTime())) {
+              fullPeriod = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
+            }
+          }
+
+          if (fullPeriod) {
+            allExtractedMonths.push({
+              period: fullPeriod,
+              pdfPath: pdfRef,
+              score: getPeriodTimestamp(fullPeriod, v.validatedAt || v.date || raw.date),
+              rawData: raw,
+              matchedPremise: v.premiseName || v.premise_name || raw.premiseName || pName
+            });
+          }
+        }
+      });
+    }
+
+    // Deduplicate by normalized period
+    const deduplicated: Record<string, any> = {};
+    allExtractedMonths.forEach(m => {
+      const key = m.period.toLowerCase().trim();
+      if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath) || m.score > deduplicated[key].score) {
+        deduplicated[key] = m;
       }
+    });
 
+    const sortedList = Object.values(deduplicated).sort((a: any, b: any) => b.score - a.score);
+    return sortedList.slice(0, 3).map((m: any) => ({
+      month: '', year: '', date: '',
+      fullPeriod: m.period,
+      displayString: m.period.replace(/(\b\d{4}\b)\s+\1/g, '$1'),
+      matchedPremise: m.matchedPremise || pName,
+      pdfPath: m.pdfPath,
+      rawData: m.rawData
+    }));
+  };
+
+  // Fast helper to compute DBO record matches from clients registry & cached validations
+  const extractDboMatches = (searchTerm: string, clientsList: LicensedClient[], cachedVals: any[]) => {
+    const uniqueMap: Record<string, any> = {};
+    const cleanSearch = searchTerm.replace(/["']/g, '').trim();
+    const searchTokens = cleanSearch.toLowerCase().split(/\s+/).filter(t => t.length >= 2);
+    const normSearch = normStr(searchTerm);
+
+    const closedSet = new Set(
+      (clientsList || [])
+        .filter(c => isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus))
+        .flatMap(c => [
+          normStr(c.clientName),
+          normStr(c.premiseName),
+          normStr(c.id),
+          normStr(c.permitNumber)
+        ])
+        .filter(Boolean)
+    );
+
+    // 1. Search cached validations
+    if (cachedVals && cachedVals.length > 0) {
+      cachedVals.forEach(v => {
+        const raw = typeof v.raw_data === 'string' ? (() => { try { return JSON.parse(v.raw_data); } catch { return {}; } })() : (v.rawData || v.raw_data || {});
+        const vDbo = normStr(v.clientName || v.dbo_name || raw.dboName || raw.dbo_name);
+        const vPName = normStr(v.premiseName || v.premise_name || raw.premiseName || raw.premise_name);
+        const vPermit = normStr(v.permitNo || v.permit_no || v.clientId || raw.permitNo || raw.permit_no);
+
+        if (closedSet.has(vDbo) || closedSet.has(vPName) || closedSet.has(vPermit)) {
+          return;
+        }
+
+        const isMatch = (normSearch && (vDbo.includes(normSearch) || normSearch.includes(vDbo))) ||
+                        (searchTokens.length > 0 && searchTokens.some(tok => vDbo.includes(tok)));
+
+        if (isMatch) {
+          const key = `${v.premiseName || v.premise_name || raw.premiseName || ''}-${v.permitNo || v.permit_no || raw.permitNo || ''}`.toLowerCase().trim();
+          if (!uniqueMap[key]) {
+            uniqueMap[key] = {
+              dbo_name: v.clientName || v.dbo_name || raw.dboName || raw.dbo_name,
+              premise_name: v.premiseName || v.premise_name || raw.premiseName || raw.premise_name,
+              category: v.category || raw.category,
+              permit_no: v.permitNo || v.permit_no || raw.permitNo,
+              location: v.location || raw.location,
+              county: toSentenceCase((raw && raw.county) || 'Kericho'),
+              raw_data: raw,
+              date: v.validatedAt || v.date || raw.date
+            };
+          }
+        }
+      });
+    }
+
+    // 2. Search active clients registry
+    if (clientsList && clientsList.length > 0) {
+      clientsList.forEach(c => {
+        if (isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus)) return;
+
+        const cDbo = normStr(c.clientName);
+        const isMatch = (normSearch && (cDbo.includes(normSearch) || normSearch.includes(cDbo))) ||
+                        (searchTokens.length > 0 && searchTokens.some(tok => cDbo.includes(tok)));
+
+        if (isMatch) {
+          const key = `${c.premiseName || ''}-${c.id || ''}`.toLowerCase().trim();
+          if (!uniqueMap[key]) {
+            uniqueMap[key] = {
+              dbo_name: c.clientName,
+              premise_name: c.premiseName,
+              category: c.premiseCategory,
+              permit_no: c.id,
+              location: c.location,
+              county: toSentenceCase(c.county || 'Kericho'),
+              raw_data: {
+                dboName: c.clientName,
+                premiseName: c.premiseName,
+                category: c.premiseCategory,
+                permitNo: c.id,
+                location: c.location,
+                county: toSentenceCase(c.county || 'Kericho'),
+                contacts: c.tel,
+                expiryDate: c.expiryDate
+              },
+              date: c.startDate || new Date().toISOString()
+            };
+          }
+        }
+      });
+    }
+
+    return Object.values(uniqueMap).slice(0, 8);
+  };
+
+  // Instant & debounced background Fetch for Premise Validation & PDF History
+  useEffect(() => {
+    let isMounted = true;
+    const pName = (formData.premiseName || '').trim();
+    const pNo = (formData.permitNo || '').trim();
+    const dbo = (formData.dboName || '').trim();
+
+    if (!pName && !pNo && !dbo) {
+      setLastCollections([]);
+      setHistoryError(null);
+      setIsCheckingHistory(false);
+      return;
+    }
+
+    // Phase 1: Instant Synchronous Lookup from in-memory cache (0ms latency)
+    const cachedVals = DBService.getCachedValidations();
+    const immediateHistory = extractPremiseHistory(cachedVals, pName, pNo, dbo);
+    if (immediateHistory.length > 0) {
+      setLastCollections(immediateHistory);
+    }
+
+    // Phase 2: Debounced background check for remote Supabase updates
+    const fetchRemoteHistory = async () => {
+      if (!isMounted) return;
       setIsCheckingHistory(true);
       setHistoryError(null);
 
@@ -772,164 +942,62 @@ export function DataValidationModule() {
           }
         }
 
-        const pNorm = normStr(pName);
-        const pNoNorm = normStr(pNo);
-        const dboNorm = normStr(dbo);
-
-        const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any; matchedPremise?: string }[] = [];
-
-        if (allVals && allVals.length > 0) {
-          allVals.forEach(v => {
-            const raw = v.rawData || {};
-            const vPName = normStr(v.premiseName || raw.premiseName || raw.premise_name);
-            const vPNo = normStr(v.permitNo || v.clientId || raw.permitNo || raw.permit_no);
-            const vDbo = normStr(v.clientName || raw.dboName || raw.dbo_name || raw.clientName);
-
-            // Independent matching for premise name, permit number, or DBO name
-            const isPremiseMatch = pNorm && (vPName === pNorm || vPName.includes(pNorm) || pNorm.includes(vPName));
-            const isPermitMatch = pNoNorm && (vPNo === pNoNorm || vPNo.includes(pNoNorm));
-            const isDboMatch = dboNorm && (vDbo === dboNorm || vDbo.includes(dboNorm) || dboNorm.includes(vDbo));
-
-            const isMatch = isPremiseMatch || isPermitMatch || isDboMatch;
-
-            if (isMatch) {
-              const pdfRef = v.pdfPath || raw.pdf_path || raw.pdfPath || raw.pdf;
-              let fullPeriod = v.period || raw.validationPeriod || raw.period || '';
-              if (fullPeriod) {
-                fullPeriod = fullPeriod.trim();
-                if (v.year && !fullPeriod.includes(String(v.year))) {
-                  fullPeriod = `${fullPeriod} ${v.year}`;
-                }
-              } else if (v.validatedAt || raw.date) {
-                const d = new Date(v.validatedAt || raw.date);
-                if (!isNaN(d.getTime())) {
-                  fullPeriod = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
-                }
-              }
-
-              if (fullPeriod) {
-                allExtractedMonths.push({
-                  period: fullPeriod,
-                  pdfPath: pdfRef,
-                  score: getPeriodTimestamp(fullPeriod, v.validatedAt || raw.date),
-                  rawData: raw,
-                  matchedPremise: v.premiseName || raw.premiseName || pName
-                });
-              }
-            }
-          });
-        }
-
-        if (sbVals && sbVals.length > 0) {
-          sbVals.forEach(v => {
-            const raw = typeof v.raw_data === 'string' ? (() => { try { return JSON.parse(v.raw_data); } catch { return {}; } })() : (v.raw_data || {});
-            const vPName = normStr(v.premise_name || raw.premiseName || raw.premise_name);
-            const vPNo = normStr(v.permit_no || raw.permitNo || raw.permit_no);
-            const vDbo = normStr(v.dbo_name || raw.dboName || raw.dbo_name);
-
-            // Independent matching
-            const isPremiseMatch = pNorm && (vPName === pNorm || vPName.includes(pNorm) || pNorm.includes(vPName));
-            const isPermitMatch = pNoNorm && (vPNo === pNoNorm || vPNo.includes(pNoNorm));
-            const isDboMatch = dboNorm && (vDbo === dboNorm || vDbo.includes(dboNorm) || dboNorm.includes(vDbo));
-
-            const isMatch = isPremiseMatch || isPermitMatch || isDboMatch;
-
-            if (isMatch) {
-              const pdfRef = v.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf;
-              let fullPeriod = v.validation_period || raw.validationPeriod || raw.period || '';
-              if (fullPeriod) {
-                fullPeriod = fullPeriod.trim();
-              } else if (v.date || raw.date) {
-                const d = new Date(v.date || raw.date);
-                if (!isNaN(d.getTime())) {
-                  fullPeriod = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
-                }
-              }
-
-              if (fullPeriod) {
-                allExtractedMonths.push({
-                  period: fullPeriod,
-                  pdfPath: pdfRef,
-                  score: getPeriodTimestamp(fullPeriod, v.date || raw.date),
-                  rawData: raw,
-                  matchedPremise: v.premise_name || raw.premiseName || pName
-                });
-              }
-            }
-          });
-        }
-
-        // Deduplicate by normalized period
-        const deduplicated: Record<string, any> = {};
-        allExtractedMonths.forEach(m => {
-          const key = m.period.toLowerCase().trim();
-          if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath) || m.score > deduplicated[key].score) {
-            deduplicated[key] = m;
-          }
-        });
-
-        const sortedList = Object.values(deduplicated).sort((a: any, b: any) => b.score - a.score);
-        const top3 = sortedList.slice(0, 3);
-
-        const history = top3.map((m: any) => ({
-          month: '', year: '', date: '',
-          fullPeriod: m.period,
-          displayString: m.period.replace(/(\b\d{4}\b)\s+\1/g, '$1'),
-          matchedPremise: m.matchedPremise || pName,
-          pdfPath: m.pdfPath,
-          rawData: m.rawData
-        }));
-
-        setLastCollections(history);
+        if (!isMounted) return;
+        const combined = [...allVals, ...sbVals];
+        const computedHistory = extractPremiseHistory(combined, pName, pNo, dbo);
+        setLastCollections(computedHistory);
       } catch (err: any) {
-        console.error('Error fetching history:', err);
-        setHistoryError(err.message || 'Failed to fetch history');
+        if (isMounted) {
+          console.error('Error fetching history:', err);
+          setHistoryError(err.message || 'Failed to fetch history');
+        }
       } finally {
-        setIsCheckingHistory(false);
+        if (isMounted) {
+          setIsCheckingHistory(false);
+        }
       }
     };
 
-    const timer = setTimeout(fetchHistory, 250); // Snappy 250ms debounce
-    return () => clearTimeout(timer);
+    const timer = setTimeout(fetchRemoteHistory, 350);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
   }, [formData.premiseName, formData.permitNo, formData.dboName]);
 
-  // Fetch previous validations by DBO Name (loosened matching)
+  // Instant & debounced background Fetch for DBO Search History
   useEffect(() => {
-    const fetchDboHistory = async () => {
-      if (hasAutofilledDbo) {
-        setIsCheckingDbo(false);
-        return;
-      }
+    let isMounted = true;
+    if (hasAutofilledDbo) {
+      setIsCheckingDbo(false);
+      return;
+    }
 
-      const searchTerm = (formData.dboName || '').trim();
-      if (!searchTerm || searchTerm.length < 2) {
-        setLastDboRecords([]);
-        setDboError(null);
-        return;
-      }
+    const searchTerm = (formData.dboName || '').trim();
+    if (!searchTerm || searchTerm.length < 2) {
+      setLastDboRecords([]);
+      setDboError(null);
+      setIsCheckingDbo(false);
+      return;
+    }
 
+    // Phase 1: Instant Synchronous Lookup from memory (0ms latency)
+    const cachedVals = DBService.getCachedValidations();
+    const immediateMatches = extractDboMatches(searchTerm, clients, cachedVals);
+    if (immediateMatches.length > 0) {
+      setLastDboRecords(immediateMatches);
+    }
+
+    // Phase 2: Debounced background check for remote Supabase updates
+    const fetchRemoteDbo = async () => {
+      if (!isMounted) return;
       setIsCheckingDbo(true);
       setDboError(null);
 
       try {
-        const uniqueMap: Record<string, any> = {};
         const cleanSearch = searchTerm.replace(/["']/g, '').trim();
-        const searchTokens = cleanSearch.toLowerCase().split(/\s+/).filter(t => t.length >= 2);
+        let remoteRecords: any[] = [];
 
-        // Build set of closed client identifiers
-        const closedSet = new Set(
-          (clients || [])
-            .filter(c => isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus))
-            .flatMap(c => [
-              normStr(c.clientName),
-              normStr(c.premiseName),
-              normStr(c.id),
-              normStr(c.permitNumber)
-            ])
-            .filter(Boolean)
-        );
-
-        // A. Query Supabase
         if (supabase) {
           try {
             const { data, error } = await supabase
@@ -940,122 +1008,35 @@ export function DataValidationModule() {
               .limit(15);
 
             if (!error && data) {
-              data.forEach(item => {
-                const itemDbo = normStr(item.dbo_name);
-                const itemPrem = normStr(item.premise_name);
-                const itemPerm = normStr(item.permit_no);
-                if (closedSet.has(itemDbo) || closedSet.has(itemPrem) || closedSet.has(itemPerm)) {
-                  return; // Skip closed clients/premises
-                }
-                const key = `${item.premise_name || ''}-${item.permit_no || ''}`.toLowerCase().trim();
-                if (!uniqueMap[key]) {
-                  uniqueMap[key] = {
-                    ...item,
-                    county: toSentenceCase(item.county || 'Kericho')
-                  };
-                }
-              });
+              remoteRecords = data;
             }
           } catch (spErr) {
             console.warn('[DboHistory] Supabase query warning:', spErr);
           }
         }
 
-        // B. Query Local DBService Validations
-        try {
-          const localVals = await DBService.getValidations();
-          if (localVals && localVals.length > 0) {
-            const normSearch = normStr(searchTerm);
-
-            localVals.forEach(v => {
-              const vDbo = normStr(v.clientName);
-              const vPName = normStr(v.premiseName);
-              const vPermit = normStr(v.permitNo || v.clientId);
-
-              if (closedSet.has(vDbo) || closedSet.has(vPName) || closedSet.has(vPermit)) {
-                return; // Skip closed clients/premises
-              }
-
-              // Loosened match on DBO name
-              const isMatch = (normSearch && (vDbo.includes(normSearch) || normSearch.includes(vDbo))) ||
-                              (searchTokens.length > 0 && searchTokens.some(tok => vDbo.includes(tok)));
-
-              if (isMatch) {
-                const key = `${v.premiseName || ''}-${v.permitNo || ''}`.toLowerCase().trim();
-                if (!uniqueMap[key]) {
-                  uniqueMap[key] = {
-                    dbo_name: v.clientName,
-                    premise_name: v.premiseName,
-                    category: v.category,
-                    permit_no: v.permitNo,
-                    location: v.location,
-                    county: toSentenceCase((v.rawData && v.rawData.county) || 'Kericho'),
-                    raw_data: v.rawData || {},
-                    date: v.validatedAt
-                  };
-                }
-              }
-            });
-          }
-        } catch (dbErr) {
-          console.warn('[DboHistory] Local DB lookup warning:', dbErr);
-        }
-
-        // C. Also check active clients registry list
-        try {
-          if (clients && clients.length > 0) {
-            const normSearch = normStr(searchTerm);
-
-            clients.forEach(c => {
-              if (isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus)) return;
-
-              const cDbo = normStr(c.clientName);
-
-              // Loosened match on DBO name
-              const isMatch = (normSearch && (cDbo.includes(normSearch) || normSearch.includes(cDbo))) ||
-                              (searchTokens.length > 0 && searchTokens.some(tok => cDbo.includes(tok)));
-
-              if (isMatch) {
-                const key = `${c.premiseName || ''}-${c.id || ''}`.toLowerCase().trim();
-                if (!uniqueMap[key]) {
-                  uniqueMap[key] = {
-                    dbo_name: c.clientName,
-                    premise_name: c.premiseName,
-                    category: c.premiseCategory,
-                    permit_no: c.id,
-                    location: c.location,
-                    county: toSentenceCase(c.county || 'Kericho'),
-                    raw_data: {
-                      dboName: c.clientName,
-                      premiseName: c.premiseName,
-                      category: c.premiseCategory,
-                      permitNo: c.id,
-                      location: c.location,
-                      county: toSentenceCase(c.county || 'Kericho'),
-                      contacts: c.tel,
-                      expiryDate: c.expiryDate
-                    },
-                    date: c.startDate || new Date().toISOString()
-                  };
-                }
-              }
-            });
-          }
-        } catch (clientErr) {
-          console.warn('[DboHistory] Client registry lookup warning:', clientErr);
-        }
-
-        setLastDboRecords(Object.values(uniqueMap).slice(0, 8));
+        if (!isMounted) return;
+        const allVals = await DBService.getValidations();
+        const combined = [...allVals, ...remoteRecords];
+        const computedDboRecords = extractDboMatches(searchTerm, clients, combined);
+        setLastDboRecords(computedDboRecords);
       } catch (err: any) {
-        console.error('Error fetching DBO history:', err);
-        setDboError(err.message || 'Failed to fetch DBO history');
+        if (isMounted) {
+          console.error('Error fetching DBO history:', err);
+          setDboError(err.message || 'Failed to fetch DBO history');
+        }
       } finally {
-        setIsCheckingDbo(false);
+        if (isMounted) {
+          setIsCheckingDbo(false);
+        }
       }
     };
 
-    const timer = setTimeout(fetchDboHistory, 250); // Snappy 250ms debounce
-    return () => clearTimeout(timer);
+    const timer = setTimeout(fetchRemoteDbo, 350);
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
   }, [formData.dboName, clients, hasAutofilledDbo]);
 
   const isFormDirtyOrPopulated = (data: FormData, decls?: { accurate: boolean; offense: boolean; awareness: boolean }) => {
@@ -2874,9 +2855,12 @@ export function DataValidationModule() {
 
   const handleClearEntries = () => {
     if (window.confirm("Are you sure you want to clear all form entries?")) {
+      // Clear drafts from storage
       localStorage.removeItem('kdb_validation_form_draft_v2');
       localStorage.removeItem('kdb_validation_form_draft');
       localStorage.removeItem('kdb_validation_form_draft_step');
+
+      // Reset form data and step without page refresh
       setFormData(initialData);
       setStep(0);
       setSelectedClient(null);
@@ -2891,6 +2875,12 @@ export function DataValidationModule() {
       setIsValidationPeriodEdited(false);
       setHasAutofilledDbo(false);
       setFailedFields([]);
+      setLastCollections([]);
+      setLastDboRecords([]);
+      setHistoryError(null);
+      setDboError(null);
+      setIsCheckingHistory(false);
+      setIsCheckingDbo(false);
       setDeclarations({
         accurate: false,
         offense: false,
@@ -2898,7 +2888,7 @@ export function DataValidationModule() {
       });
       setPdfPreview(null);
       setPdfModalUrl(null);
-      setStatus({ type: 'success', message: 'All form entries cleared.' });
+      setStatus({ type: 'success', message: 'All form entries cleared successfully.' });
       if (dboSigPad.current) {
         try { dboSigPad.current.clear(); } catch (_) {}
       }

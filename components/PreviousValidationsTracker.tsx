@@ -167,9 +167,9 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
         const cleanSearch = rawSearch.replace(/["']/g, '').trim().toLowerCase();
         const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any; matchedPremise?: string }[] = [];
 
-        // 1. Check local cache / validations first for instant rendering
+        // 1. Check in-memory local cache / validations first for instant rendering
         try {
-          const localList = await DBService.getValidations();
+          const localList = DBService.getCachedValidations();
           if (Array.isArray(localList)) {
             localList.forEach(v => {
               const pName = (v.premiseName || '').toLowerCase();
@@ -291,9 +291,9 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
         const cleanSearch = rawSearch.replace(/["']/g, '').trim().toLowerCase();
         const collectedDboRecords: any[] = [];
 
-        // 1. Check local DBService validations first
+        // 1. Check in-memory local DBService validations first
         try {
-          const localList = await DBService.getValidations();
+          const localList = DBService.getCachedValidations();
           if (Array.isArray(localList)) {
             localList.forEach(v => {
               const cName = (v.clientName || '').toLowerCase();

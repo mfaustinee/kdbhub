@@ -299,7 +299,32 @@ const removeFromLocalStorageCollection = <T extends Record<string, any>>(key: st
   }
 };
 
+// In-memory validation cache for 0ms synchronous lookups and debounced synchronization
+let validationsMemoryCache: DataValidation[] | null = null;
+let validationsCacheTimestamp = 0;
+let isRevalidatingValidations = false;
+let lastRevalidationTime = 0;
+const VALIDATIONS_CACHE_TTL_MS = 60000; // 1 minute TTL for in-memory cache
+
 export const DBService = {
+  // Synchronous, zero-latency validation getter from in-memory or localStorage cache
+  getCachedValidations(): DataValidation[] {
+    if (validationsMemoryCache && Array.isArray(validationsMemoryCache) && validationsMemoryCache.length > 0) {
+      return validationsMemoryCache;
+    }
+    const cached = localStorage.getItem('kdb_validations_cache');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          validationsMemoryCache = parsed;
+          validationsCacheTimestamp = Date.now();
+          return parsed;
+        }
+      } catch (_) {}
+    }
+    return [];
+  },
   async fetchConfig() {
     return await fetchConfig();
   },
@@ -2067,6 +2092,12 @@ export const DBService = {
   },
 
   async getValidations(forceRefresh: boolean = false): Promise<DataValidation[]> {
+    // 1. Fast memory cache check (0ms response)
+    const now = Date.now();
+    if (!forceRefresh && validationsMemoryCache && validationsMemoryCache.length > 0 && (now - validationsCacheTimestamp < VALIDATIONS_CACHE_TTL_MS)) {
+      return validationsMemoryCache;
+    }
+
     const cached = localStorage.getItem('kdb_validations_cache');
 
     const template: DataValidation = {
@@ -2095,24 +2126,39 @@ export const DBService = {
         const response = await fetch('/api/validations');
         if (response.ok) {
           const data = await response.json();
-          localStorage.setItem('kdb_validations_cache', JSON.stringify(data));
+          validationsMemoryCache = data;
+          validationsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_validations_cache', JSON.stringify(data));
           return data;
         }
       } catch (e) {
         console.error("[DBService] Local validations API error:", e);
       }
       const local = getArrayFromLocalStorage<DataValidation>('kdb_validations_cache');
+      validationsMemoryCache = local;
+      validationsCacheTimestamp = Date.now();
       return local;
     };
 
     const revalidate = async () => {
+      if (isRevalidatingValidations) return;
+      isRevalidatingValidations = true;
+      lastRevalidationTime = Date.now();
+
       try {
         const client = await getSupabase();
         if (client) {
-          const [res1, res2] = await Promise.allSettled([
+          const timeoutPromise = new Promise<{ status: 'rejected'; reason: Error }>((_, reject) =>
+            setTimeout(() => reject(new Error('Supabase getValidations query timeout')), 3500)
+          );
+
+          const queryPromise = Promise.allSettled([
             client.from('data_validations').select('*'),
             client.from('kdb_validations').select('*')
           ]);
+
+          const results = await Promise.race([queryPromise, timeoutPromise]) as PromiseSettledResult<any>[];
+          const [res1, res2] = results;
 
           const list1: any[] = res1.status === 'fulfilled' && !res1.value.error ? (res1.value.data || []) : [];
           const list2: any[] = res2.status === 'fulfilled' && !res2.value.error ? (res2.value.data || []) : [];
@@ -2183,20 +2229,31 @@ export const DBService = {
             }
           });
 
+          validationsMemoryCache = combined;
+          validationsCacheTimestamp = Date.now();
           safeSetLocalStorage('kdb_validations_cache', JSON.stringify(combined));
         } else {
           await fetchLocal();
         }
       } catch (e) {
-        console.warn("[DBService] Background validations sync failed:", e);
+        console.warn("[DBService] Background validations sync note:", e);
+      } finally {
+        isRevalidatingValidations = false;
       }
     };
 
     if (!forceRefresh && cached) {
-      setTimeout(revalidate, 50);
       try {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          validationsMemoryCache = parsed;
+          validationsCacheTimestamp = Date.now();
+          // Only revalidate if more than 30 seconds since last sync
+          if (Date.now() - lastRevalidationTime > 30000) {
+            setTimeout(revalidate, 100);
+          }
+          return parsed;
+        }
       } catch (e) {
         // Fall through
       }
@@ -2208,10 +2265,17 @@ export const DBService = {
     }
 
     try {
-      const [res1, res2] = await Promise.allSettled([
+      const timeoutPromise = new Promise<{ status: 'rejected'; reason: Error }>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase getValidations query timeout')), 3500)
+      );
+
+      const queryPromise = Promise.allSettled([
         client.from('data_validations').select('*'),
         client.from('kdb_validations').select('*')
       ]);
+
+      const results = await Promise.race([queryPromise, timeoutPromise]) as PromiseSettledResult<any>[];
+      const [res1, res2] = results;
 
       const list1: any[] = res1.status === 'fulfilled' && !res1.value.error ? (res1.value.data || []) : [];
       const list2: any[] = res2.status === 'fulfilled' && !res2.value.error ? (res2.value.data || []) : [];
@@ -2282,6 +2346,9 @@ export const DBService = {
         }
       });
 
+      validationsMemoryCache = combined;
+      validationsCacheTimestamp = Date.now();
+      lastRevalidationTime = Date.now();
       safeSetLocalStorage('kdb_validations_cache', JSON.stringify(combined));
       return combined;
     } catch (e) {
@@ -2305,11 +2372,13 @@ export const DBService = {
       updateLocalStorageCollection('kdb_validations_cache', validation, 'id');
     };
 
-    // 1. Always update local validations cache immediately to prevent layout shifts or stale loads
+    // 1. Always update local validations cache and in-memory cache immediately for 0ms searches
     const list = getArrayFromLocalStorage<DataValidation>('kdb_validations_cache');
     const index = list.findIndex(v => v.id === validation.id);
     if (index > -1) list[index] = validation;
     else list.unshift(validation); // add to beginning
+    validationsMemoryCache = list;
+    validationsCacheTimestamp = Date.now();
     safeSetLocalStorage('kdb_validations_cache', JSON.stringify(list));
 
     // 2. Always persist to local backend API file store
@@ -2381,6 +2450,11 @@ export const DBService = {
   },
 
   async deleteValidation(id: string): Promise<void> {
+    if (validationsMemoryCache) {
+      validationsMemoryCache = validationsMemoryCache.filter(v => v.id !== id);
+      validationsCacheTimestamp = Date.now();
+    }
+
     const deleteLocal = async () => {
       try {
         const response = await fetch(`/api/validations/${id}`, {
@@ -2423,6 +2497,9 @@ export const DBService = {
           merged.push(newV);
         }
       });
+      validationsMemoryCache = merged;
+      validationsCacheTimestamp = Date.now();
+      safeSetLocalStorage('kdb_validations_cache', JSON.stringify(merged));
 
       const response = await fetch('/api/validations', {
         method: 'POST',
