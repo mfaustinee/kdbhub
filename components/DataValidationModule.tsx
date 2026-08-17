@@ -580,6 +580,16 @@ export function DataValidationModule() {
 
   const [isValidationPeriodEdited, setIsValidationPeriodEdited] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
+  const [draftInfo, setDraftInfo] = useState<{
+    clientOrDbo?: string;
+    premise?: string;
+    period?: string;
+    step?: number;
+    savedTime?: string;
+  } | null>(null);
+  const [draftLastSaved, setDraftLastSaved] = useState<string | null>(null);
+  const isMountedRef = useRef(false);
+  const isRestoringRef = useRef(false);
   const [failedFields, setFailedFields] = useState<string[]>([]);
   const [isAmendment, setIsAmendment] = useState(false);
   const [hasAutofilledDbo, setHasAutofilledDbo] = useState(false);
@@ -1048,66 +1058,221 @@ export function DataValidationModule() {
     return () => clearTimeout(timer);
   }, [formData.dboName, clients, hasAutofilledDbo]);
 
+  const isFormDirtyOrPopulated = (data: FormData, decls?: { accurate: boolean; offense: boolean; awareness: boolean }) => {
+    if (!data) return false;
+    if (data.dboName && data.dboName.trim() !== '') return true;
+    if (data.premiseName && data.premiseName.trim() !== '') return true;
+    if (data.permitNo && data.permitNo.trim() !== '') return true;
+    if (data.location && data.location.trim() !== '') return true;
+    if (data.contacts && data.contacts.trim() !== '') return true;
+    if (data.category && data.category.trim() !== '') return true;
+    if (data.comments && data.comments.trim() !== '') return true;
+    if (data.complianceOfficer && data.complianceOfficer.trim() !== '') return true;
+    if (data.confirmationName && data.confirmationName.trim() !== '') return true;
+    if (data.designation && data.designation.trim() !== '') return true;
+    if (data.dboSignature && data.dboSignature.trim() !== '') return true;
+    if (data.complianceSignature && data.complianceSignature.trim() !== '') return true;
+    if (data.nonCompliance && data.nonCompliance.length > 0) return true;
+    if (data.sales && data.sales.some(s => (s.qtyDeclared && s.qtyDeclared.trim() !== '') || (s.verifiedQty && s.verifiedQty.trim() !== '') || (s.buyingPrice && s.buyingPrice.trim() !== '') || (s.sellingPrice && s.sellingPrice.trim() !== ''))) return true;
+    if (data.intakes && data.intakes.some(i => (i.quantity && i.quantity.trim() !== '') || (i.farmerPrice && i.farmerPrice.trim() !== '') || (i.processor && i.processor.trim() !== ''))) return true;
+    if (data.distributors && data.distributors.some(d => (d.name && d.name.trim() !== '') || (d.contacts && d.contacts.trim() !== ''))) return true;
+    if (decls && (decls.accurate || decls.offense || decls.awareness)) return true;
+    return false;
+  };
+
+  const saveDraftToStorage = (
+    customFormData?: FormData,
+    customStep?: number,
+    showNotification = false
+  ) => {
+    const currentForm = customFormData || formData;
+    const currentStep = customStep !== undefined ? customStep : step;
+
+    let sig = currentForm.dboSignature;
+    if (dboSigPad.current && !dboSigPad.current.isEmpty()) {
+      try {
+        sig = dboSigPad.current.getTrimmedCanvas().toDataURL('image/png');
+      } catch (_) {}
+    }
+    const formToSave = { ...currentForm, dboSignature: sig || currentForm.dboSignature };
+
+    const now = new Date();
+    const draftData = {
+      formData: formToSave,
+      step: currentStep,
+      declarations,
+      selectedClient,
+      validationPremiseMode,
+      globalUnit,
+      isAmendment,
+      isValidationPeriodEdited,
+      hasAutofilledDbo,
+      savedAt: now.toISOString()
+    };
+
+    try {
+      localStorage.setItem('kdb_validation_form_draft_v2', JSON.stringify(draftData));
+      localStorage.setItem('kdb_validation_form_draft', JSON.stringify(formToSave));
+      localStorage.setItem('kdb_validation_form_draft_step', currentStep.toString());
+      const timeFormatted = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      setDraftLastSaved(timeFormatted);
+      if (showNotification) {
+        setStatus({ 
+          type: 'success', 
+          message: `Draft saved successfully at ${timeFormatted}.` 
+        });
+      }
+    } catch (err) {
+      console.error('Failed to save draft to localStorage:', err);
+    }
+  };
+
+  const handleManualSaveDraft = () => {
+    if (!isFormDirtyOrPopulated(formData, declarations)) {
+      setStatus({ type: 'error', message: 'Form is empty. Enter some information before saving a draft.' });
+      return;
+    }
+    saveDraftToStorage(formData, step, true);
+  };
+
   // Load saved draft on mount
   useEffect(() => {
-    const draft = localStorage.getItem('kdb_validation_form_draft');
-    if (draft) {
-      try {
-        JSON.parse(draft);
-        setHasDraft(true);
-      } catch (e) {
-        localStorage.removeItem('kdb_validation_form_draft');
-        localStorage.removeItem('kdb_validation_form_draft_step');
+    try {
+      const draftV2Raw = localStorage.getItem('kdb_validation_form_draft_v2');
+      const legacyDraftRaw = localStorage.getItem('kdb_validation_form_draft');
+      
+      let parsedDraft: any = null;
+      if (draftV2Raw) {
+        parsedDraft = JSON.parse(draftV2Raw);
+      } else if (legacyDraftRaw) {
+        const legacyData = JSON.parse(legacyDraftRaw);
+        const legacyStep = localStorage.getItem('kdb_validation_form_draft_step');
+        parsedDraft = {
+          formData: legacyData,
+          step: legacyStep ? parseInt(legacyStep, 10) : 0,
+          savedAt: new Date().toISOString()
+        };
       }
+
+      if (parsedDraft && parsedDraft.formData && isFormDirtyOrPopulated(parsedDraft.formData, parsedDraft.declarations)) {
+        setHasDraft(true);
+        const form = parsedDraft.formData;
+        let timeStr = '';
+        if (parsedDraft.savedAt) {
+          try {
+            const d = new Date(parsedDraft.savedAt);
+            timeStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          } catch (_) {}
+        }
+        setDraftInfo({
+          clientOrDbo: form.dboName || form.confirmationName || form.premiseName || 'Active Validation',
+          premise: form.premiseName || '',
+          period: form.validationPeriod || '',
+          step: parsedDraft.step ?? 0,
+          savedTime: timeStr
+        });
+      }
+    } catch (e) {
+      console.error('Error reading saved draft on mount:', e);
+    } finally {
+      setTimeout(() => {
+        isMountedRef.current = true;
+      }, 150);
     }
   }, []);
 
-  // Save draft when form data changes
+  // Save draft automatically when form data changes
   useEffect(() => {
-    // Prevent overwriting existing draft on page load before user decides to restore/discard it
+    if (!isMountedRef.current || isRestoringRef.current) return;
+    
+    // If the draft restore banner is currently showing, don't overwrite stored draft with fresh empty state
     if (hasDraft) return;
 
-    const hasPopulatedInput = 
-      formData.dboName || 
-      formData.premiseName || 
-      formData.permitNo || 
-      formData.validationPeriod || 
-      formData.sales.some(s => s.qtyDeclared || s.verifiedQty) ||
-      formData.intakes.some(i => i.quantity);
-
-    if (hasPopulatedInput) {
-      localStorage.setItem('kdb_validation_form_draft', JSON.stringify(formData));
-      localStorage.setItem('kdb_validation_form_draft_step', step.toString());
+    if (!isFormDirtyOrPopulated(formData, declarations)) {
+      return;
     }
-  }, [formData, step, hasDraft]);
+
+    const timer = setTimeout(() => {
+      saveDraftToStorage(formData, step, false);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [
+    formData, 
+    step, 
+    declarations, 
+    selectedClient, 
+    validationPremiseMode, 
+    globalUnit, 
+    isAmendment, 
+    isValidationPeriodEdited, 
+    hasAutofilledDbo, 
+    hasDraft
+  ]);
 
   const handleRestoreDraft = () => {
-    const draft = localStorage.getItem('kdb_validation_form_draft');
-    if (draft) {
-      try {
-        const parsed = JSON.parse(draft);
-        setFormData(parsed);
-        setFailedFields([]);
-        // Restore step from localStorage if available, otherwise fallback
-        const savedStep = localStorage.getItem('kdb_validation_form_draft_step');
-        if (savedStep) {
-          setStep(parseInt(savedStep, 10));
-        } else if (parsed.branch) {
-          setStep(1); // Resume at step 1 if the user started
-        }
-        setStatus({ type: 'success', message: 'Unsaved draft successfully restored!' });
-      } catch (e) {
-        console.error(e);
+    isRestoringRef.current = true;
+    try {
+      const draftV2Raw = localStorage.getItem('kdb_validation_form_draft_v2');
+      const legacyDraftRaw = localStorage.getItem('kdb_validation_form_draft');
+      
+      let parsed: any = null;
+      if (draftV2Raw) {
+        parsed = JSON.parse(draftV2Raw);
+      } else if (legacyDraftRaw) {
+        const legacyData = JSON.parse(legacyDraftRaw);
+        const legacyStep = localStorage.getItem('kdb_validation_form_draft_step');
+        parsed = {
+          formData: legacyData,
+          step: legacyStep ? parseInt(legacyStep, 10) : 0
+        };
       }
+
+      if (parsed && parsed.formData) {
+        setFormData(parsed.formData);
+        if (parsed.declarations) setDeclarations(parsed.declarations);
+        if (parsed.selectedClient) setSelectedClient(parsed.selectedClient);
+        if (parsed.validationPremiseMode) setValidationPremiseMode(parsed.validationPremiseMode);
+        if (parsed.globalUnit) setGlobalUnit(parsed.globalUnit);
+        if (parsed.isAmendment !== undefined) setIsAmendment(parsed.isAmendment);
+        if (parsed.isValidationPeriodEdited !== undefined) setIsValidationPeriodEdited(parsed.isValidationPeriodEdited);
+        if (parsed.hasAutofilledDbo !== undefined) setHasAutofilledDbo(parsed.hasAutofilledDbo);
+        
+        const restoredStep = typeof parsed.step === 'number' ? parsed.step : (parsed.formData.branch ? 1 : 0);
+        setStep(restoredStep);
+        setFailedFields([]);
+        
+        if (parsed.savedAt) {
+          try {
+            const d = new Date(parsed.savedAt);
+            setDraftLastSaved(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+          } catch (_) {}
+        }
+
+        setStatus({ 
+          type: 'success', 
+          message: `Unsaved draft successfully restored! Continued at Step ${restoredStep === 0 ? '0 (Search)' : restoredStep}.` 
+        });
+      }
+    } catch (err) {
+      console.error('Error restoring draft:', err);
+      setStatus({ type: 'error', message: 'Failed to restore draft data.' });
+    } finally {
+      setHasDraft(false);
+      setTimeout(() => {
+        isRestoringRef.current = false;
+      }, 250);
     }
-    setHasDraft(false);
   };
 
   const handleDiscardDraft = () => {
+    localStorage.removeItem('kdb_validation_form_draft_v2');
     localStorage.removeItem('kdb_validation_form_draft');
     localStorage.removeItem('kdb_validation_form_draft_step');
     setHasDraft(false);
-    setStatus({ type: 'success', message: 'Draft cleared.' });
+    setDraftInfo(null);
+    setDraftLastSaved(null);
+    setStatus({ type: 'success', message: 'Saved draft discarded.' });
   };
 
   const handleDboAutofill = (record: any) => {
@@ -2414,41 +2579,32 @@ export function DataValidationModule() {
       }
 
       // Prepare payload & PDF reference
-      let pdfPath = null;
+      const fileName = isAmendment
+        ? `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_Amended_v2_${Date.now()}.pdf`
+        : `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
 
-      // 1. Upload PDF & Sync to Supabase storage (with 2.5s fast timeout)
+      const pdfPath = fileName;
+
+      // 1. Non-blocking background PDF upload to Supabase storage
       if (supabase) {
-        try {
-          const pdfBlob = dataURIToBlob(pdf);
-          const fileName = isAmendment
-            ? `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_Amended_v2_${Date.now()}.pdf`
-            : `${updatedData.premiseName.replace(/\s+/g, '_')}_${updatedData.validationPeriod.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
-
-          const uploadPromise = (async () => {
+        (async () => {
+          try {
+            const pdfBlob = dataURIToBlob(pdf);
             for (const bucket of ['ValidationPdfs', 'validationPdfs', 'validation-pdfs']) {
               try {
                 const { data: uploadData, error: uploadError } = await supabase.storage
                   .from(bucket)
-                  .upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: false });
+                  .upload(fileName, pdfBlob, { contentType: 'application/pdf', upsert: true });
 
-                if (!uploadError && uploadData?.path) {
-                  return uploadData.path;
-                }
+                if (!uploadError && uploadData?.path) break;
               } catch (bErr) {
                 // Continue to next bucket
               }
             }
-            return null;
-          })();
-
-          // Wait at most 2500ms for storage upload so user submission never stalls
-          pdfPath = await Promise.race([
-            uploadPromise,
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500))
-          ]);
-        } catch (uploadErr) {
-          console.warn('PDF upload warning:', uploadErr);
-        }
+          } catch (uploadErr) {
+            console.warn('Background PDF upload warning:', uploadErr);
+          }
+        })();
       }
 
       const payloadRawData = {
@@ -2484,7 +2640,7 @@ export function DataValidationModule() {
                 premise_name: updatedData.premiseName,
                 validation_period: updatedData.validationPeriod
               });
-            if (updateErr) console.error('Supabase kdb_validations update error:', updateErr);
+            if (updateErr) console.warn('Supabase kdb_validations update error:', updateErr);
           } else {
             const { error: upsertErr } = await supabase
               .from('kdb_validations')
@@ -2502,10 +2658,10 @@ export function DataValidationModule() {
                 pdf_path: pdfPath,
                 raw_data: payloadRawData
               }]);
-            if (upsertErr) console.error('Supabase kdb_validations upsert error:', upsertErr);
+            if (upsertErr) console.warn('Supabase kdb_validations upsert error:', upsertErr);
           }
         } catch (sbErr) {
-          console.error('Supabase kdb_validations save error:', sbErr);
+          console.warn('Supabase kdb_validations save error:', sbErr);
         }
       })();
 
@@ -2562,8 +2718,12 @@ export function DataValidationModule() {
         link.click();
 
         // Clear local storage draft and manual override edits
+        localStorage.removeItem('kdb_validation_form_draft_v2');
         localStorage.removeItem('kdb_validation_form_draft');
         localStorage.removeItem('kdb_validation_form_draft_step');
+        setHasDraft(false);
+        setDraftInfo(null);
+        setDraftLastSaved(null);
         setIsValidationPeriodEdited(false);
         setIsAmendment(false);
 
@@ -2712,15 +2872,36 @@ export function DataValidationModule() {
     }
   };
 
-  const handleClearAndRefresh = () => {
-    if (window.confirm("Are you sure you want to clear all form entries and refresh the page?")) {
+  const handleClearEntries = () => {
+    if (window.confirm("Are you sure you want to clear all form entries?")) {
+      localStorage.removeItem('kdb_validation_form_draft_v2');
       localStorage.removeItem('kdb_validation_form_draft');
       localStorage.removeItem('kdb_validation_form_draft_step');
-      localStorage.removeItem('kdb_validations_cache');
-      sessionStorage.clear();
       setFormData(initialData);
       setStep(0);
-      window.location.reload();
+      setSelectedClient(null);
+      setValidationPremiseMode('main');
+      setMismatchFields([]);
+      setShowReconciliation(false);
+      setReconciliationResolved(true);
+      setHasDraft(false);
+      setDraftInfo(null);
+      setDraftLastSaved(null);
+      setIsAmendment(false);
+      setIsValidationPeriodEdited(false);
+      setHasAutofilledDbo(false);
+      setFailedFields([]);
+      setDeclarations({
+        accurate: false,
+        offense: false,
+        awareness: false
+      });
+      setPdfPreview(null);
+      setPdfModalUrl(null);
+      setStatus({ type: 'success', message: 'All form entries cleared.' });
+      if (dboSigPad.current) {
+        try { dboSigPad.current.clear(); } catch (_) {}
+      }
     }
   };
 
@@ -2745,6 +2926,13 @@ export function DataValidationModule() {
             )}
           </div>
           <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
+            {draftLastSaved && (
+              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 text-slate-600 rounded-lg text-[11px] font-medium border border-slate-200 shadow-2xs">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Draft saved at {draftLastSaved}</span>
+              </div>
+            )}
+
             {step > 0 && (
               <div className="flex items-center bg-gray-100/90 p-0.5 rounded-lg border border-gray-200 text-xs shadow-2xs">
                 <button
@@ -2798,13 +2986,24 @@ export function DataValidationModule() {
 
             <button
               type="button"
-              onClick={handleClearAndRefresh}
+              onClick={handleManualSaveDraft}
+              className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
+              title="Save current form entries to draft"
+              id="top-save-draft-btn"
+            >
+              <Save className="w-3.5 h-3.5 text-blue-600" />
+              Save Draft
+            </button>
+
+            <button
+              type="button"
+              onClick={handleClearEntries}
               className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
-              title="Clear all form entries and reload page"
-              id="clear-entries-refresh-btn"
+              title="Clear all form entries"
+              id="clear-entries-btn"
             >
               <RotateCcw className="w-4 h-4 text-rose-600" />
-              Clear Entries & Refresh Page
+              Clear Entries
             </button>
           </div>
         </div>
@@ -2825,21 +3024,36 @@ export function DataValidationModule() {
                     <FileText className="w-5 h-5" />
                   </span>
                   <div>
-                    <p className="text-xs font-bold uppercase tracking-wider text-amber-800">Unsaved Data Found</p>
-                    <p className="text-xs text-amber-700 font-medium">You have an unfinished validation draft. Would you like to restore it?</p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-xs font-bold uppercase tracking-wider text-amber-800">Unsaved Draft Available</p>
+                      {draftInfo?.savedTime && (
+                        <span className="text-[10px] bg-amber-200/70 text-amber-800 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                          <Clock className="w-2.5 h-2.5" />
+                          {draftInfo.savedTime}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-amber-700 font-medium mt-0.5">
+                      {draftInfo?.clientOrDbo ? (
+                        <>Draft for <strong className="text-amber-900 font-semibold">{draftInfo.clientOrDbo}</strong>{draftInfo.period ? ` (${draftInfo.period})` : ''} at Step {(draftInfo.step ?? 0) === 0 ? '1 (Search)' : (draftInfo.step ?? 0) + 1}.</>
+                      ) : (
+                        'You have an unfinished validation draft. Would you like to restore it?'
+                      )}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-auto shrink-0">
                   <button
                     onClick={handleRestoreDraft}
-                    className="px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-[11px] font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1"
+                    className="px-3.5 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
                     id="restore-draft-btn"
                   >
+                    <RotateCcw className="w-3.5 h-3.5" />
                     Restore Draft
                   </button>
                   <button
                     onClick={handleDiscardDraft}
-                    className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white hover:bg-amber-100 text-amber-700 text-[11px] font-bold transition-all cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white hover:bg-amber-100 text-amber-700 text-xs font-bold transition-all cursor-pointer"
                     id="discard-draft-btn"
                   >
                     Discard
@@ -3359,11 +3573,20 @@ export function DataValidationModule() {
                     </div>
                   </div>
 
-                  <div className="flex justify-end pt-4">
+                  <div className="flex justify-between items-center gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={handleManualSaveDraft}
+                      className="flex items-center gap-1.5 px-4 sm:px-6 py-2.5 sm:py-3 bg-blue-50 text-blue-700 rounded-xl font-bold hover:bg-blue-100 transition-all text-xs sm:text-sm border border-blue-200 cursor-pointer"
+                      title="Save progress to draft"
+                    >
+                      <Save className="w-4 h-4 text-blue-600" />
+                      Save Draft
+                    </button>
                     <button
                       type="button"
                       onClick={() => validateStep(1) && setStep(2)}
-                      className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm"
+                      className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
                     >
                       Next Step
                       <ChevronRight className="w-4 h-4" />
@@ -4315,19 +4538,30 @@ export function DataValidationModule() {
                     <button
                       type="button"
                       onClick={() => setStep(1)}
-                      className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-2.5 sm:py-3 text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all text-xs sm:text-sm"
+                      className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-2.5 sm:py-3 text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all text-xs sm:text-sm cursor-pointer"
                     >
                       <ChevronLeft className="w-4 h-4" />
                       Back
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => validateStep(2) && setStep(3)}
-                      className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm"
-                    >
-                      Next Step
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-2 sm:gap-3">
+                      <button
+                        type="button"
+                        onClick={handleManualSaveDraft}
+                        className="flex items-center gap-1.5 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-blue-50 text-blue-700 rounded-xl font-bold hover:bg-blue-100 transition-all text-xs sm:text-sm border border-blue-200 cursor-pointer"
+                        title="Save progress to draft"
+                      >
+                        <Save className="w-4 h-4 text-blue-600" />
+                        Save Draft
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => validateStep(2) && setStep(3)}
+                        className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
+                      >
+                        Next Step
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </motion.div>
               )}
@@ -4659,19 +4893,28 @@ export function DataValidationModule() {
 
                   <div className="flex flex-col gap-4 pt-6">
                     <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 sm:gap-4">
-                      <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+                      <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto flex-wrap">
                         <button
                           type="button"
                           onClick={() => setStep(2)}
-                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all border border-gray-200 sm:border-transparent"
+                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all border border-gray-200 sm:border-transparent cursor-pointer"
                         >
                           <ChevronLeft className="w-4 h-4" />
                           Back
                         </button>
                         <button
                           type="button"
+                          onClick={handleManualSaveDraft}
+                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-blue-50 text-blue-700 rounded-xl font-bold hover:bg-blue-100 transition-all text-xs sm:text-sm border border-blue-200 cursor-pointer"
+                          title="Save progress to draft"
+                        >
+                          <Save className="w-4 h-4 text-blue-600" />
+                          Save Draft
+                        </button>
+                        <button
+                          type="button"
                           onClick={handlePreview}
-                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-all text-xs sm:text-sm whitespace-nowrap"
+                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 transition-all text-xs sm:text-sm whitespace-nowrap cursor-pointer"
                         >
                           <FileText className="w-4 h-4" />
                           Preview PDF
@@ -4681,7 +4924,7 @@ export function DataValidationModule() {
                       <button
                         type="submit"
                         disabled={isSubmitting}
-                        className={`w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-9 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl font-bold transition-all shadow-md text-xs sm:text-sm ${
+                        className={`w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-9 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl font-bold transition-all shadow-md text-xs sm:text-sm cursor-pointer ${
                           isSubmitting
                             ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                             : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'

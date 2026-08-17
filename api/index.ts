@@ -46,6 +46,19 @@ const logToFile = (message: string) => {
   }
 };
 
+const readJsonArrayFile = async (filePath: string): Promise<any[]> => {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const data = await fs.promises.readFile(filePath, "utf-8");
+    if (!data || !data.trim()) return [];
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    logToFile(`Warning reading json array file ${filePath}: ${err}`);
+    return [];
+  }
+};
+
 // Load environment variables from .env file
 dotenv.config();
 
@@ -189,16 +202,8 @@ async function startServer() {
     logToFile("[Server] Registering data routes...");
     app.get("/api/agreements", async (req, res) => {
     try {
-      if (!fs.existsSync(AGREEMENTS_FILE)) {
-        return res.json([]);
-      }
-      const data = await fs.promises.readFile(AGREEMENTS_FILE, "utf-8");
-      try {
-        res.json(JSON.parse(data));
-      } catch (parseError) {
-        logToFile(`Error parsing agreements JSON: ${parseError}`);
-        res.json([]); // Return empty array if corrupted
-      }
+      const agreements = await readJsonArrayFile(AGREEMENTS_FILE);
+      res.json(agreements);
     } catch (error) {
       logToFile(`Error reading agreements: ${error}`);
       res.status(500).json({ error: "Failed to read agreements" });
@@ -213,14 +218,7 @@ async function startServer() {
         return res.status(400).json({ error: "Missing agreement ID" });
       }
 
-      let agreements = [];
-      try {
-        const data = await fs.promises.readFile(AGREEMENTS_FILE, "utf-8");
-        agreements = JSON.parse(data);
-      } catch (readError) {
-        logToFile(`Warning: Could not read agreements file, starting fresh: ${readError}`);
-        agreements = [];
-      }
+      let agreements = await readJsonArrayFile(AGREEMENTS_FILE);
 
       const newAgreement = req.body;
       const index = agreements.findIndex((a: any) => a.id === newAgreement.id);
@@ -246,14 +244,7 @@ async function startServer() {
       const { id } = req.params;
       logToFile(`Attempting to update agreement: ${id}`);
       
-      let agreements = [];
-      try {
-        const data = await fs.promises.readFile(AGREEMENTS_FILE, "utf-8");
-        agreements = JSON.parse(data);
-      } catch (readError) {
-        logToFile(`Error reading agreements during update: ${readError}`);
-        return res.status(500).json({ error: "Failed to read agreements" });
-      }
+      let agreements = await readJsonArrayFile(AGREEMENTS_FILE);
 
       const index = agreements.findIndex((a: any) => a.id === id);
       if (index !== -1) {
@@ -281,16 +272,7 @@ async function startServer() {
         return res.status(400).json({ error: "Invalid data format, expected array" });
       }
 
-      let existingAgreements = [];
-      try {
-        if (fs.existsSync(AGREEMENTS_FILE)) {
-          const data = await fs.promises.readFile(AGREEMENTS_FILE, "utf-8");
-          existingAgreements = JSON.parse(data);
-        }
-      } catch (readError) {
-        logToFile(`Warning: Could not read agreements file during sync, starting fresh: ${readError}`);
-        existingAgreements = [];
-      }
+      let existingAgreements = await readJsonArrayFile(AGREEMENTS_FILE);
 
       let updatedCount = 0;
       incomingAgreements.forEach(incoming => {
@@ -317,8 +299,7 @@ async function startServer() {
     app.post("/api/agreements/:id", handleUpdate);
     app.delete("/api/agreements/:id", async (req, res) => {
     try {
-      const data = await fs.promises.readFile(AGREEMENTS_FILE, "utf-8");
-      const agreements = JSON.parse(data);
+      const agreements = await readJsonArrayFile(AGREEMENTS_FILE);
       const { id } = req.params;
       const filtered = agreements.filter((a: any) => a.id !== id);
       await fs.promises.writeFile(AGREEMENTS_FILE, JSON.stringify(filtered, null, 2));
@@ -333,16 +314,8 @@ async function startServer() {
     logToFile("[Server] Registering closures routes...");
     app.get("/api/closures", async (req, res) => {
       try {
-        if (!fs.existsSync(CLOSURES_FILE)) {
-          return res.json([]);
-        }
-        const data = await fs.promises.readFile(CLOSURES_FILE, "utf-8");
-        try {
-          res.json(JSON.parse(data));
-        } catch (parseError) {
-          logToFile(`Error parsing closures JSON: ${parseError}`);
-          res.json([]);
-        }
+        const closures = await readJsonArrayFile(CLOSURES_FILE);
+        res.json(closures);
       } catch (error) {
         logToFile(`Error reading closures: ${error}`);
         res.status(500).json({ error: "Failed to read closures" });
@@ -357,16 +330,7 @@ async function startServer() {
           return res.status(400).json({ error: "Missing closure ID" });
         }
 
-        let closures = [];
-        try {
-          if (fs.existsSync(CLOSURES_FILE)) {
-            const data = await fs.promises.readFile(CLOSURES_FILE, "utf-8");
-            closures = JSON.parse(data);
-          }
-        } catch (readError) {
-          logToFile(`Warning: Could not read closures file, starting fresh: ${readError}`);
-          closures = [];
-        }
+        let closures = await readJsonArrayFile(CLOSURES_FILE);
 
         const newClosure = req.body;
         const index = closures.findIndex((c: any) => c.id === newClosure.id);
@@ -392,14 +356,7 @@ async function startServer() {
         const { id } = req.params;
         logToFile(`Attempting to update closure: ${id}`);
         
-        let closures = [];
-        try {
-          const data = await fs.promises.readFile(CLOSURES_FILE, "utf-8");
-          closures = JSON.parse(data);
-        } catch (readError) {
-          logToFile(`Error reading closures during update: ${readError}`);
-          return res.status(500).json({ error: "Failed to read closures" });
-        }
+        let closures = await readJsonArrayFile(CLOSURES_FILE);
 
         const index = closures.findIndex((c: any) => c.id === id);
         if (index !== -1) {
@@ -419,8 +376,7 @@ async function startServer() {
 
     app.delete("/api/closures/:id", async (req, res) => {
       try {
-        const data = await fs.promises.readFile(CLOSURES_FILE, "utf-8");
-        const closures = JSON.parse(data);
+        const closures = await readJsonArrayFile(CLOSURES_FILE);
         const { id } = req.params;
         const filtered = closures.filter((c: any) => c.id !== id);
         await fs.promises.writeFile(CLOSURES_FILE, JSON.stringify(filtered, null, 2));
@@ -435,16 +391,8 @@ async function startServer() {
     logToFile("[Server] Registering complaints routes...");
     app.get("/api/complaints", async (req, res) => {
       try {
-        if (!fs.existsSync(COMPLAINTS_FILE)) {
-          return res.json([]);
-        }
-        const data = await fs.promises.readFile(COMPLAINTS_FILE, "utf-8");
-        try {
-          res.json(JSON.parse(data));
-        } catch (parseError) {
-          logToFile(`Error parsing complaints JSON: ${parseError}`);
-          res.json([]);
-        }
+        const complaints = await readJsonArrayFile(COMPLAINTS_FILE);
+        res.json(complaints);
       } catch (error) {
         logToFile(`Error reading complaints: ${error}`);
         res.status(500).json({ error: "Failed to read complaints" });
@@ -459,16 +407,7 @@ async function startServer() {
           return res.status(400).json({ error: "Missing complaint ID" });
         }
 
-        let complaints = [];
-        try {
-          if (fs.existsSync(COMPLAINTS_FILE)) {
-            const data = await fs.promises.readFile(COMPLAINTS_FILE, "utf-8");
-            complaints = JSON.parse(data);
-          }
-        } catch (readError) {
-          logToFile(`Warning: Could not read complaints file, starting fresh: ${readError}`);
-          complaints = [];
-        }
+        let complaints = await readJsonArrayFile(COMPLAINTS_FILE);
 
         const newComplaint = req.body;
         const index = complaints.findIndex((c: any) => c.id === newComplaint.id);
@@ -494,14 +433,7 @@ async function startServer() {
         const { id } = req.params;
         logToFile(`Attempting to update complaint: ${id}`);
         
-        let complaints = [];
-        try {
-          const data = await fs.promises.readFile(COMPLAINTS_FILE, "utf-8");
-          complaints = JSON.parse(data);
-        } catch (readError) {
-          logToFile(`Error reading complaints during update: ${readError}`);
-          return res.status(500).json({ error: "Failed to read complaints" });
-        }
+        let complaints = await readJsonArrayFile(COMPLAINTS_FILE);
 
         const index = complaints.findIndex((c: any) => c.id === id);
         if (index !== -1) {
@@ -521,8 +453,7 @@ async function startServer() {
 
     app.delete("/api/complaints/:id", async (req, res) => {
       try {
-        const data = await fs.promises.readFile(COMPLAINTS_FILE, "utf-8");
-        const complaints = JSON.parse(data);
+        const complaints = await readJsonArrayFile(COMPLAINTS_FILE);
         const { id } = req.params;
         const filtered = complaints.filter((c: any) => c.id !== id);
         await fs.promises.writeFile(COMPLAINTS_FILE, JSON.stringify(filtered, null, 2));
@@ -537,16 +468,8 @@ async function startServer() {
     logToFile("[Server] Registering inquiries routes...");
     app.get("/api/inquiries", async (req, res) => {
       try {
-        if (!fs.existsSync(INQUIRIES_FILE)) {
-          return res.json([]);
-        }
-        const data = await fs.promises.readFile(INQUIRIES_FILE, "utf-8");
-        try {
-          res.json(JSON.parse(data));
-        } catch (parseError) {
-          logToFile(`Error parsing inquiries JSON: ${parseError}`);
-          res.json([]);
-        }
+        const inquiries = await readJsonArrayFile(INQUIRIES_FILE);
+        res.json(inquiries);
       } catch (error) {
         logToFile(`Error reading inquiries: ${error}`);
         res.status(500).json({ error: "Failed to read inquiries" });
@@ -561,16 +484,7 @@ async function startServer() {
           return res.status(400).json({ error: "Missing inquiry ID" });
         }
 
-        let inquiries = [];
-        try {
-          if (fs.existsSync(INQUIRIES_FILE)) {
-            const data = await fs.promises.readFile(INQUIRIES_FILE, "utf-8");
-            inquiries = JSON.parse(data);
-          }
-        } catch (readError) {
-          logToFile(`Warning: Could not read inquiries file, starting fresh: ${readError}`);
-          inquiries = [];
-        }
+        let inquiries = await readJsonArrayFile(INQUIRIES_FILE);
 
         const newInquiry = req.body;
         const index = inquiries.findIndex((c: any) => c.id === newInquiry.id);
@@ -596,14 +510,7 @@ async function startServer() {
         const { id } = req.params;
         logToFile(`Attempting to update inquiry: ${id}`);
         
-        let inquiries = [];
-        try {
-          const data = await fs.promises.readFile(INQUIRIES_FILE, "utf-8");
-          inquiries = JSON.parse(data);
-        } catch (readError) {
-          logToFile(`Error reading inquiries during update: ${readError}`);
-          return res.status(500).json({ error: "Failed to read inquiries" });
-        }
+        let inquiries = await readJsonArrayFile(INQUIRIES_FILE);
 
         const index = inquiries.findIndex((c: any) => c.id === id);
         if (index !== -1) {
@@ -623,8 +530,7 @@ async function startServer() {
 
     app.delete("/api/inquiries/:id", async (req, res) => {
       try {
-        const data = await fs.promises.readFile(INQUIRIES_FILE, "utf-8");
-        const inquiries = JSON.parse(data);
+        const inquiries = await readJsonArrayFile(INQUIRIES_FILE);
         const { id } = req.params;
         const filtered = inquiries.filter((c: any) => c.id !== id);
         await fs.promises.writeFile(INQUIRIES_FILE, JSON.stringify(filtered, null, 2));
@@ -639,16 +545,8 @@ async function startServer() {
     logToFile("[Server] Registering debtors routes...");
     app.get("/api/debtors", async (req, res) => {
     try {
-      if (!fs.existsSync(DEBTORS_FILE)) {
-        return res.json([]);
-      }
-      const data = await fs.promises.readFile(DEBTORS_FILE, "utf-8");
-      try {
-        res.json(JSON.parse(data));
-      } catch (parseError) {
-        logToFile(`Error parsing debtors JSON: ${parseError}`);
-        res.json([]);
-      }
+      const debtors = await readJsonArrayFile(DEBTORS_FILE);
+      res.json(debtors);
     } catch (error) {
       res.status(500).json({ error: "Failed to read debtors" });
     }
@@ -657,7 +555,8 @@ async function startServer() {
     app.post("/api/debtors", async (req, res) => {
     try {
       logToFile(`Attempting to save ${req.body?.length} debtors`);
-      await fs.promises.writeFile(DEBTORS_FILE, JSON.stringify(req.body, null, 2));
+      const debtorsToSave = Array.isArray(req.body) ? req.body : [];
+      await fs.promises.writeFile(DEBTORS_FILE, JSON.stringify(debtorsToSave, null, 2));
       logToFile(`Successfully saved debtors`);
       res.json({ success: true });
     } catch (error: any) {
@@ -669,16 +568,8 @@ async function startServer() {
     logToFile("[Server] Registering clients routes...");
     app.get("/api/clients", async (req, res) => {
       try {
-        if (!fs.existsSync(CLIENTS_FILE)) {
-          return res.json([]);
-        }
-        const data = await fs.promises.readFile(CLIENTS_FILE, "utf-8");
-        try {
-          res.json(JSON.parse(data));
-        } catch (parseError) {
-          logToFile(`Error parsing clients JSON: ${parseError}`);
-          res.json([]);
-        }
+        const clients = await readJsonArrayFile(CLIENTS_FILE);
+        res.json(clients);
       } catch (error) {
         logToFile(`Error reading clients: ${error}`);
         res.status(500).json({ error: "Failed to read clients" });
@@ -692,16 +583,7 @@ async function startServer() {
           return res.status(400).json({ error: "Missing request body" });
         }
 
-        let clients = [];
-        try {
-          if (fs.existsSync(CLIENTS_FILE)) {
-            const data = await fs.promises.readFile(CLIENTS_FILE, "utf-8");
-            clients = JSON.parse(data);
-          }
-        } catch (readError) {
-          logToFile(`Warning: Could not read clients file, starting fresh: ${readError}`);
-          clients = [];
-        }
+        let clients = await readJsonArrayFile(CLIENTS_FILE);
 
         if (Array.isArray(req.body)) {
           clients = req.body;
@@ -739,12 +621,7 @@ async function startServer() {
         const { id } = req.params;
         logToFile(`Attempting to delete client: ${id}`);
         
-        if (!fs.existsSync(CLIENTS_FILE)) {
-          return res.json({ success: true });
-        }
-
-        const data = await fs.promises.readFile(CLIENTS_FILE, "utf-8");
-        const clients = JSON.parse(data);
+        const clients = await readJsonArrayFile(CLIENTS_FILE);
         const filtered = clients.filter((c: any) => c.id !== id);
         
         await fs.promises.writeFile(CLIENTS_FILE, JSON.stringify(filtered, null, 2));
@@ -759,16 +636,8 @@ async function startServer() {
     logToFile("[Server] Registering returns routes...");
     app.get("/api/returns", async (req, res) => {
       try {
-        if (!fs.existsSync(RETURNS_FILE)) {
-          return res.json([]);
-        }
-        const data = await fs.promises.readFile(RETURNS_FILE, "utf-8");
-        try {
-          res.json(JSON.parse(data));
-        } catch (parseError) {
-          logToFile(`Error parsing returns JSON: ${parseError}`);
-          res.json([]);
-        }
+        const returnsList = await readJsonArrayFile(RETURNS_FILE);
+        res.json(returnsList);
       } catch (error) {
         logToFile(`Error reading returns: ${error}`);
         res.status(500).json({ error: "Failed to read returns" });
@@ -782,16 +651,7 @@ async function startServer() {
           return res.status(400).json({ error: "Missing request body" });
         }
 
-        let returnsList = [];
-        try {
-          if (fs.existsSync(RETURNS_FILE)) {
-            const data = await fs.promises.readFile(RETURNS_FILE, "utf-8");
-            returnsList = JSON.parse(data);
-          }
-        } catch (readError) {
-          logToFile(`Warning: Could not read returns file, starting fresh: ${readError}`);
-          returnsList = [];
-        }
+        let returnsList = await readJsonArrayFile(RETURNS_FILE);
 
         if (Array.isArray(req.body)) {
           returnsList = req.body;
@@ -824,12 +684,7 @@ async function startServer() {
         const { id } = req.params;
         logToFile(`Attempting to delete return: ${id}`);
         
-        if (!fs.existsSync(RETURNS_FILE)) {
-          return res.json({ success: true });
-        }
-
-        const data = await fs.promises.readFile(RETURNS_FILE, "utf-8");
-        const returnsList = JSON.parse(data);
+        const returnsList = await readJsonArrayFile(RETURNS_FILE);
         const filtered = returnsList.filter((r: any) => r.id !== id);
         
         await fs.promises.writeFile(RETURNS_FILE, JSON.stringify(filtered, null, 2));
@@ -844,16 +699,8 @@ async function startServer() {
     logToFile("[Server] Registering validations routes...");
     app.get("/api/validations", async (req, res) => {
       try {
-        if (!fs.existsSync(VALIDATIONS_FILE)) {
-          return res.json([]);
-        }
-        const data = await fs.promises.readFile(VALIDATIONS_FILE, "utf-8");
-        try {
-          res.json(JSON.parse(data));
-        } catch (parseError) {
-          logToFile(`Error parsing validations JSON: ${parseError}`);
-          res.json([]);
-        }
+        const validationsList = await readJsonArrayFile(VALIDATIONS_FILE);
+        res.json(validationsList);
       } catch (error) {
         logToFile(`Error reading validations: ${error}`);
         res.status(500).json({ error: "Failed to read validations" });
@@ -867,16 +714,7 @@ async function startServer() {
           return res.status(400).json({ error: "Missing request body" });
         }
 
-        let validationsList = [];
-        try {
-          if (fs.existsSync(VALIDATIONS_FILE)) {
-            const data = await fs.promises.readFile(VALIDATIONS_FILE, "utf-8");
-            validationsList = JSON.parse(data);
-          }
-        } catch (readError) {
-          logToFile(`Warning: Could not read validations file, starting fresh: ${readError}`);
-          validationsList = [];
-        }
+        let validationsList = await readJsonArrayFile(VALIDATIONS_FILE);
 
         if (Array.isArray(req.body)) {
           validationsList = req.body;
@@ -909,12 +747,7 @@ async function startServer() {
         const { id } = req.params;
         logToFile(`Attempting to delete validation: ${id}`);
         
-        if (!fs.existsSync(VALIDATIONS_FILE)) {
-          return res.json({ success: true });
-        }
-
-        const data = await fs.promises.readFile(VALIDATIONS_FILE, "utf-8");
-        const validationsList = JSON.parse(data);
+        const validationsList = await readJsonArrayFile(VALIDATIONS_FILE);
         const filtered = validationsList.filter((v: any) => v.id !== id);
         
         await fs.promises.writeFile(VALIDATIONS_FILE, JSON.stringify(filtered, null, 2));

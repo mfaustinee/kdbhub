@@ -262,10 +262,20 @@ const safeParseError = async (response: Response, defaultMessage: string): Promi
   }
 };
 
-const updateLocalStorageCollection = <T extends Record<string, any>>(key: string, item: T, idField: string = 'id') => {
+const getArrayFromLocalStorage = <T = any>(key: string): T[] => {
   try {
     const raw = localStorage.getItem(key);
-    let items: T[] = raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const updateLocalStorageCollection = <T extends Record<string, any>>(key: string, item: T, idField: string = 'id') => {
+  try {
+    const items = getArrayFromLocalStorage<T>(key);
     const itemId = item[idField] || item.id || item.referenceNumber;
     const idx = items.findIndex(i => (i[idField] || i.id || i.referenceNumber) === itemId);
     if (idx >= 0) {
@@ -273,7 +283,7 @@ const updateLocalStorageCollection = <T extends Record<string, any>>(key: string
     } else {
       items.unshift(item);
     }
-    localStorage.setItem(key, JSON.stringify(items));
+    safeSetLocalStorage(key, JSON.stringify(items));
   } catch (e) {
     console.error(`[DBService] Error updating localStorage collection ${key}:`, e);
   }
@@ -281,10 +291,9 @@ const updateLocalStorageCollection = <T extends Record<string, any>>(key: string
 
 const removeFromLocalStorageCollection = <T extends Record<string, any>>(key: string, id: string, idField: string = 'id') => {
   try {
-    const raw = localStorage.getItem(key);
-    let items: T[] = raw ? JSON.parse(raw) : [];
-    items = items.filter(i => (i[idField] || i.id || i.referenceNumber) !== id);
-    localStorage.setItem(key, JSON.stringify(items));
+    const items = getArrayFromLocalStorage<T>(key);
+    const filtered = items.filter(i => (i[idField] || i.id || i.referenceNumber) !== id);
+    safeSetLocalStorage(key, JSON.stringify(filtered));
   } catch (e) {
     console.error(`[DBService] Error removing from localStorage collection ${key}:`, e);
   }
@@ -309,8 +318,8 @@ export const DBService = {
         console.error("[DBService] Local API error:", e);
       }
       
-      const local = localStorage.getItem('kdb_agreements_cache');
-      return local ? JSON.parse(local) : [];
+      const local = getArrayFromLocalStorage<AgreementData>('kdb_agreements_cache');
+      return local;
     }
 
     try {
@@ -435,12 +444,11 @@ export const DBService = {
       } catch (e) {
         console.warn("[DBService] Local API updateAgreement error:", e);
       }
-      const raw = localStorage.getItem('kdb_agreements_cache');
-      let items: AgreementData[] = raw ? JSON.parse(raw) : [];
+      const items = getArrayFromLocalStorage<AgreementData>('kdb_agreements_cache');
       const idx = items.findIndex(i => i.id === id);
       if (idx >= 0) {
         items[idx] = { ...items[idx], ...updates };
-        localStorage.setItem('kdb_agreements_cache', JSON.stringify(items));
+        safeSetLocalStorage('kdb_agreements_cache', JSON.stringify(items));
       }
     };
 
@@ -597,8 +605,8 @@ export const DBService = {
         console.error("[DBService] Local API error:", e);
       }
       
-      const local = localStorage.getItem('kdb_closures_cache');
-      return local ? decodeClosures(JSON.parse(local)) : [];
+      const local = getArrayFromLocalStorage<ClosureNotificationData>('kdb_closures_cache');
+      return decodeClosures(local);
     }
 
     try {
@@ -743,12 +751,11 @@ export const DBService = {
       } catch (e) {
         console.warn("[DBService] Local API updateClosure fetch error:", e);
       }
-      const raw = localStorage.getItem('kdb_closures_cache');
-      let items: ClosureNotificationData[] = raw ? JSON.parse(raw) : [];
+      const items = getArrayFromLocalStorage<ClosureNotificationData>('kdb_closures_cache');
       const idx = items.findIndex(i => i.id === id);
       if (idx >= 0) {
         items[idx] = { ...items[idx], ...updatesCopy };
-        localStorage.setItem('kdb_closures_cache', JSON.stringify(items));
+        safeSetLocalStorage('kdb_closures_cache', JSON.stringify(items));
       }
     };
 
@@ -861,8 +868,8 @@ export const DBService = {
       } catch (e) {
         console.error("[DBService] Local API error:", e);
       }
-      const local = localStorage.getItem('kdb_complaints_cache');
-      return local ? JSON.parse(local) : [];
+      const local = getArrayFromLocalStorage<ComplaintData>('kdb_complaints_cache');
+      return local;
     }
 
     try {
@@ -994,12 +1001,11 @@ export const DBService = {
       } catch (e) {
         console.warn("[DBService] Local API updateComplaint fetch error:", e);
       }
-      const raw = localStorage.getItem('kdb_complaints_cache');
-      let items: ComplaintData[] = raw ? JSON.parse(raw) : [];
+      const items = getArrayFromLocalStorage<ComplaintData>('kdb_complaints_cache');
       const idx = items.findIndex(i => i.id === id);
       if (idx >= 0) {
         items[idx] = { ...items[idx], ...populatedUpdates };
-        localStorage.setItem('kdb_complaints_cache', JSON.stringify(items));
+        safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(items));
       }
     };
 
@@ -1083,8 +1089,8 @@ export const DBService = {
       } catch (e) {
         console.error("[DBService] Local API error:", e);
       }
-      const local = localStorage.getItem('kdb_inquiries_cache');
-      return local ? JSON.parse(local) : [];
+      const local = getArrayFromLocalStorage<InquiryData>('kdb_inquiries_cache');
+      return local;
     }
 
     try {
@@ -1216,12 +1222,11 @@ export const DBService = {
       } catch (e) {
         console.warn("[DBService] Local API updateInquiry fetch error:", e);
       }
-      const raw = localStorage.getItem('kdb_inquiries_cache');
-      let items: InquiryData[] = raw ? JSON.parse(raw) : [];
+      const items = getArrayFromLocalStorage<InquiryData>('kdb_inquiries_cache');
       const idx = items.findIndex(i => (i.id || i.referenceNumber) === id);
       if (idx >= 0) {
         items[idx] = { ...items[idx], ...populatedUpdates };
-        localStorage.setItem('kdb_inquiries_cache', JSON.stringify(items));
+        safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(items));
       }
     };
 
@@ -1305,8 +1310,8 @@ export const DBService = {
       } catch (e) {
         console.error("[DBService] Local API error:", e);
       }
-      const local = localStorage.getItem('kdb_debtors_cache');
-      return local ? JSON.parse(local) : [];
+      const local = getArrayFromLocalStorage<DebtorRecord>('kdb_debtors_cache');
+      return local;
     };
 
     const revalidate = async () => {
@@ -1336,7 +1341,8 @@ export const DBService = {
     if (cached) {
       setTimeout(revalidate, 50);
       try {
-        return JSON.parse(cached);
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {
         // Fall through
       }
@@ -1591,8 +1597,8 @@ export const DBService = {
       } catch (e) {
         console.error("[DBService] Local API error:", e);
       }
-      const local = localStorage.getItem('kdb_clients_cache');
-      return local ? JSON.parse(local) : [];
+      const local = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
+      return local;
     }
 
     try {
@@ -1747,12 +1753,7 @@ export const DBService = {
 
   async saveClientsBulk(clientsList: LicensedClient[]): Promise<void> {
     const getMergedLocal = async () => {
-      let currentClients: LicensedClient[] = [];
-      try {
-        const cached = localStorage.getItem('kdb_clients_cache');
-        if (cached) currentClients = JSON.parse(cached);
-      } catch {}
-
+      const currentClients = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
       const merged = [...currentClients];
       clientsList.forEach(newC => {
         const idx = merged.findIndex(c => c.id === newC.id);
@@ -1853,12 +1854,19 @@ export const DBService = {
     };
 
     const fetchLocal = async () => {
-      const response = await fetch('/api/returns');
-      if (response.ok) {
-        const data = await response.json();
-        return data as ClientReturn[];
+      try {
+        const response = await fetch('/api/returns');
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            safeSetLocalStorage('kdb_returns_cache', JSON.stringify(data));
+            return data as ClientReturn[];
+          }
+        }
+      } catch (e) {
+        console.error("[DBService] Local API getReturns error:", e);
       }
-      return [];
+      return getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
     };
 
     const revalidate = async () => {
@@ -1868,11 +1876,11 @@ export const DBService = {
           const { data, error } = await client.from('client_returns').select('*');
           if (!error && data) {
             const mapped = data.map(r => fromDb(r, template));
-            localStorage.setItem('kdb_returns_cache', JSON.stringify(mapped));
+            safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
           }
         } else {
           const local = await fetchLocal();
-          localStorage.setItem('kdb_returns_cache', JSON.stringify(local));
+          safeSetLocalStorage('kdb_returns_cache', JSON.stringify(local));
         }
       } catch (e) {
         console.warn("[DBService] Background revalidation of returns failed:", e);
@@ -1882,7 +1890,8 @@ export const DBService = {
     if (cached) {
       setTimeout(revalidate, 50);
       try {
-        return JSON.parse(cached);
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {
         // Fall through
       }
@@ -1891,7 +1900,7 @@ export const DBService = {
     const client = await getSupabase();
     if (!client) {
       const local = await fetchLocal();
-      localStorage.setItem('kdb_returns_cache', JSON.stringify(local));
+      safeSetLocalStorage('kdb_returns_cache', JSON.stringify(local));
       return local;
     }
 
@@ -1906,7 +1915,7 @@ export const DBService = {
       }
 
       const mapped = (data || []).map(r => fromDb(r, template));
-      localStorage.setItem('kdb_returns_cache', JSON.stringify(mapped));
+      safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
       return mapped;
     } catch (e) {
       console.warn("[DBService] Supabase getReturns exception, falling back to local. Error:", e);
@@ -1990,12 +1999,7 @@ export const DBService = {
 
   async saveReturnsBulk(returnsList: ClientReturn[]): Promise<void> {
     const getMergedLocal = async () => {
-      let currentReturns: ClientReturn[] = [];
-      try {
-        const cached = localStorage.getItem('kdb_returns_cache');
-        if (cached) currentReturns = JSON.parse(cached);
-      } catch {}
-
+      const currentReturns = getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
       const merged = [...currentReturns];
       returnsList.forEach(newR => {
         const idx = merged.findIndex(r => r.id === newR.id);
@@ -2097,8 +2101,8 @@ export const DBService = {
       } catch (e) {
         console.error("[DBService] Local validations API error:", e);
       }
-      const local = localStorage.getItem('kdb_validations_cache');
-      return local ? JSON.parse(local) : [];
+      const local = getArrayFromLocalStorage<DataValidation>('kdb_validations_cache');
+      return local;
     };
 
     const revalidate = async () => {
@@ -2179,7 +2183,7 @@ export const DBService = {
             }
           });
 
-          localStorage.setItem('kdb_validations_cache', JSON.stringify(combined));
+          safeSetLocalStorage('kdb_validations_cache', JSON.stringify(combined));
         } else {
           await fetchLocal();
         }
@@ -2191,7 +2195,8 @@ export const DBService = {
     if (!forceRefresh && cached) {
       setTimeout(revalidate, 50);
       try {
-        return JSON.parse(cached);
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
       } catch (e) {
         // Fall through
       }
@@ -2277,7 +2282,7 @@ export const DBService = {
         }
       });
 
-      localStorage.setItem('kdb_validations_cache', JSON.stringify(combined));
+      safeSetLocalStorage('kdb_validations_cache', JSON.stringify(combined));
       return combined;
     } catch (e) {
       console.warn("[DBService] Supabase getValidations exception, falling back to local. Error:", e);
@@ -2301,15 +2306,7 @@ export const DBService = {
     };
 
     // 1. Always update local validations cache immediately to prevent layout shifts or stale loads
-    let list: DataValidation[] = [];
-    const currentCache = localStorage.getItem('kdb_validations_cache');
-    if (currentCache) {
-      try {
-        list = JSON.parse(currentCache) as DataValidation[];
-      } catch (e) {
-        list = [];
-      }
-    }
+    const list = getArrayFromLocalStorage<DataValidation>('kdb_validations_cache');
     const index = list.findIndex(v => v.id === validation.id);
     if (index > -1) list[index] = validation;
     else list.unshift(validation); // add to beginning
@@ -2355,7 +2352,26 @@ export const DBService = {
         });
 
       if (kdbErr) {
-        console.error("[DBService] Supabase kdb_validations upsert ERROR:", kdbErr.message);
+        console.warn("[DBService] Supabase kdb_validations upsert attempt:", kdbErr.message);
+        // Fallback: try update by premise_name + validation_period or id
+        try {
+          await client
+            .from('kdb_validations')
+            .update({
+              validation_period: valPeriod,
+              date: validation.validatedAt,
+              raw_data: rawData,
+              permit_no: validation.permitNo,
+              dbo_name: validation.clientName,
+              location: validation.location,
+              category: validation.category,
+              contacts: validation.contacts,
+              pdf_path: validation.pdfPath
+            })
+            .or(`id.eq.${kdbRecordId},premise_name.eq.${validation.premiseName}`);
+        } catch (updateErr) {
+          console.warn("[DBService] Supabase kdb_validations update fallback error:", updateErr);
+        }
       } else {
         console.log("[DBService] Supabase kdb_validations upsert SUCCESS:", kdbRecordId);
       }
@@ -2384,16 +2400,11 @@ export const DBService = {
     }
 
     try {
-      const { error } = await client
-        .from('data_validations')
-        .delete()
-        .eq('id', id);
-
-      if (error) {
-        console.warn("[DBService] Supabase deleteValidation failed, falling back to local.", error);
-        await deleteLocal();
-        return;
-      }
+      await Promise.allSettled([
+        client.from('data_validations').delete().eq('id', id),
+        client.from('kdb_validations').delete().eq('id', id)
+      ]);
+      await deleteLocal();
     } catch (e) {
       console.warn("[DBService] Supabase deleteValidation exception, falling back to local.", e);
       await deleteLocal();
@@ -2403,7 +2414,7 @@ export const DBService = {
   async saveValidationsBulk(validationsList: DataValidation[]): Promise<void> {
     const saveLocal = async () => {
       const current = await this.getValidations();
-      const merged = [...current];
+      const merged = Array.isArray(current) ? [...current] : [];
       validationsList.forEach(newV => {
         const idx = merged.findIndex(v => v.id === newV.id);
         if (idx !== -1) {
