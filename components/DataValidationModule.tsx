@@ -359,8 +359,72 @@ export function getNextValidationMonth(latestPeriod?: string): string | null {
   return null;
 }
 
-const getNextMonthToValidate = (latestPeriod: string): string | null => {
-  return getNextValidationMonth(latestPeriod);
+// Helper to determine the latest operational month from a historical validation record
+// Guided by the last entered month of local sales where local sales exist, or total intakes where local sales do not exist.
+const getLatestOperationalMonthFromRecord = (raw: any, fallbackPeriod: string = ''): string => {
+  if (!raw) return fallbackPeriod;
+
+  // 1. If hasLocalSales is true (or sales entries exist with data), check sales entries
+  const sales = Array.isArray(raw.sales) ? raw.sales : [];
+  const hasLocalSales = raw.hasLocalSales !== undefined ? !!raw.hasLocalSales : sales.length > 0;
+
+  if (hasLocalSales && sales.length > 0) {
+    const validSales = sales.filter((s: any) => s && s.month && String(s.month).trim() !== '');
+    if (validSales.length > 0) {
+      // Find the latest sale entry chronologically
+      let bestSale = validSales[validSales.length - 1];
+      let bestTimestamp = -1;
+
+      validSales.forEach((s: any) => {
+        const periodStr = `${s.month} ${s.year || ''}`.trim();
+        const ts = getPeriodTimestamp(periodStr);
+        if (ts >= bestTimestamp) {
+          bestTimestamp = ts;
+          bestSale = s;
+        }
+      });
+
+      if (bestSale && bestSale.month) {
+        return `${bestSale.month} ${bestSale.year || ''}`.trim();
+      }
+    }
+  }
+
+  // 2. If local sales do not exist (or no valid sales entries), check intakes entries
+  const intakes = Array.isArray(raw.intakes) ? raw.intakes : [];
+  if (intakes.length > 0) {
+    const validIntakes = intakes.filter((i: any) => i && i.month && String(i.month).trim() !== '');
+    if (validIntakes.length > 0) {
+      let bestIntake = validIntakes[validIntakes.length - 1];
+      let bestTimestamp = -1;
+
+      validIntakes.forEach((i: any) => {
+        const periodStr = `${i.month} ${i.year || ''}`.trim();
+        const ts = getPeriodTimestamp(periodStr);
+        if (ts >= bestTimestamp) {
+          bestTimestamp = ts;
+          bestIntake = i;
+        }
+      });
+
+      if (bestIntake && bestIntake.month) {
+        return `${bestIntake.month} ${bestIntake.year || ''}`.trim();
+      }
+    }
+  }
+
+  // 3. Fallback to validationPeriod or period
+  return fallbackPeriod || raw.validationPeriod || raw.period || '';
+};
+
+const getNextMonthToValidate = (latestPeriodOrRecord: any): string | null => {
+  if (!latestPeriodOrRecord) return null;
+  if (typeof latestPeriodOrRecord === 'string') {
+    return getNextValidationMonth(latestPeriodOrRecord);
+  }
+  // If an object with rawData is passed
+  const targetPeriod = getLatestOperationalMonthFromRecord(latestPeriodOrRecord.rawData || latestPeriodOrRecord, latestPeriodOrRecord.fullPeriod || latestPeriodOrRecord.displayString || '');
+  return getNextValidationMonth(targetPeriod);
 };
 
 const getPeriodTimestamp = (periodStr: string, fallbackDate?: string): number => {
@@ -562,7 +626,21 @@ export function DataValidationModule() {
   const [pdfPreview, setPdfPreview] = useState<string | null>(null);
   const [pdfModalUrl, setPdfModalUrl] = useState<string | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
-  const [lastCollections, setLastCollections] = useState<{ month: string, year: string, date: string, fullPeriod: string, displayString: string, matchedPremise?: string, pdfPath?: string, rawData?: any }[]>([]);
+  const [lastCollections, setLastCollections] = useState<{
+    month: string;
+    year: string;
+    date: string;
+    fullPeriod: string;
+    displayString: string;
+    matchedPremise?: string;
+    matchedPermit?: string;
+    matchedLocation?: string;
+    matchedBranch?: string;
+    isBranchFacility?: boolean;
+    pdfPath?: string;
+    rawData?: any;
+  }[]>([]);
+  const [historyFilterMode, setHistoryFilterMode] = useState<'all' | 'branch' | 'main'>('all');
   const [isCheckingHistory, setIsCheckingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   
@@ -738,7 +816,17 @@ export function DataValidationModule() {
     const pNoNorm = normStr(pNo);
     const dboNorm = normStr(dbo);
 
-    const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any; matchedPremise?: string }[] = [];
+    const allExtractedMonths: {
+      period: string;
+      pdfPath?: string;
+      score: number;
+      rawData?: any;
+      matchedPremise?: string;
+      matchedPermit?: string;
+      matchedLocation?: string;
+      matchedBranch?: string;
+      isBranchFacility?: boolean;
+    }[] = [];
 
     const safeVals = Array.isArray(vals) ? vals : [];
     if (safeVals.length > 0) {
@@ -748,6 +836,10 @@ export function DataValidationModule() {
         const vPName = normStr(v.premiseName || v.premise_name || raw.premiseName || raw.premise_name);
         const vPNo = normStr(v.permitNo || v.permit_no || v.clientId || raw.permitNo || raw.permit_no);
         const vDbo = normStr(v.clientName || v.dbo_name || raw.dboName || raw.dbo_name || raw.clientName);
+        const vBranch = v.branch || raw.branch || '';
+        const vLocation = v.location || raw.location || '';
+        const rawPName = v.premiseName || v.premise_name || raw.premiseName || '';
+        const rawPNo = v.permitNo || v.permit_no || raw.permitNo || '';
 
         // Independent matching for premise name, permit number, or DBO name
         const isPremiseMatch = pNorm && (vPName === pNorm || vPName.includes(pNorm) || pNorm.includes(vPName));
@@ -769,34 +861,52 @@ export function DataValidationModule() {
             }
           }
 
+          // Detect whether this historical record belongs to a branch or main facility
+          const hasBranchIndicator = !!(
+            vBranch.trim() ||
+            raw.isBranch ||
+            v.isBranch ||
+            (rawPName && (rawPName.toLowerCase().includes('branch') || rawPName.toLowerCase().includes('outlet') || rawPName.toLowerCase().includes('milk bar'))) ||
+            (vPNo && vPNo.includes('-br')) ||
+            (pNorm && vPName && vPName !== pNorm)
+          );
+
           if (fullPeriod) {
             allExtractedMonths.push({
               period: fullPeriod,
               pdfPath: pdfRef,
               score: getPeriodTimestamp(fullPeriod, v.validatedAt || v.date || raw.date),
               rawData: raw,
-              matchedPremise: v.premiseName || v.premise_name || raw.premiseName || pName
+              matchedPremise: rawPName || pName,
+              matchedPermit: rawPNo || pNo,
+              matchedLocation: vLocation,
+              matchedBranch: vBranch,
+              isBranchFacility: hasBranchIndicator
             });
           }
         }
       });
     }
 
-    // Deduplicate by normalized period
+    // Deduplicate by normalized period + premise name to preserve distinct branch histories
     const deduplicated: Record<string, any> = {};
     allExtractedMonths.forEach(m => {
-      const key = m.period.toLowerCase().trim();
+      const key = `${m.period.toLowerCase().trim()}_${(m.matchedPremise || '').toLowerCase().trim()}`;
       if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath) || m.score > deduplicated[key].score) {
         deduplicated[key] = m;
       }
     });
 
     const sortedList = Object.values(deduplicated).sort((a: any, b: any) => b.score - a.score);
-    return sortedList.slice(0, 3).map((m: any) => ({
+    return sortedList.slice(0, 6).map((m: any) => ({
       month: '', year: '', date: '',
       fullPeriod: m.period,
       displayString: m.period.replace(/(\b\d{4}\b)\s+\1/g, '$1'),
       matchedPremise: m.matchedPremise || pName,
+      matchedPermit: m.matchedPermit || pNo,
+      matchedLocation: m.matchedLocation || '',
+      matchedBranch: m.matchedBranch || '',
+      isBranchFacility: !!m.isBranchFacility,
       pdfPath: m.pdfPath,
       rawData: m.rawData
     }));
@@ -843,6 +953,8 @@ export function DataValidationModule() {
         if (isMatch) {
           const key = `${v.premiseName || v.premise_name || raw.premiseName || ''}-${v.permitNo || v.permit_no || raw.permitNo || ''}`.toLowerCase().trim();
           if (!uniqueMap[key]) {
+            // Prioritize the actual validation timestamp / date when the validation was done
+            const validationDoneDate = v.validatedAt || v.date || raw.validatedAt || raw.date || raw.savedAt || '';
             uniqueMap[key] = {
               dbo_name: v.clientName || v.dbo_name || raw.dboName || raw.dbo_name,
               premise_name: v.premiseName || v.premise_name || raw.premiseName || raw.premise_name,
@@ -851,7 +963,8 @@ export function DataValidationModule() {
               location: v.location || raw.location,
               county: toSentenceCase((raw && raw.county) || 'Kericho'),
               raw_data: raw,
-              date: v.validatedAt || v.date || raw.date
+              date: validationDoneDate || new Date().toISOString(),
+              isFromValidation: true
             };
           }
         }
@@ -2165,6 +2278,14 @@ export function DataValidationModule() {
       currentY += 10;
     }
 
+    // Check if validating a branch facility (declared returns are filed at HQ/Main facility)
+    const isBranchFacility = !!(
+      validationPremiseMode.startsWith('branch-') ||
+      validationPremiseMode === 'new' ||
+      (data.branch && data.branch.trim() !== '') ||
+      (selectedClient && selectedClient.premiseName && data.premiseName && data.premiseName.trim().toLowerCase() !== selectedClient.premiseName.trim().toLowerCase())
+    );
+
     // Sales Table
     if (data.hasLocalSales) {
       checkPageBreak(25);
@@ -2172,14 +2293,33 @@ export function DataValidationModule() {
       doc.setFont("helvetica", "bold");
       doc.text("Local Sales Data", 20, currentY);
       doc.setFont("helvetica", "normal");
-      autoTable(doc, {
-        startY: currentY + 5,
-        head: [['Month/Year', `Declared (${globalUnit})`, `Verified (${globalUnit})`, `Projected (${globalUnit})`, `Under Declared (${globalUnit})`, 'Buying Price', 'Selling Price', `Avg Vol/Day (${globalUnit}/Day)`]],
-        body: data.sales.map(s => [`${s.month} ${s.year}`, s.qtyDeclared, s.verifiedQty, s.projectedQty, s.underDeclared, s.buyingPrice, s.sellingPrice, s.avgVolPerDay]),
-        styles: { fontSize: 7 }
-      });
-      currentY = (doc as any).lastAutoTable.finalY;
-      currentY += 10;
+      
+      if (isBranchFacility) {
+        // For branches, declared volume is consolidated under HQ/Main branch returns
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Month/Year', `Verified (${globalUnit})`, `Projected (${globalUnit})`, 'Buying Price', 'Selling Price', `Avg Vol/Day (${globalUnit}/Day)`]],
+          body: data.sales.map(s => [`${s.month} ${s.year}`, s.verifiedQty, s.projectedQty, s.buyingPrice, s.sellingPrice, s.avgVolPerDay]),
+          styles: { fontSize: 7.5 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 4;
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "italic");
+        doc.setTextColor(100, 100, 100);
+        doc.text("* Note: Declared return volumes are consolidated and filed under the main facility permit.", 20, currentY);
+        doc.setTextColor(0, 0, 0);
+        currentY += 6;
+      } else {
+        // For main facility/HQ, show standard declared and under-declared audit columns
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['Month/Year', `Declared (${globalUnit})`, `Verified (${globalUnit})`, `Projected (${globalUnit})`, `Under Declared (${globalUnit})`, 'Buying Price', 'Selling Price', `Avg Vol/Day (${globalUnit}/Day)`]],
+          body: data.sales.map(s => [`${s.month} ${s.year}`, s.qtyDeclared, s.verifiedQty, s.projectedQty, s.underDeclared, s.buyingPrice, s.sellingPrice, s.avgVolPerDay]),
+          styles: { fontSize: 7 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY;
+        currentY += 10;
+      }
     }
 
     // Distribution Details Table (for Mini Dairy & Cottage Industry)
@@ -3328,8 +3468,17 @@ export function DataValidationModule() {
                                     </div>
                                     <div className="text-[10px] text-gray-500 flex justify-between items-center mt-0.5">
                                       <span>Permit: {pNo} | Loc: {location}</span>
-                                      <span className="text-[9px] text-gray-400 font-mono italic">
-                                        {new Date(record.date).toLocaleDateString('default', { month: 'short', year: 'numeric' })}
+                                      <span className="text-[9px] text-emerald-800 font-bold font-mono">
+                                        {(() => {
+                                          if (record.date) {
+                                            const d = new Date(record.date);
+                                            if (!isNaN(d.getTime())) {
+                                              return d.toLocaleDateString('default', { month: 'short', year: 'numeric' });
+                                            }
+                                          }
+                                          if (raw.validationPeriod) return raw.validationPeriod;
+                                          return 'Validated';
+                                        })()}
                                       </span>
                                     </div>
                                   </button>
@@ -3341,7 +3490,7 @@ export function DataValidationModule() {
                       </AnimatePresence>
 
                       {lastCollections.length > 0 && (() => {
-                        const nextMonthStr = getNextMonthToValidate(lastCollections[0].fullPeriod);
+                        const nextMonthStr = getNextMonthToValidate(lastCollections[0]);
                         if (nextMonthStr) {
                           return (
                             <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-tight mt-1.5 flex items-center gap-1 bg-emerald-50/80 px-2.5 py-1 rounded-md border border-emerald-200/60 w-fit">
@@ -3424,50 +3573,138 @@ export function DataValidationModule() {
                           </motion.div>
                         )}
                         {lastCollections.length > 0 && (() => {
-                          const nextMonthStr = getNextMonthToValidate(lastCollections[0].fullPeriod);
+                          const hasBranches = lastCollections.some(c => c.isBranchFacility);
+                          const hasMain = lastCollections.some(c => !c.isBranchFacility);
+                          const showFilterTabs = hasBranches && hasMain;
+
+                          const filteredCollections = historyFilterMode === 'branch'
+                            ? lastCollections.filter(c => c.isBranchFacility)
+                            : historyFilterMode === 'main'
+                              ? lastCollections.filter(c => !c.isBranchFacility)
+                              : lastCollections;
+
+                          const activeList = filteredCollections.length > 0 ? filteredCollections : lastCollections;
+                          const nextMonthStr = getNextMonthToValidate(activeList[0]);
+
                           return (
                             <motion.div
                               initial={{ opacity: 0, y: -10 }}
                               animate={{ opacity: 1, y: 0 }}
-                              className="mt-2 p-3 bg-blue-50 rounded-xl border border-blue-100 space-y-2.5"
+                              className="mt-2 p-3 bg-blue-50/90 rounded-xl border border-blue-100 space-y-2.5 shadow-sm"
                             >
-                              <div className="flex items-start gap-2">
-                                <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-                                <div>
-                                  <p className="text-[11px] font-bold text-blue-800 uppercase tracking-tight">
-                                    Recent History for {lastCollections[0]?.matchedPremise || formData.premiseName}
-                                  </p>
-                                  <div className="text-[10px] text-blue-600 mt-1 flex flex-wrap gap-x-2 gap-y-1">
-                                    Last 3 validated months: {lastCollections.map((c, i) => (
-                                      <div key={i} className="flex items-center gap-1.5 flex-wrap">
-                                        <span className="font-semibold">{c.displayString}</span>
-                                        <div className="flex items-center gap-1">
-                                          {c.pdfPath && (
-                                            <button
-                                              type="button"
-                                              onClick={() => viewPdf(c.pdfPath!)}
-                                              className="text-[9px] bg-blue-100 hover:bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
-                                              title="View PDF"
-                                            >
-                                              <FileText className="w-2.5 h-2.5" />
-                                              PDF
-                                            </button>
-                                          )}
-                                          {c.rawData && (
-                                            <button
-                                              type="button"
-                                              onClick={() => handleRecallSubmission(c.rawData)}
-                                              className="text-[9px] bg-amber-100 hover:bg-amber-200 text-amber-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
-                                              title="Amend this submission"
-                                            >
-                                              <Edit2 className="w-2.5 h-2.5" />
-                                              Amend
-                                            </button>
-                                          )}
-                                        </div>
-                                        {i < lastCollections.length - 1 && <span className="text-blue-300">|</span>}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-start gap-2">
+                                  <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <p className="text-[11px] font-bold text-blue-900 uppercase tracking-tight">
+                                        Validation History ({activeList[0]?.matchedPremise || formData.premiseName})
+                                      </p>
+                                      {validationPremiseMode.startsWith('branch-') ? (
+                                        <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                                          Branch Mode
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                                          Main Facility Mode
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Optional Branch vs Main Filter Toggle */}
+                                    {showFilterTabs && (
+                                      <div className="flex items-center gap-1 mt-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setHistoryFilterMode('all')}
+                                          className={`text-[9px] px-2 py-0.5 rounded-md font-bold transition-all ${
+                                            historyFilterMode === 'all'
+                                              ? 'bg-blue-600 text-white shadow-xs'
+                                              : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'
+                                          }`}
+                                        >
+                                          All ({lastCollections.length})
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setHistoryFilterMode('main')}
+                                          className={`text-[9px] px-2 py-0.5 rounded-md font-bold transition-all ${
+                                            historyFilterMode === 'main'
+                                              ? 'bg-blue-600 text-white shadow-xs'
+                                              : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-50'
+                                          }`}
+                                        >
+                                          HQ / Main ({lastCollections.filter(c => !c.isBranchFacility).length})
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setHistoryFilterMode('branch')}
+                                          className={`text-[9px] px-2 py-0.5 rounded-md font-bold transition-all ${
+                                            historyFilterMode === 'branch'
+                                              ? 'bg-amber-600 text-white shadow-xs'
+                                              : 'bg-white text-amber-700 border border-amber-200 hover:bg-amber-50'
+                                          }`}
+                                        >
+                                          Branches ({lastCollections.filter(c => c.isBranchFacility).length})
+                                        </button>
                                       </div>
-                                    ))}
+                                    )}
+
+                                    <div className="text-[10px] text-blue-700 mt-2 space-y-1.5">
+                                      <div className="font-semibold text-slate-500 uppercase text-[9px] tracking-wider">
+                                        Recent Validations:
+                                      </div>
+                                      <div className="flex flex-wrap gap-2">
+                                        {activeList.slice(0, 4).map((c, i) => (
+                                          <div
+                                            key={i}
+                                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] ${
+                                              c.isBranchFacility
+                                                ? 'bg-amber-50/80 border-amber-200 text-amber-900'
+                                                : 'bg-white border-blue-200 text-blue-900 shadow-xs'
+                                            }`}
+                                          >
+                                            <span className={`text-[8px] font-black uppercase px-1 py-0.2 rounded ${
+                                              c.isBranchFacility
+                                                ? 'bg-amber-200 text-amber-900'
+                                                : 'bg-blue-100 text-blue-800'
+                                            }`}>
+                                              {c.isBranchFacility ? 'Branch' : 'Main'}
+                                            </span>
+                                            <span className="font-bold">{c.displayString}</span>
+                                            {c.matchedPremise && c.matchedPremise !== formData.premiseName && (
+                                              <span className="text-[9px] text-slate-500 font-medium">
+                                                ({c.matchedPremise})
+                                              </span>
+                                            )}
+                                            <div className="flex items-center gap-1 ml-1">
+                                              {c.pdfPath && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => viewPdf(c.pdfPath!)}
+                                                  className="text-[9px] bg-blue-100 hover:bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
+                                                  title="View PDF"
+                                                >
+                                                  <FileText className="w-2.5 h-2.5" />
+                                                  PDF
+                                                </button>
+                                              )}
+                                              {c.rawData && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleRecallSubmission(c.rawData)}
+                                                  className="text-[9px] bg-amber-100 hover:bg-amber-200 text-amber-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
+                                                  title="Amend this submission"
+                                                >
+                                                  <Edit2 className="w-2.5 h-2.5" />
+                                                  Amend
+                                                </button>
+                                              )}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
