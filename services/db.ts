@@ -323,7 +323,10 @@ export const DBService = {
         }
       } catch (_) {}
     }
-    return [];
+    const local = getArrayFromLocalStorage<DataValidation>('kdb_validations_cache');
+    const safe = Array.isArray(local) ? local : [];
+    validationsMemoryCache = safe;
+    return safe;
   },
   async fetchConfig() {
     return await fetchConfig();
@@ -2094,7 +2097,7 @@ export const DBService = {
   async getValidations(forceRefresh: boolean = false): Promise<DataValidation[]> {
     // 1. Fast memory cache check (0ms response)
     const now = Date.now();
-    if (!forceRefresh && validationsMemoryCache && validationsMemoryCache.length > 0 && (now - validationsCacheTimestamp < VALIDATIONS_CACHE_TTL_MS)) {
+    if (!forceRefresh && validationsMemoryCache && Array.isArray(validationsMemoryCache) && validationsMemoryCache.length > 0 && (now - validationsCacheTimestamp < VALIDATIONS_CACHE_TTL_MS)) {
       return validationsMemoryCache;
     }
 
@@ -2121,23 +2124,26 @@ export const DBService = {
       remarks: ''
     };
 
-    const fetchLocal = async () => {
+    const fetchLocal = async (): Promise<DataValidation[]> => {
       try {
         const response = await fetch('/api/validations');
         if (response.ok) {
           const data = await response.json();
-          validationsMemoryCache = data;
-          validationsCacheTimestamp = Date.now();
-          safeSetLocalStorage('kdb_validations_cache', JSON.stringify(data));
-          return data;
+          if (Array.isArray(data)) {
+            validationsMemoryCache = data;
+            validationsCacheTimestamp = Date.now();
+            safeSetLocalStorage('kdb_validations_cache', JSON.stringify(data));
+            return data;
+          }
         }
       } catch (e) {
         console.error("[DBService] Local validations API error:", e);
       }
       const local = getArrayFromLocalStorage<DataValidation>('kdb_validations_cache');
-      validationsMemoryCache = local;
+      const safe = Array.isArray(local) ? local : [];
+      validationsMemoryCache = safe;
       validationsCacheTimestamp = Date.now();
-      return local;
+      return safe;
     };
 
     const revalidate = async () => {
@@ -2353,7 +2359,8 @@ export const DBService = {
       return combined;
     } catch (e) {
       console.warn("[DBService] Supabase getValidations exception, falling back to local. Error:", e);
-      return await fetchLocal();
+      const local = await fetchLocal();
+      return Array.isArray(local) ? local : [];
     }
   },
 

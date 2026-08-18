@@ -740,8 +740,10 @@ export function DataValidationModule() {
 
     const allExtractedMonths: { period: string; pdfPath?: string; score: number; rawData?: any; matchedPremise?: string }[] = [];
 
-    if (vals && vals.length > 0) {
-      vals.forEach(v => {
+    const safeVals = Array.isArray(vals) ? vals : [];
+    if (safeVals.length > 0) {
+      safeVals.forEach(v => {
+        if (!v) return;
         const raw = typeof v.raw_data === 'string' ? (() => { try { return JSON.parse(v.raw_data); } catch { return {}; } })() : (v.rawData || v.raw_data || {});
         const vPName = normStr(v.premiseName || v.premise_name || raw.premiseName || raw.premise_name);
         const vPNo = normStr(v.permitNo || v.permit_no || v.clientId || raw.permitNo || raw.permit_no);
@@ -807,8 +809,11 @@ export function DataValidationModule() {
     const searchTokens = cleanSearch.toLowerCase().split(/\s+/).filter(t => t.length >= 2);
     const normSearch = normStr(searchTerm);
 
+    const safeClients = Array.isArray(clientsList) ? clientsList : [];
+    const safeVals = Array.isArray(cachedVals) ? cachedVals : [];
+
     const closedSet = new Set(
-      (clientsList || [])
+      safeClients
         .filter(c => isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus))
         .flatMap(c => [
           normStr(c.clientName),
@@ -820,8 +825,9 @@ export function DataValidationModule() {
     );
 
     // 1. Search cached validations
-    if (cachedVals && cachedVals.length > 0) {
-      cachedVals.forEach(v => {
+    if (safeVals.length > 0) {
+      safeVals.forEach(v => {
+        if (!v) return;
         const raw = typeof v.raw_data === 'string' ? (() => { try { return JSON.parse(v.raw_data); } catch { return {}; } })() : (v.rawData || v.raw_data || {});
         const vDbo = normStr(v.clientName || v.dbo_name || raw.dboName || raw.dbo_name);
         const vPName = normStr(v.premiseName || v.premise_name || raw.premiseName || raw.premise_name);
@@ -853,9 +859,9 @@ export function DataValidationModule() {
     }
 
     // 2. Search active clients registry
-    if (clientsList && clientsList.length > 0) {
-      clientsList.forEach(c => {
-        if (isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus)) return;
+    if (safeClients.length > 0) {
+      safeClients.forEach(c => {
+        if (!c || isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus)) return;
 
         const cDbo = normStr(c.clientName);
         const isMatch = (normSearch && (cDbo.includes(normSearch) || normSearch.includes(cDbo))) ||
@@ -907,7 +913,7 @@ export function DataValidationModule() {
 
     // Phase 1: Instant Synchronous Lookup from in-memory cache (0ms latency)
     const cachedVals = DBService.getCachedValidations();
-    const immediateHistory = extractPremiseHistory(cachedVals, pName, pNo, dbo);
+    const immediateHistory = extractPremiseHistory(Array.isArray(cachedVals) ? cachedVals : [], pName, pNo, dbo);
     if (immediateHistory.length > 0) {
       setLastCollections(immediateHistory);
     }
@@ -935,7 +941,7 @@ export function DataValidationModule() {
                 .or(searchTerms.join(','))
                 .order('date', { ascending: false })
                 .limit(25);
-              if (sbData) sbVals = sbData;
+              if (Array.isArray(sbData)) sbVals = sbData;
             }
           } catch (spErr) {
             console.warn('[fetchHistory] Supabase direct query note:', spErr);
@@ -943,7 +949,9 @@ export function DataValidationModule() {
         }
 
         if (!isMounted) return;
-        const combined = [...allVals, ...sbVals];
+        const safeAllVals = Array.isArray(allVals) ? allVals : [];
+        const safeSbVals = Array.isArray(sbVals) ? sbVals : [];
+        const combined = [...safeAllVals, ...safeSbVals];
         const computedHistory = extractPremiseHistory(combined, pName, pNo, dbo);
         setLastCollections(computedHistory);
       } catch (err: any) {
@@ -983,7 +991,9 @@ export function DataValidationModule() {
 
     // Phase 1: Instant Synchronous Lookup from memory (0ms latency)
     const cachedVals = DBService.getCachedValidations();
-    const immediateMatches = extractDboMatches(searchTerm, clients, cachedVals);
+    const safeClients = Array.isArray(clients) ? clients : [];
+    const safeCached = Array.isArray(cachedVals) ? cachedVals : [];
+    const immediateMatches = extractDboMatches(searchTerm, safeClients, safeCached);
     if (immediateMatches.length > 0) {
       setLastDboRecords(immediateMatches);
     }
@@ -1007,7 +1017,7 @@ export function DataValidationModule() {
               .order('date', { ascending: false })
               .limit(15);
 
-            if (!error && data) {
+            if (!error && Array.isArray(data)) {
               remoteRecords = data;
             }
           } catch (spErr) {
@@ -1017,8 +1027,10 @@ export function DataValidationModule() {
 
         if (!isMounted) return;
         const allVals = await DBService.getValidations();
-        const combined = [...allVals, ...remoteRecords];
-        const computedDboRecords = extractDboMatches(searchTerm, clients, combined);
+        const safeAllVals = Array.isArray(allVals) ? allVals : [];
+        const safeRemoteRecords = Array.isArray(remoteRecords) ? remoteRecords : [];
+        const combined = [...safeAllVals, ...safeRemoteRecords];
+        const computedDboRecords = extractDboMatches(searchTerm, safeClients, combined);
         setLastDboRecords(computedDboRecords);
       } catch (err: any) {
         if (isMounted) {
@@ -2385,7 +2397,8 @@ export function DataValidationModule() {
 
       // 4. Fallback: search local DBService validations for inline PDF base64 string or matching record
       const allVals = await DBService.getValidations();
-      const match = allVals.find(v => 
+      const safeAllVals = Array.isArray(allVals) ? allVals : [];
+      const match = safeAllVals.find(v => 
         v.pdfPath === path || 
         v.id === path || 
         (v.rawData as any)?.pdf_path === path || 

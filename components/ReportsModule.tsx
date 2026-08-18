@@ -150,9 +150,9 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
         DBService.getReturns(),
         DBService.getValidations()
       ]);
-      setClients(fetchedClients);
-      setReturns(fetchedReturns);
-      setValidations(fetchedValidations);
+      setClients(Array.isArray(fetchedClients) ? fetchedClients : []);
+      setReturns(Array.isArray(fetchedReturns) ? fetchedReturns : []);
+      setValidations(Array.isArray(fetchedValidations) ? fetchedValidations : []);
     } catch (error) {
       console.error('[ReportsModule] Failed to load data:', error);
     } finally {

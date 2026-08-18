@@ -52,7 +52,7 @@ export const QuarterlyReportsView: React.FC<QuarterlyReportsViewProps> = ({ clie
   const [validations, setValidations] = useState<any[]>([]);
   useEffect(() => {
     import('../services/db').then(mod => {
-      mod.DBService.getValidations().then(res => setValidations(res));
+      mod.DBService.getValidations().then(res => setValidations(Array.isArray(res) ? res : []));
     });
   }, []);
 
