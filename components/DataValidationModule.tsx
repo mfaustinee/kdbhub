@@ -475,17 +475,18 @@ const findMatchingReturn = (
   const clientIdNorm = normStr(client?.id);
   const permitNorm = normStr(client?.permitNumber);
 
-  return returnsList.find(r => {
+  // Separate exact/strict period matching
+  const matchingReturns = returnsList.filter(r => {
     // 1. Check period & year
     const rMonth = normMonth(r.period);
     const rYear = Number(r.year) || (r.period ? Number(r.period.replace(/[^0-9]/g, '')) : NaN);
 
-    const monthMatch = rMonth === targetMonth || (r.period && normStr(r.period).includes(targetMonth));
+    const monthMatch = rMonth === targetMonth || (r.period && normMonth(r.period) === targetMonth);
     const yearMatch = !isNaN(targetYear) && (!isNaN(rYear) ? rYear === targetYear : (r.period && r.period.includes(targetYear.toString())));
 
     if (!monthMatch || !yearMatch) return false;
 
-    // 2. Check client identification
+    // 2. Check client identification (Exact match hierarchy)
     const rClientNorm = normStr(r.clientName);
     const rClientIdNorm = normStr(r.clientId);
 
@@ -496,26 +497,38 @@ const findMatchingReturn = (
     if (rClientNorm) {
       if (
         (dboNorm && rClientNorm === dboNorm) ||
-        (premiseNorm && rClientNorm === premiseNorm) ||
         (clientNameNorm && rClientNorm === clientNameNorm) ||
+        (premiseNorm && rClientNorm === premiseNorm) ||
         (clientPremiseNorm && rClientNorm === clientPremiseNorm)
       ) {
         return true;
       }
-
-      // Fuzzy inclusion match if length >= 4
-      if (rClientNorm.length >= 4) {
-        if (
-          (dboNorm && (dboNorm.includes(rClientNorm) || rClientNorm.includes(dboNorm))) ||
-          (premiseNorm && (premiseNorm.includes(rClientNorm) || rClientNorm.includes(premiseNorm))) ||
-          (clientNameNorm && (clientNameNorm.includes(rClientNorm) || rClientNorm.includes(clientNameNorm))) ||
-          (clientPremiseNorm && (clientPremiseNorm.includes(rClientNorm) || rClientNorm.includes(clientPremiseNorm)))
-        ) {
-          return true;
-        }
-      }
     }
 
+    return false;
+  });
+
+  if (matchingReturns.length > 0) {
+    return matchingReturns[0];
+  }
+
+  // Fallback: only if no exact match found and client identifiers are sufficiently distinctive (>= 6 chars)
+  return returnsList.find(r => {
+    const rMonth = normMonth(r.period);
+    const rYear = Number(r.year) || (r.period ? Number(r.period.replace(/[^0-9]/g, '')) : NaN);
+    const monthMatch = rMonth === targetMonth || (r.period && normMonth(r.period) === targetMonth);
+    const yearMatch = !isNaN(targetYear) && (!isNaN(rYear) ? rYear === targetYear : (r.period && r.period.includes(targetYear.toString())));
+    if (!monthMatch || !yearMatch) return false;
+
+    const rClientNorm = normStr(r.clientName);
+    if (!rClientNorm || rClientNorm.length < 6) return false;
+
+    if (dboNorm && dboNorm.length >= 6 && (dboNorm === rClientNorm || (dboNorm.startsWith(rClientNorm) && rClientNorm.length >= 8))) {
+      return true;
+    }
+    if (clientNameNorm && clientNameNorm.length >= 6 && (clientNameNorm === rClientNorm || (clientNameNorm.startsWith(rClientNorm) && rClientNorm.length >= 8))) {
+      return true;
+    }
     return false;
   });
 };
@@ -643,6 +656,15 @@ export function DataValidationModule() {
   const [historyFilterMode, setHistoryFilterMode] = useState<'all' | 'branch' | 'main'>('all');
   const [isCheckingHistory, setIsCheckingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+
+  // Section-level default buying (universal) and selling prices for selected products to auto-populate added months
+  const [defaultProductPrices, setDefaultProductPrices] = useState<{
+    buyingPrice: string;
+    sellingPrices: Record<string, string>;
+  }>({
+    buyingPrice: '',
+    sellingPrices: {}
+  });
   
   const [lastDboRecords, setLastDboRecords] = useState<any[]>([]);
   const [isCheckingDbo, setIsCheckingDbo] = useState(false);
@@ -841,12 +863,17 @@ export function DataValidationModule() {
         const rawPName = v.premiseName || v.premise_name || raw.premiseName || '';
         const rawPNo = v.permitNo || v.permit_no || raw.permitNo || '';
 
-        // Independent matching for premise name, permit number, or DBO name
-        const isPremiseMatch = pNorm && (vPName === pNorm || vPName.includes(pNorm) || pNorm.includes(vPName));
-        const isPermitMatch = pNoNorm && (vPNo === pNoNorm || vPNo.includes(pNoNorm));
-        const isDboMatch = dboNorm && (vDbo === dboNorm || vDbo.includes(dboNorm) || dboNorm.includes(vDbo));
+        // Strict Premise Matching: When a premise name is entered, match the exact premise name
+        let isMatch = false;
+        if (pNorm) {
+          isMatch = vPName === pNorm;
+        } else if (pNoNorm) {
+          isMatch = vPNo === pNoNorm;
+        } else if (dboNorm) {
+          isMatch = vDbo === dboNorm;
+        }
 
-        if (isPremiseMatch || isPermitMatch || isDboMatch) {
+        if (isMatch) {
           const pdfRef = v.pdfPath || v.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf;
           let fullPeriod = v.period || v.validation_period || raw.validationPeriod || raw.period || '';
           if (fullPeriod) {
@@ -1867,14 +1894,22 @@ export function DataValidationModule() {
     }
   };
 
+  // Track manual edits to qtyDeclared so returns auto-injection doesn't overwrite user edits
+  const [manuallyEditedQtyDeclared, setManuallyEditedQtyDeclared] = useState<Record<number, boolean>>({});
+
   // Returns quantity injection pipeline
   useEffect(() => {
     if ((!formData.dboName && !formData.premiseName && !selectedClient) || returnsData.length === 0) return;
 
     setFormData(prev => {
       let hasChanged = false;
-      const updatedSales = prev.sales.map(sale => {
+      const updatedSales = prev.sales.map((sale, sIdx) => {
         if (!sale.month || !sale.year) {
+          return sale;
+        }
+
+        // If officer has manually edited this month's declared quantity, do not overwrite it
+        if (manuallyEditedQtyDeclared[sIdx]) {
           return sale;
         }
 
@@ -1921,7 +1956,7 @@ export function DataValidationModule() {
       }
       return prev;
     });
-  }, [formData.dboName, formData.premiseName, selectedClient, returnsData, formData.sales]);
+  }, [formData.dboName, formData.premiseName, selectedClient, returnsData, formData.sales, manuallyEditedQtyDeclared]);
 
   // Re-fetch returnsData when step changes or client changes to keep absolute sync
   useEffect(() => {
@@ -4148,23 +4183,142 @@ export function DataValidationModule() {
                       {formData.hasLocalSales && (
                         <button
                           type="button"
-                          onClick={() => setFormData(prev => ({ ...prev, sales: [...prev.sales, { 
-                            month: '', 
-                            year: new Date().getFullYear().toString(),
-                            qtyDeclared: '', 
-                            verifiedQty: '', 
-                            projectedQty: '', 
-                            underDeclared: '0', 
-                            buyingPrice: '', 
-                            sellingPrice: '', 
-                            avgVolPerDay: '' 
-                          }] }))}
+                          onClick={() => {
+                            // Compute default selling price from section settings
+                            const activeProducts = formData.natureOfProduce.length > 0 ? formData.natureOfProduce : ['Raw Milk'];
+                            const defaultSellingObj: Record<string, string> = {};
+                            activeProducts.forEach(prod => {
+                              if (defaultProductPrices.sellingPrices[prod]) {
+                                defaultSellingObj[prod] = defaultProductPrices.sellingPrices[prod];
+                              }
+                            });
+                            const autoSellingStr = Object.keys(defaultSellingObj).length > 0 
+                              ? formatSellingPrices(defaultSellingObj) 
+                              : '';
+
+                            // Compute default universal buying price
+                            const defaultBuyingVal = defaultProductPrices.buyingPrice || '';
+
+                            setFormData(prev => ({
+                              ...prev,
+                              sales: [...prev.sales, { 
+                                month: '', 
+                                year: new Date().getFullYear().toString(),
+                                qtyDeclared: '', 
+                                verifiedQty: '', 
+                                projectedQty: '', 
+                                underDeclared: '0', 
+                                buyingPrice: defaultBuyingVal, 
+                                sellingPrice: autoSellingStr, 
+                                avgVolPerDay: '' 
+                              }]
+                            }));
+                          }}
                           className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1 cursor-pointer"
                         >
                           + Add Month ({formData.sales.length})
                         </button>
                       )}
                     </div>
+
+                    {/* Section: Universal Buying Price & Product-Specific Selling Prices Configuration */}
+                    {formData.hasLocalSales && (
+                      <div className="p-4 bg-gradient-to-r from-blue-50/70 via-indigo-50/40 to-blue-50/70 rounded-2xl border border-blue-100 shadow-sm space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="text-xs font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-blue-600 inline-block"></span>
+                              Default Pricing Configuration (Auto-populates every added month)
+                            </h4>
+                            <p className="text-[11px] text-gray-500 mt-0.5">
+                              {formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor'
+                                ? 'Buying price is mirrored from intake records. Configure product selling prices below to auto-fill added months.'
+                                : 'Set universal buying price and product-specific selling prices. These auto-fill added months and remain editable per month.'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Universal Buying Price (For categories where buying price is not mirrored from intakes) */}
+                        {!(formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor') && (
+                          <div className="p-3 bg-white rounded-xl border border-blue-100/80 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-gray-800">Universal Buying Price</span>
+                                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">Kshs</span>
+                              </div>
+                              <p className="text-[10px] text-gray-500 mt-0.5">Applies across all products for this entity.</p>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <label className="text-[11px] font-medium text-gray-600 whitespace-nowrap">Buying Price:</label>
+                              <input
+                                type="text"
+                                placeholder="0.00"
+                                value={defaultProductPrices.buyingPrice}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setDefaultProductPrices(prev => ({
+                                    ...prev,
+                                    buyingPrice: val
+                                  }));
+                                }}
+                                className="w-32 px-3 py-1.5 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-semibold text-gray-800"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Product-Specific Selling Prices */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-blue-950 uppercase tracking-wider">Product Selling Prices</span>
+                            <span className="text-[10px] text-gray-500">Per nature of produce</span>
+                          </div>
+
+                          {formData.natureOfProduce.length === 0 ? (
+                            <div className="p-3 bg-white/80 rounded-xl border border-blue-100 text-center">
+                              <p className="text-xs text-gray-500 italic">Please select at least one product in "Nature of Produce" above to configure selling prices.</p>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                              {formData.natureOfProduce.map((product) => {
+                                const sPrice = defaultProductPrices.sellingPrices[product] || '';
+
+                                return (
+                                  <div key={product} className="p-3 bg-white rounded-xl border border-blue-100/80 shadow-2xs space-y-2">
+                                    <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
+                                      <span className="text-xs font-bold text-gray-800">{product}</span>
+                                      <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">Kshs</span>
+                                    </div>
+
+                                    <div className="flex items-center justify-between gap-2">
+                                      <label className="text-[11px] font-medium text-gray-600 whitespace-nowrap">Selling Price:</label>
+                                      <div className="flex items-center gap-1">
+                                        <input
+                                          type="text"
+                                          placeholder="0.00"
+                                          value={sPrice}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            setDefaultProductPrices(prev => ({
+                                              ...prev,
+                                              sellingPrices: {
+                                                ...prev.sellingPrices,
+                                                [product]: val
+                                              }
+                                            }));
+                                          }}
+                                          className="w-24 px-2 py-1 rounded border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-medium text-blue-700"
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {!formData.hasLocalSales ? (
                       <div className="p-8 bg-gray-50 rounded-2xl border border-dashed border-gray-200 text-center">
@@ -4191,7 +4345,14 @@ export function DataValidationModule() {
                         <div key={idx} className="p-6 bg-white rounded-2xl border border-gray-200 space-y-4 relative shadow-sm">
                           <button 
                             type="button"
-                            onClick={() => setFormData(prev => ({ ...prev, sales: prev.sales.filter((_, i) => i !== idx) }))}
+                            onClick={() => {
+                              setFormData(prev => ({ ...prev, sales: prev.sales.filter((_, i) => i !== idx) }));
+                              setManuallyEditedQtyDeclared(prev => {
+                                const next = { ...prev };
+                                delete next[idx];
+                                return next;
+                              });
+                            }}
                             className="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-lg font-bold cursor-pointer"
                           >
                             &times;
@@ -4207,6 +4368,11 @@ export function DataValidationModule() {
                                 newSales[idx].month = e.target.value;
                                 setFormData(prev => ({ ...prev, sales: newSales }));
                                 setFailedFields(prev => prev.filter(f => f !== `sale-${idx}-month`));
+                                setManuallyEditedQtyDeclared(prev => {
+                                  const next = { ...prev };
+                                  delete next[idx];
+                                  return next;
+                                });
                               }}
                               className={`w-full px-3 py-1.5 rounded-xl border outline-none text-[11px] font-bold appearance-none bg-white transition-all ${
                                 failedFields.includes(`sale-${idx}-month`)
@@ -4226,6 +4392,11 @@ export function DataValidationModule() {
                                 newSales[idx].year = e.target.value;
                                 setFormData(prev => ({ ...prev, sales: newSales }));
                                 setFailedFields(prev => prev.filter(f => f !== `sale-${idx}-year`));
+                                setManuallyEditedQtyDeclared(prev => {
+                                  const next = { ...prev };
+                                  delete next[idx];
+                                  return next;
+                                });
                               }}
                               className={`w-full px-3 py-1.5 rounded-xl border outline-none text-[11px] font-bold appearance-none bg-white transition-all ${
                                 failedFields.includes(`sale-${idx}-year`)
@@ -4323,6 +4494,7 @@ export function DataValidationModule() {
                                               
                                               // Mirror qtyDeclared to verifiedQty, but allow independent edit
                                               if (row.name === 'qtyDeclared') {
+                                                setManuallyEditedQtyDeclared(prev => ({ ...prev, [idx]: true }));
                                                 newSales[idx].verifiedQty = val;
                                                 const num = parseFloat(val);
                                                 if (!isNaN(num)) {
