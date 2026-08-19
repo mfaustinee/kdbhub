@@ -31,7 +31,9 @@ import {
   Building2,
   RotateCcw,
   ShieldCheck,
-  ArrowDown
+  ArrowDown,
+  Store,
+  GitBranch
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -615,6 +617,7 @@ export function DataValidationModule() {
   const [isLoadingClients, setIsLoadingClients] = useState(false);
   const [selectedClient, setSelectedClient] = useState<LicensedClient | null>(null);
   const [validationPremiseMode, setValidationPremiseMode] = useState<string>('main');
+  const [dboHasBranches, setDboHasBranches] = useState<boolean | null>(null);
   const [mismatchFields, setMismatchFields] = useState<{
     key: string;
     label: string;
@@ -1450,6 +1453,7 @@ export function DataValidationModule() {
       if (matched) {
         setSelectedClient(matched);
         setValidationPremiseMode('main');
+        setDboHasBranches(!!(matched.branches && matched.branches.length > 0));
       }
     }
   };
@@ -1471,6 +1475,27 @@ export function DataValidationModule() {
     if (matched) {
       setSelectedClient(matched);
       setValidationPremiseMode('main');
+      if (dboHasBranches === null) {
+        setDboHasBranches(!!(matched.branches && matched.branches.length > 0));
+      }
+    }
+  };
+
+  const handleBranchPromptChange = (hasBranches: boolean) => {
+    setDboHasBranches(hasBranches);
+    if (!hasBranches) {
+      // Single standalone premise
+      setValidationPremiseMode('main');
+      if (selectedClient) {
+        handlePremiseModeChange('main');
+      }
+    } else {
+      // Has multiple branches
+      if (selectedClient && selectedClient.branches && selectedClient.branches.length > 0) {
+        if (!validationPremiseMode || validationPremiseMode === 'main') {
+          // Keep main as default or user can select specific branch
+        }
+      }
     }
   };
 
@@ -2670,6 +2695,26 @@ export function DataValidationModule() {
       if (!targetClient && clients.length > 0) {
         targetClient = findMatchingClient(updatedData.permitNo, updatedData.dboName) || null;
       }
+      if (!targetClient && clients.length > 0) {
+        const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+        const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+        const pTerm = cleanPermit(updatedData.permitNo);
+        const dTerm = cleanStr(updatedData.dboName);
+        const premTerm = cleanStr(updatedData.premiseName);
+
+        targetClient = clients.find(c => {
+          const cId = String(c.id || '').trim();
+          if (cId && updatedData.permitNo && cId.toLowerCase() === updatedData.permitNo.toLowerCase()) return true;
+          const cP = cleanPermit(c.permitNumber || c.id);
+          if (pTerm && cP && (pTerm === cP || pTerm.includes(cP) || cP.includes(pTerm))) return true;
+          const cN = cleanStr(c.clientName);
+          const cPrem = cleanStr(c.premiseName);
+          if (dTerm && cN && (dTerm === cN || dTerm.includes(cN) || cN.includes(dTerm)) &&
+              premTerm && cPrem && (premTerm === cPrem || premTerm.includes(cPrem) || cPrem.includes(premTerm))) return true;
+          if (dTerm && cN && dTerm === cN) return true;
+          return false;
+        }) || null;
+      }
 
       if (targetClient) {
         const syncedClient: LicensedClient = {
@@ -3537,45 +3582,109 @@ export function DataValidationModule() {
                         return null;
                       })()}
 
-                      {selectedClient && (
-                        <div className="mt-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
-                          <div className="flex items-center gap-1.5">
-                            <Database className="w-4 h-4 text-slate-500" />
-                            <span className="text-xs font-black text-slate-700 uppercase tracking-wider">Validation Premise Mode</span>
+                      {/* Branch Operations Check Prompt Card */}
+                      <div className="mt-3 p-4 bg-gradient-to-r from-slate-50 via-blue-50/30 to-indigo-50/20 border border-slate-200/90 rounded-2xl space-y-3 shadow-2xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Building2 className="w-4 h-4 text-blue-600" />
+                            <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                              Branch Operations Check
+                            </span>
                           </div>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight leading-relaxed">
-                            This client has multiple branches or premises. Choose which premise is being validated:
-                          </p>
-                          <div className="relative">
-                            <select
-                              value={validationPremiseMode}
-                              onChange={e => handlePremiseModeChange(e.target.value)}
-                              className="w-full px-3.5 py-2.5 rounded-xl border bg-white focus:ring-4 focus:ring-slate-900/10 outline-none transition-all font-bold text-slate-800 text-[11px] cursor-pointer appearance-none"
-                            >
-                              <option value="main">Main Premise ({selectedClient.premiseName || 'No Name'})</option>
-                              {selectedClient.branches && selectedClient.branches.map(br => (
-                                <option key={br.id} value={`branch-${br.id}`}>
-                                  Branch: {br.premiseName} ({br.location}, Permit: {br.permitNumber})
-                                </option>
-                              ))}
-                              <option value="new">+ Register as a NEW branch/premise under this client</option>
-                            </select>
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-[10px] font-black uppercase">
-                              Select ▾
-                            </div>
-                          </div>
-                          {validationPremiseMode === 'new' && (
-                            <div className="bg-amber-50 text-amber-700 border border-amber-100 p-3 rounded-xl text-[10px] font-bold leading-relaxed">
-                              ⚠️ You are validating a NEW branch. When you submit this validation form, this branch will be automatically added to the client's profile in the registry!
-                            </div>
-                          )}
-                          {validationPremiseMode.startsWith('branch-') && (
-                            <div className="bg-blue-50 text-blue-700 border border-blue-100 p-3 rounded-xl text-[10px] font-bold leading-relaxed">
-                              ℹ️ You are validating an existing branch. Submitting this form will update this branch's information in the client's profile with any changes made below.
-                            </div>
-                          )}
+                          <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-blue-100/70 text-blue-800 border border-blue-200/60">
+                            Required
+                          </span>
                         </div>
-                      )}
+                        
+                        <p className="text-[11px] font-semibold text-slate-600 leading-snug">
+                          Does this Dairy Business Operator (DBO) operate multiple branches or premises?
+                        </p>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => handleBranchPromptChange(false)}
+                            className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                              dboHasBranches === false
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-sm ring-2 ring-blue-500/20'
+                                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            <Store className="w-3.5 h-3.5" />
+                            <span>No — Single Premise</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleBranchPromptChange(true)}
+                            className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                              dboHasBranches === true
+                                ? 'bg-amber-600 text-white border-amber-600 shadow-sm ring-2 ring-amber-500/20'
+                                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            <GitBranch className="w-3.5 h-3.5" />
+                            <span>Yes — Has Branches</span>
+                          </button>
+                        </div>
+
+                        {dboHasBranches === false && (
+                          <div className="p-2.5 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-xl text-[10px] font-bold flex items-center gap-2">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>Single Standalone Premise: Validating as a direct primary facility with standard monthly return declarations.</span>
+                          </div>
+                        )}
+
+                        {dboHasBranches === true && (
+                          <div className="pt-2 border-t border-slate-200/70 space-y-2.5">
+                            <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block">
+                              Select Which Facility Is Being Validated:
+                            </label>
+                            
+                            <div className="relative">
+                              <select
+                                value={validationPremiseMode}
+                                onChange={e => handlePremiseModeChange(e.target.value)}
+                                className="w-full px-3.5 py-2.5 rounded-xl border bg-white focus:ring-4 focus:ring-slate-900/10 outline-none transition-all font-bold text-slate-800 text-[11px] cursor-pointer appearance-none"
+                              >
+                                <option value="main">
+                                  🏢 Main Premise / HQ ({selectedClient?.premiseName || formData.premiseName || 'Primary Facility'})
+                                </option>
+                                {selectedClient?.branches && selectedClient.branches.map(br => (
+                                  <option key={br.id} value={`branch-${br.id}`}>
+                                    🏪 Branch: {br.premiseName} ({br.location}, Permit: {br.permitNumber})
+                                  </option>
+                                ))}
+                                <option value="new">➕ Register / Validate as a NEW Branch under this DBO</option>
+                              </select>
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none text-[10px] font-black uppercase">
+                                Select ▾
+                              </div>
+                            </div>
+
+                            {validationPremiseMode === 'new' && (
+                              <div className="bg-amber-50 text-amber-800 border border-amber-200/70 p-2.5 rounded-xl text-[10px] font-bold leading-relaxed flex items-start gap-2">
+                                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                                <span>You are validating a <strong>NEW Branch</strong>. Enter the branch name and location below. Upon submission, this branch will be automatically appended to the client's profile in the registry.</span>
+                              </div>
+                            )}
+
+                            {validationPremiseMode.startsWith('branch-') && (
+                              <div className="bg-blue-50 text-blue-800 border border-blue-200/70 p-2.5 rounded-xl text-[10px] font-bold leading-relaxed flex items-start gap-2">
+                                <Info className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
+                                <span>You are validating an <strong>Existing Branch</strong>. Only branch-level operational sales are recorded; declared levy return quantities are consolidated at the Main HQ.</span>
+                              </div>
+                            )}
+
+                            {validationPremiseMode === 'main' && (
+                              <div className="bg-slate-100 text-slate-800 border border-slate-200 p-2.5 rounded-xl text-[10px] font-bold leading-relaxed flex items-start gap-2">
+                                <Building2 className="w-3.5 h-3.5 text-slate-600 shrink-0 mt-0.5" />
+                                <span>Validating <strong>Main Premise / HQ</strong>: Consolidates declarations and records for the primary headquarters.</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Premise Name</label>
@@ -4326,7 +4435,12 @@ export function DataValidationModule() {
                       </div>
                     ) : (
                       formData.sales.map((sale, idx) => {
-                        const isBranchValidation = validationPremiseMode.startsWith('branch-');
+                        const isBranchValidation = !!(
+                          validationPremiseMode.startsWith('branch-') ||
+                          validationPremiseMode === 'new' ||
+                          (formData.branch && formData.branch.trim() !== '') ||
+                          (selectedClient && selectedClient.premiseName && formData.premiseName && formData.premiseName.trim().toLowerCase() !== selectedClient.premiseName.trim().toLowerCase())
+                        );
                         const rowsToDisplay = isBranchValidation ? [
                           { label: 'Witnessed Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
                           { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },

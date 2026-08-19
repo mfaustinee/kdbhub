@@ -593,12 +593,26 @@ async function startServer() {
           if (!newClient.id) {
             return res.status(400).json({ error: "Missing client ID" });
           }
-          const index = clients.findIndex((c: any) => 
-            (c.id && newClient.id && c.id === newClient.id) ||
-            (c.permitNumber && newClient.permitNumber && c.permitNumber.toString().trim().toLowerCase() === newClient.permitNumber.toString().trim().toLowerCase()) ||
-            (c.clientName && newClient.clientName && c.clientName.toString().trim().toLowerCase() === newClient.clientName.toString().trim().toLowerCase() && 
-             c.premiseName && newClient.premiseName && c.premiseName.toString().trim().toLowerCase() === newClient.premiseName.toString().trim().toLowerCase())
-          );
+          const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+          const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+
+          const pNew = cleanPermit(newClient.permitNumber || newClient.id);
+          const cNew = cleanStr(newClient.clientName);
+          const premNew = cleanStr(newClient.premiseName);
+          const recId = String(newClient.id || '').trim();
+
+          const index = clients.findIndex((c: any) => {
+            const cId = String(c.id || '').trim();
+            if (recId && cId && recId === cId) return true;
+            const cPermit = cleanPermit(c.permitNumber || c.id);
+            if (pNew && cPermit && (pNew === cPermit || pNew.includes(cPermit) || cPermit.includes(pNew))) return true;
+            const cName = cleanStr(c.clientName);
+            const cPrem = cleanStr(c.premiseName);
+            if (cNew && cName && cNew === cName && premNew && cPrem && premNew === cPrem) return true;
+            if (cNew && cName && cNew === cName) return true;
+            return false;
+          });
+
           if (index !== -1) {
             logToFile(`Updating existing client: ${clients[index].id || newClient.id}`);
             clients[index] = { ...clients[index], ...newClient, id: clients[index].id || newClient.id };

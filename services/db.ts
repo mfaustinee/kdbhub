@@ -1662,6 +1662,9 @@ export const DBService = {
   },
 
   async saveClient(clientRecord: LicensedClient): Promise<void> {
+    const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+    const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+
     const saveLocal = async () => {
       console.log("[DBService] Saving client to local API / storage...");
       try {
@@ -1680,7 +1683,37 @@ export const DBService = {
       } catch (e) {
         console.warn("[DBService] Local API saveClient fetch error:", e);
       }
-      updateLocalStorageCollection('kdb_clients_cache', clientRecord, 'id');
+
+      // Update local storage in-place by matching ID, permit number, or client/premise names
+      try {
+        const items = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
+        const pDb = cleanPermit(clientRecord.permitNumber || clientRecord.id);
+        const cDb = cleanStr(clientRecord.clientName);
+        const premDb = cleanStr(clientRecord.premiseName);
+        const recId = String(clientRecord.id || '').trim();
+
+        const idx = items.findIndex(i => {
+          const iId = String(i.id || '').trim();
+          if (recId && iId && recId === iId) return true;
+          const iPermit = cleanPermit(i.permitNumber || i.id);
+          if (pDb && iPermit && (pDb === iPermit || pDb.includes(iPermit) || iPermit.includes(pDb))) return true;
+          const iName = cleanStr(i.clientName);
+          const iPrem = cleanStr(i.premiseName);
+          if (cDb && iName && cDb === iName && premDb && iPrem && premDb === iPrem) return true;
+          if (cDb && iName && cDb === iName) return true;
+          return false;
+        });
+
+        if (idx >= 0) {
+          items[idx] = { ...items[idx], ...clientRecord, id: items[idx].id || clientRecord.id };
+          clientRecord.id = items[idx].id;
+        } else {
+          items.unshift(clientRecord);
+        }
+        safeSetLocalStorage('kdb_clients_cache', JSON.stringify(items));
+      } catch (e) {
+        updateLocalStorageCollection('kdb_clients_cache', clientRecord, 'id');
+      }
     };
 
     const client = await getSupabase();
@@ -1701,12 +1734,23 @@ export const DBService = {
           .select('id, permitnumber, clientname, premisename');
         
         if (existingList && existingList.length > 0) {
-          const match = existingList.find((r: any) => 
-            (r.id && dbClient.id && r.id === dbClient.id) ||
-            (r.permitnumber && dbClient.permitnumber && r.permitnumber.toString().trim().toLowerCase() === dbClient.permitnumber.toString().trim().toLowerCase()) ||
-            (r.clientname && dbClient.clientname && r.clientname.toString().trim().toLowerCase() === dbClient.clientname.toString().trim().toLowerCase() && 
-             r.premisename && dbClient.premisename && r.premisename.toString().trim().toLowerCase() === dbClient.premisename.toString().trim().toLowerCase())
-          );
+          const pDb = cleanPermit(dbClient.permitnumber || dbClient.id);
+          const cDb = cleanStr(dbClient.clientname);
+          const premDb = cleanStr(dbClient.premisename);
+          const recId = String(dbClient.id || '').trim();
+
+          const match = existingList.find((r: any) => {
+            const rId = String(r.id || '').trim();
+            if (recId && rId && recId === rId) return true;
+            const rPermit = cleanPermit(r.permitnumber || r.id);
+            if (pDb && rPermit && (pDb === rPermit || pDb.includes(rPermit) || rPermit.includes(pDb))) return true;
+            const rName = cleanStr(r.clientname);
+            const rPrem = cleanStr(r.premisename);
+            if (cDb && rName && cDb === rName && premDb && rPrem && premDb === rPrem) return true;
+            if (cDb && rName && cDb === rName) return true;
+            return false;
+          });
+
           if (match && match.id) {
             dbClient.id = match.id;
             clientRecord.id = match.id;
@@ -1718,7 +1762,7 @@ export const DBService = {
 
       const { error } = await client
         .from('licensed_clients')
-        .upsert(dbClient);
+        .upsert(dbClient, { onConflict: 'id' });
       
       if (error) {
         console.warn("[DBService] Supabase client upsert failed, falling back to local API. Error details:", error);
