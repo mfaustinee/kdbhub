@@ -217,8 +217,10 @@ export const LicensedClientsModule: React.FC = () => {
     const formattedStart = startDate ? formatDateToDDMMYYYY(startDate) : undefined;
     const formattedEnd = endDate ? formatDateToDDMMYYYY(endDate) : undefined;
 
+    const targetId = editingClient?.id || formattedPermitNo;
+
     const record: LicensedClient = {
-      id: formattedPermitNo,
+      id: targetId,
       permitNumber: formattedPermitNo,
       clientName: clientName.trim(),
       premiseName: premiseName.trim(),
@@ -243,15 +245,7 @@ export const LicensedClientsModule: React.FC = () => {
       branches: branches.length > 0 ? branches : undefined
     };
 
-    let oldIdToDelete = '';
-    if (editingClient && editingClient.id !== formattedPermitNo) {
-      oldIdToDelete = editingClient.id;
-    }
-
     try {
-      if (oldIdToDelete) {
-        await DBService.deleteClient(oldIdToDelete);
-      }
       await DBService.saveClient(record);
       setIsModalOpen(false);
       await fetchClients();

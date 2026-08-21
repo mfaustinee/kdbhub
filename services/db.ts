@@ -1576,10 +1576,31 @@ export const DBService = {
     }
   },
 
-  async getClients(): Promise<LicensedClient[]> {
-    const cached = localStorage.getItem('kdb_clients_cache');
-    
-    const revalidate = async () => {
+  async getClients(forceFresh: boolean = false): Promise<LicensedClient[]> {
+    const deduplicateClients = (list: LicensedClient[]): LicensedClient[] => {
+      const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+      const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+      const unique: LicensedClient[] = [];
+      const seenIds = new Set<string>();
+      const seenPermits = new Set<string>();
+
+      for (const client of list) {
+        if (!client) continue;
+        const id = String(client.id || '').trim();
+        const permit = cleanPermit(client.permitNumber || client.id);
+        const name = cleanStr(client.clientName);
+
+        if (id && seenIds.has(id)) continue;
+        if (permit && seenPermits.has(permit)) continue;
+
+        if (id) seenIds.add(id);
+        if (permit) seenPermits.add(permit);
+        unique.push(client);
+      }
+      return unique;
+    };
+
+    const fetchFresh = async (): Promise<LicensedClient[]> => {
       try {
         const client = await getSupabase();
         if (client) {
@@ -1588,193 +1609,171 @@ export const DBService = {
             .select('*')
             .order('clientname', { ascending: true });
           if (!error && data) {
-            const clients = data.map(c => clientFromDb(c));
-            localStorage.setItem('kdb_clients_cache', JSON.stringify(clients));
-          }
-        } else {
-          const response = await fetch('/api/clients');
-          if (response.ok) {
-            const data = await response.json();
-            localStorage.setItem('kdb_clients_cache', JSON.stringify(data));
+            const clients = deduplicateClients(data.map(c => clientFromDb(c)));
+            safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
+            return clients;
           }
         }
-      } catch (e) {
-        console.warn("[DBService] Background clients sync failed:", e);
-      }
-    };
-
-    if (cached) {
-      setTimeout(revalidate, 50);
-      try {
-        return JSON.parse(cached);
-      } catch (e) {
-        // Fall through
-      }
-    }
-
-    const client = await getSupabase();
-    if (!client) {
-      console.warn("[DBService] Supabase not initialized, trying local API");
-      try {
+        
         const response = await fetch('/api/clients');
         if (response.ok) {
           const data = await response.json();
-          localStorage.setItem('kdb_clients_cache', JSON.stringify(data));
-          return data;
+          if (Array.isArray(data)) {
+            const clients = deduplicateClients(data);
+            safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
+            return clients;
+          }
         }
       } catch (e) {
-        console.error("[DBService] Local API error:", e);
+        console.warn("[DBService] Fresh clients fetch error:", e);
       }
       const local = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
-      return local;
+      return deduplicateClients(local);
+    };
+
+    if (!forceFresh) {
+      const cached = localStorage.getItem('kdb_clients_cache');
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setTimeout(() => { fetchFresh().catch(() => {}); }, 100);
+            return deduplicateClients(parsed);
+          }
+        } catch (_) {}
+      }
     }
 
-    try {
-      const { data, error } = await client
-        .from('licensed_clients')
-        .select('*')
-        .order('clientname', { ascending: true });
-      
-      if (error) {
-        console.warn("[DBService] Supabase getClients failed, falling back to local API. Error:", error);
-        throw error;
-      }
-      
-      const clients = (data || []).map(c => clientFromDb(c));
-      
-      localStorage.setItem('kdb_clients_cache', JSON.stringify(clients));
-      return clients;
-    } catch (error) {
-      console.warn("[DBService] Supabase getClients exception, trying local API. Error:", error);
-      try {
-        const response = await fetch('/api/clients');
-        if (response.ok) {
-          const data = await response.json();
-          localStorage.setItem('kdb_clients_cache', JSON.stringify(data));
-          return data;
-        }
-      } catch (localErr) {
-        console.error("[DBService] Local API fallback error during getClients:", localErr);
-      }
-      const local = localStorage.getItem('kdb_clients_cache');
-      return local ? JSON.parse(local) : [];
-    }
+    return await fetchFresh();
   },
 
   async saveClient(clientRecord: LicensedClient): Promise<void> {
     const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
     const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
 
-    const saveLocal = async () => {
-      console.log("[DBService] Saving client to local API / storage...");
+    const pRec = cleanPermit(clientRecord.permitNumber || clientRecord.id);
+    const cRec = cleanStr(clientRecord.clientName);
+    const premRec = cleanStr(clientRecord.premiseName);
+    const recId = String(clientRecord.id || '').trim();
+
+    // 1. Synchronize in-place in local storage cache first to guarantee 0ms consistency
+    const updateLocalCache = () => {
       try {
-        const response = await fetch('/api/clients', {
+        const items = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
+        const matchIdx = items.findIndex(i => {
+          const iId = String(i.id || '').trim();
+          if (recId && iId && recId === iId) return true;
+          const iPermit = cleanPermit(i.permitNumber || i.id);
+          if (pRec && iPermit && (pRec === iPermit || pRec.includes(iPermit) || iPermit.includes(pRec))) return true;
+          const iName = cleanStr(i.clientName);
+          const iPrem = cleanStr(i.premiseName);
+          if (cRec && iName && cRec === iName && premRec && iPrem && premRec === iPrem) return true;
+          if (cRec && iName && cRec === iName) return true;
+          return false;
+        });
+
+        if (matchIdx >= 0) {
+          const matchedId = items[matchIdx].id || clientRecord.id;
+          clientRecord.id = matchedId;
+          items[matchIdx] = { ...items[matchIdx], ...clientRecord, id: matchedId };
+          // Remove any accidental remaining duplicate rows
+          const deduplicated = items.filter((item, idx) => {
+            if (idx === matchIdx) return true;
+            const otherId = String(item.id || '').trim();
+            const otherPermit = cleanPermit(item.permitNumber || item.id);
+            if (matchedId && otherId && matchedId === otherId) return false;
+            if (pRec && otherPermit && pRec === otherPermit) return false;
+            return true;
+          });
+          safeSetLocalStorage('kdb_clients_cache', JSON.stringify(deduplicated));
+        } else {
+          items.unshift(clientRecord);
+          safeSetLocalStorage('kdb_clients_cache', JSON.stringify(items));
+        }
+      } catch (e) {
+        console.warn("[DBService] Local cache update error:", e);
+      }
+    };
+
+    updateLocalCache();
+
+    // 2. Synchronize to server API endpoint (/api/clients) in background
+    const syncServerApi = async () => {
+      try {
+        await fetch('/api/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(clientRecord)
         });
-        if (response.ok) {
-          const data = await safeJson(response);
-          if (Array.isArray(data)) {
-            localStorage.setItem('kdb_clients_cache', JSON.stringify(data));
-            return;
-          }
-        }
       } catch (e) {
-        console.warn("[DBService] Local API saveClient fetch error:", e);
-      }
-
-      // Update local storage in-place by matching ID, permit number, or client/premise names
-      try {
-        const items = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
-        const pDb = cleanPermit(clientRecord.permitNumber || clientRecord.id);
-        const cDb = cleanStr(clientRecord.clientName);
-        const premDb = cleanStr(clientRecord.premiseName);
-        const recId = String(clientRecord.id || '').trim();
-
-        const idx = items.findIndex(i => {
-          const iId = String(i.id || '').trim();
-          if (recId && iId && recId === iId) return true;
-          const iPermit = cleanPermit(i.permitNumber || i.id);
-          if (pDb && iPermit && (pDb === iPermit || pDb.includes(iPermit) || iPermit.includes(pDb))) return true;
-          const iName = cleanStr(i.clientName);
-          const iPrem = cleanStr(i.premiseName);
-          if (cDb && iName && cDb === iName && premDb && iPrem && premDb === iPrem) return true;
-          if (cDb && iName && cDb === iName) return true;
-          return false;
-        });
-
-        if (idx >= 0) {
-          items[idx] = { ...items[idx], ...clientRecord, id: items[idx].id || clientRecord.id };
-          clientRecord.id = items[idx].id;
-        } else {
-          items.unshift(clientRecord);
-        }
-        safeSetLocalStorage('kdb_clients_cache', JSON.stringify(items));
-      } catch (e) {
-        updateLocalStorageCollection('kdb_clients_cache', clientRecord, 'id');
+        console.warn("[DBService] Server API client sync error:", e);
       }
     };
 
+    // 3. Update in Supabase PostgreSQL database
     const client = await getSupabase();
     if (!client) {
-      console.warn("[DBService] Supabase not initialized, trying local API");
-      await saveLocal();
+      console.warn("[DBService] Supabase not initialized, synchronizing via local API");
+      await syncServerApi();
       return;
     }
 
     try {
-      console.log("[DBService] Attempting Supabase upsert to 'licensed_clients' table...", { id: clientRecord.id });
       const dbClient = clientToDb(clientRecord);
 
-      // Match against existing record by ID, permit number, or clientName + premiseName to ensure overwriting instead of duplicating
-      try {
-        const { data: existingList } = await client
-          .from('licensed_clients')
-          .select('id, permitnumber, clientname, premisename');
-        
-        if (existingList && existingList.length > 0) {
-          const pDb = cleanPermit(dbClient.permitnumber || dbClient.id);
-          const cDb = cleanStr(dbClient.clientname);
-          const premDb = cleanStr(dbClient.premisename);
-          const recId = String(dbClient.id || '').trim();
-
-          const match = existingList.find((r: any) => {
-            const rId = String(r.id || '').trim();
-            if (recId && rId && recId === rId) return true;
-            const rPermit = cleanPermit(r.permitnumber || r.id);
-            if (pDb && rPermit && (pDb === rPermit || pDb.includes(rPermit) || rPermit.includes(pDb))) return true;
-            const rName = cleanStr(r.clientname);
-            const rPrem = cleanStr(r.premisename);
-            if (cDb && rName && cDb === rName && premDb && rPrem && premDb === rPrem) return true;
-            if (cDb && rName && cDb === rName) return true;
-            return false;
-          });
-
-          if (match && match.id) {
-            dbClient.id = match.id;
-            clientRecord.id = match.id;
-          }
-        }
-      } catch (matchErr) {
-        console.warn("[DBService] Non-fatal error finding existing client ID match:", matchErr);
-      }
-
-      const { error } = await client
+      // Query existing client records to find exact match by ID, permit number, or client/premise names
+      const { data: existingList } = await client
         .from('licensed_clients')
-        .upsert(dbClient, { onConflict: 'id' });
-      
-      if (error) {
-        console.warn("[DBService] Supabase client upsert failed, falling back to local API. Error details:", error);
-        await saveLocal();
-        return;
+        .select('id, permitnumber, clientname, premisename');
+
+      let matchedRowId: string | null = null;
+      if (existingList && existingList.length > 0) {
+        const match = existingList.find((r: any) => {
+          const rId = String(r.id || '').trim();
+          if (recId && rId && recId === rId) return true;
+          const rPermit = cleanPermit(r.permitnumber || r.id);
+          if (pRec && rPermit && (pRec === rPermit || pRec.includes(rPermit) || rPermit.includes(pRec))) return true;
+          const rName = cleanStr(r.clientname);
+          const rPrem = cleanStr(r.premisename);
+          if (cRec && rName && cRec === rName && premRec && rPrem && premRec === rPrem) return true;
+          if (cRec && rName && cRec === rName) return true;
+          return false;
+        });
+
+        if (match && match.id) {
+          matchedRowId = match.id;
+          dbClient.id = match.id;
+          clientRecord.id = match.id;
+        }
       }
-      
-      const current = await this.getClients();
-      localStorage.setItem('kdb_clients_cache', JSON.stringify(current));
+
+      if (matchedRowId) {
+        console.log("[DBService] Updating existing client in Supabase:", matchedRowId);
+        const { error: updateErr } = await client
+          .from('licensed_clients')
+          .update(dbClient)
+          .eq('id', matchedRowId);
+
+        if (updateErr) {
+          console.warn("[DBService] Supabase client update error, attempting upsert fallback:", updateErr.message);
+          await client.from('licensed_clients').upsert(dbClient, { onConflict: 'id' });
+        }
+      } else {
+        console.log("[DBService] Inserting new client in Supabase:", dbClient.id);
+        const { error: insertErr } = await client
+          .from('licensed_clients')
+          .upsert(dbClient, { onConflict: 'id' });
+
+        if (insertErr) {
+          console.error("[DBService] Supabase client insert error:", insertErr.message);
+        }
+      }
+
+      // Also dispatch background backup sync to Express backend
+      syncServerApi().catch(() => {});
     } catch (error: any) {
       console.warn("[DBService] Supabase saveClient exception, falling back to local API. Error:", error);
-      await saveLocal();
+      await syncServerApi();
     }
   },
 
@@ -2457,17 +2456,29 @@ export const DBService = {
         valPeriod = `${valPeriod} ${validation.year}`;
       }
 
+      const nowIso = new Date().toISOString();
       const rawData = validation.rawData || { ...validation };
       rawData.uuid = uuid;
       if (!rawData.id) rawData.id = validation.id;
+      if (!rawData.timestamp) rawData.timestamp = nowIso;
+      if (!rawData.created_at) rawData.created_at = nowIso;
+      if (!rawData.createdAt) rawData.createdAt = nowIso;
+      if (!rawData.submitted_at) rawData.submitted_at = nowIso;
+      if (!rawData.submittedAt) rawData.submittedAt = nowIso;
+      if (!rawData.validated_at) rawData.validated_at = validation.validatedAt || nowIso;
+      if (!rawData.validatedAt) rawData.validatedAt = validation.validatedAt || nowIso;
 
-      // Exact columns matching remote Supabase schema
-      const supabaseRow = {
+      // Exact columns matching remote Supabase schema including timestamp fields
+      const supabaseRow: Record<string, any> = {
         id: uuid,
         dbo_name: validation.clientName || rawData.dboName || '',
         premise_name: validation.premiseName || rawData.premiseName || '',
         branch: (validation as any).branch || rawData.branch || 'Kericho',
-        date: validation.validatedAt || rawData.date || new Date().toISOString().split('T')[0],
+        date: validation.validatedAt || rawData.date || nowIso.split('T')[0],
+        created_at: nowIso,
+        submitted_at: nowIso,
+        timestamp: nowIso,
+        updated_at: nowIso,
         validation_period: valPeriod,
         category: validation.category || rawData.category || '',
         permit_no: validation.permitNo || rawData.permitNo || '',
@@ -2478,27 +2489,32 @@ export const DBService = {
         pdf_path: validation.pdfPath || rawData.pdf_path || rawData.pdfPath || null
       };
 
-      // Save to kdb_validations table
-      const { error: kdbErr } = await client
-        .from('kdb_validations')
-        .upsert([supabaseRow]);
+      const safeUpsert = async (tableName: string) => {
+        let payload = { ...supabaseRow };
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const { error } = await client.from(tableName).upsert([payload]);
+          if (!error) {
+            console.log(`[DBService] Supabase ${tableName} upsert SUCCESS with timestamp:`, uuid);
+            return;
+          }
+          const errMsg = error.message || '';
+          const matchCol = errMsg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of relation/i) 
+                        || errMsg.match(/Could not find the '?([a-zA-Z0-9_]+)'? column/i)
+                        || errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+          if (matchCol && matchCol[1] && payload.hasOwnProperty(matchCol[1])) {
+            console.warn(`[DBService] Column "${matchCol[1]}" not present in "${tableName}", retrying without it...`);
+            delete payload[matchCol[1]];
+            continue;
+          }
+          console.warn(`[DBService] Supabase ${tableName} upsert error:`, error.message);
+          break;
+        }
+      };
 
-      if (kdbErr) {
-        console.warn("[DBService] Supabase kdb_validations upsert error:", kdbErr.message);
-      } else {
-        console.log("[DBService] Supabase kdb_validations upsert SUCCESS:", uuid);
-      }
-
-      // Save to data_validations table
-      const { error: dvErr } = await client
-        .from('data_validations')
-        .upsert([supabaseRow]);
-
-      if (dvErr) {
-        console.warn("[DBService] Supabase data_validations upsert error:", dvErr.message);
-      } else {
-        console.log("[DBService] Supabase data_validations upsert SUCCESS:", uuid);
-      }
+      await Promise.allSettled([
+        safeUpsert('kdb_validations'),
+        safeUpsert('data_validations')
+      ]);
     } catch (e) {
       console.warn("[DBService] Supabase saveValidation exception:", e);
     }
@@ -2599,15 +2615,28 @@ export const DBService = {
         if (valPeriod && validation.year && !valPeriod.includes(String(validation.year))) {
           valPeriod = `${valPeriod} ${validation.year}`;
         }
+        const nowIso = new Date().toISOString();
         const rawData = validation.rawData || { ...validation };
         rawData.uuid = uuid;
+        if (!rawData.id) rawData.id = validation.id;
+        if (!rawData.timestamp) rawData.timestamp = nowIso;
+        if (!rawData.created_at) rawData.created_at = nowIso;
+        if (!rawData.createdAt) rawData.createdAt = nowIso;
+        if (!rawData.submitted_at) rawData.submitted_at = nowIso;
+        if (!rawData.submittedAt) rawData.submittedAt = nowIso;
+        if (!rawData.validated_at) rawData.validated_at = validation.validatedAt || nowIso;
+        if (!rawData.validatedAt) rawData.validatedAt = validation.validatedAt || nowIso;
 
         return {
           id: uuid,
           dbo_name: validation.clientName || rawData.dboName || '',
           premise_name: validation.premiseName || rawData.premiseName || '',
           branch: (validation as any).branch || rawData.branch || 'Kericho',
-          date: validation.validatedAt || rawData.date || new Date().toISOString().split('T')[0],
+          date: validation.validatedAt || rawData.date || nowIso.split('T')[0],
+          created_at: nowIso,
+          submitted_at: nowIso,
+          timestamp: nowIso,
+          updated_at: nowIso,
           validation_period: valPeriod,
           category: validation.category || rawData.category || '',
           permit_no: validation.permitNo || rawData.permitNo || '',
@@ -2619,9 +2648,32 @@ export const DBService = {
         };
       });
 
+      const safeBulkUpsert = async (tableName: string) => {
+        let payload = dbObjs.map(o => ({ ...o }));
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const { error } = await client.from(tableName).upsert(payload);
+          if (!error) {
+            console.log(`[DBService] Supabase ${tableName} bulk upsert SUCCESS with timestamps (${payload.length} items)`);
+            return;
+          }
+          const errMsg = error.message || '';
+          const matchCol = errMsg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of relation/i) 
+                        || errMsg.match(/Could not find the '?([a-zA-Z0-9_]+)'? column/i)
+                        || errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+          if (matchCol && matchCol[1]) {
+            const col = matchCol[1];
+            console.warn(`[DBService] Column "${col}" not present in "${tableName}" during bulk upsert, stripping and retrying...`);
+            payload.forEach(item => { delete item[col]; });
+            continue;
+          }
+          console.warn(`[DBService] Supabase ${tableName} bulk upsert error:`, error.message);
+          break;
+        }
+      };
+
       await Promise.allSettled([
-        client.from('kdb_validations').upsert(dbObjs),
-        client.from('data_validations').upsert(dbObjs)
+        safeBulkUpsert('kdb_validations'),
+        safeBulkUpsert('data_validations')
       ]);
     } catch (e) {
       console.warn("[DBService] Supabase saveValidationsBulk exception, falling back to local.", e);

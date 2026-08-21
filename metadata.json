@@ -1,6 +1,6 @@
 {
   "name": "KDB Hub",
-  "description": "Kdb integrated management system with Data Validation, Client Registry, Returns, and reporting engines.",
+  "description": "",
   "requestFramePermissions": [
     "camera"
   ],

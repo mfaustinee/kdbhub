@@ -893,12 +893,12 @@ export function DataValidationModule() {
 
           // Detect whether this historical record belongs to a branch or main facility
           const hasBranchIndicator = !!(
-            vBranch.trim() ||
             raw.isBranch ||
             v.isBranch ||
-            (rawPName && (rawPName.toLowerCase().includes('branch') || rawPName.toLowerCase().includes('outlet') || rawPName.toLowerCase().includes('milk bar'))) ||
+            (raw.validationPremiseMode && raw.validationPremiseMode !== 'main') ||
+            (rawPName && (rawPName.toLowerCase().includes('branch') || rawPName.toLowerCase().includes('outlet'))) ||
             (vPNo && vPNo.includes('-br')) ||
-            (pNorm && vPName && vPName !== pNorm)
+            (vPNo && vPNo.includes('/br'))
           );
 
           if (fullPeriod) {
@@ -1907,7 +1907,7 @@ export function DataValidationModule() {
       setReconciliationResolved(true);
       
       // Refresh clients list from database to ensure absolute source of truth
-      const refreshedClients = await DBService.getClients();
+      const refreshedClients = await DBService.getClients(true);
       setClients(refreshedClients);
 
       setStatus({ type: 'success', message: 'Reconciliation completed. Client profile and Data Validation fields are synchronized.' });
@@ -2142,7 +2142,10 @@ export function DataValidationModule() {
         });
       }
       if (formData.hasLocalSales) {
-        const isBranchValidation = validationPremiseMode.startsWith('branch-');
+        const isBranchValidation = dboHasBranches === true && (
+          validationPremiseMode.startsWith('branch-') ||
+          validationPremiseMode === 'new'
+        );
         formData.sales.forEach((sale, idx) => {
           if (!sale.month) missing.push(`sale-${idx}-month`);
           if (!sale.year) missing.push(`sale-${idx}-year`);
@@ -2339,11 +2342,9 @@ export function DataValidationModule() {
     }
 
     // Check if validating a branch facility (declared returns are filed at HQ/Main facility)
-    const isBranchFacility = !!(
+    const isBranchFacility = dboHasBranches === true && (
       validationPremiseMode.startsWith('branch-') ||
-      validationPremiseMode === 'new' ||
-      (data.branch && data.branch.trim() !== '') ||
-      (selectedClient && selectedClient.premiseName && data.premiseName && data.premiseName.trim().toLowerCase() !== selectedClient.premiseName.trim().toLowerCase())
+      validationPremiseMode === 'new'
     );
 
     // Sales Table
@@ -2764,7 +2765,7 @@ export function DataValidationModule() {
         }
 
         await DBService.saveClient(syncedClient);
-        const refreshedClients = await DBService.getClients();
+        const refreshedClients = await DBService.getClients(true);
         setClients(refreshedClients);
       } else {
         // Create new client profile in licensed_clients registry
@@ -2788,7 +2789,7 @@ export function DataValidationModule() {
           expiryDate: formattedExpiryDate || undefined
         };
         await DBService.saveClient(newClientRecord);
-        const refreshedClients = await DBService.getClients();
+        const refreshedClients = await DBService.getClients(true);
         setClients(refreshedClients);
       }
 
@@ -2821,8 +2822,18 @@ export function DataValidationModule() {
         })();
       }
 
+      const nowIso = new Date().toISOString();
+
       const payloadRawData: any = {
         ...updatedData,
+        submittedAt: nowIso,
+        submitted_at: nowIso,
+        created_at: nowIso,
+        createdAt: nowIso,
+        timestamp: nowIso,
+        updated_at: nowIso,
+        validatedAt: updatedData.date || nowIso,
+        validated_at: updatedData.date || nowIso,
         pdf: pdf,
         pdf_path: pdfPath,
         pdfPath: pdfPath
@@ -2839,13 +2850,17 @@ export function DataValidationModule() {
 
       payloadRawData.uuid = valUuid;
 
-      // Exact columns matching remote Supabase schema
-      const supabaseRow = {
+      // Exact columns matching remote Supabase schema with explicit timestamp fields
+      const supabaseRow: Record<string, any> = {
         id: valUuid,
         dbo_name: updatedData.dboName || '',
         premise_name: updatedData.premiseName || '',
         branch: updatedData.county ? (updatedData.county.trim() || 'Kericho') : 'Kericho',
-        date: updatedData.date || new Date().toISOString().split('T')[0],
+        date: updatedData.date || nowIso.split('T')[0],
+        created_at: nowIso,
+        submitted_at: nowIso,
+        timestamp: nowIso,
+        updated_at: nowIso,
         validation_period: updatedData.validationPeriod || '',
         category: updatedData.category || '',
         permit_no: updatedData.permitNo || '',
@@ -2861,11 +2876,15 @@ export function DataValidationModule() {
         if (!supabase) return;
         try {
           if (isAmendment) {
-            const updatePayload = {
+            const updatePayload: Record<string, any> = {
               dbo_name: supabaseRow.dbo_name,
               premise_name: supabaseRow.premise_name,
               branch: supabaseRow.branch,
               date: supabaseRow.date,
+              created_at: supabaseRow.created_at,
+              submitted_at: supabaseRow.submitted_at,
+              timestamp: supabaseRow.timestamp,
+              updated_at: supabaseRow.updated_at,
               category: supabaseRow.category,
               permit_no: supabaseRow.permit_no,
               location: supabaseRow.location,
@@ -2876,26 +2895,54 @@ export function DataValidationModule() {
               raw_data: payloadRawData
             };
 
+            const safeUpdate = async (tableName: string) => {
+              let payload = { ...updatePayload };
+              const matchFilter = {
+                premise_name: updatedData.premiseName,
+                validation_period: updatedData.validationPeriod
+              };
+              for (let attempt = 0; attempt < 6; attempt++) {
+                const { error } = await supabase.from(tableName).update(payload).match(matchFilter);
+                if (!error) return;
+                const errMsg = error.message || '';
+                const matchCol = errMsg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of relation/i) 
+                              || errMsg.match(/Could not find the '?([a-zA-Z0-9_]+)'? column/i)
+                              || errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+                if (matchCol && matchCol[1] && payload.hasOwnProperty(matchCol[1])) {
+                  delete payload[matchCol[1]];
+                  continue;
+                }
+                console.warn(`[DataValidation] Update on ${tableName} warning:`, error.message);
+                break;
+              }
+            };
+
             await Promise.allSettled([
-              supabase
-                .from('kdb_validations')
-                .update(updatePayload)
-                .match({
-                  premise_name: updatedData.premiseName,
-                  validation_period: updatedData.validationPeriod
-                }),
-              supabase
-                .from('data_validations')
-                .update(updatePayload)
-                .match({
-                  premise_name: updatedData.premiseName,
-                  validation_period: updatedData.validationPeriod
-                })
+              safeUpdate('kdb_validations'),
+              safeUpdate('data_validations')
             ]);
           } else {
+            const safeUpsert = async (tableName: string) => {
+              let payload = { ...supabaseRow };
+              for (let attempt = 0; attempt < 6; attempt++) {
+                const { error } = await supabase.from(tableName).upsert([payload]);
+                if (!error) return;
+                const errMsg = error.message || '';
+                const matchCol = errMsg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of relation/i) 
+                              || errMsg.match(/Could not find the '?([a-zA-Z0-9_]+)'? column/i)
+                              || errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+                if (matchCol && matchCol[1] && payload.hasOwnProperty(matchCol[1])) {
+                  delete payload[matchCol[1]];
+                  continue;
+                }
+                console.warn(`[DataValidation] Upsert on ${tableName} warning:`, error.message);
+                break;
+              }
+            };
+
             await Promise.allSettled([
-              supabase.from('kdb_validations').upsert([supabaseRow]),
-              supabase.from('data_validations').upsert([supabaseRow])
+              safeUpsert('kdb_validations'),
+              safeUpsert('data_validations')
             ]);
           }
         } catch (sbErr) {
@@ -4238,10 +4285,29 @@ export function DataValidationModule() {
                               type="checkbox"
                               checked={formData.natureOfProduce.includes(opt)}
                               onChange={(e) => {
-                                const newProduce = e.target.checked 
+                                const isChecked = e.target.checked;
+                                const newProduce = isChecked 
                                   ? [...formData.natureOfProduce, opt]
                                   : formData.natureOfProduce.filter(p => p !== opt);
-                                setFormData(prev => ({ ...prev, natureOfProduce: newProduce }));
+                                
+                                setFormData(prev => {
+                                  // Update selling prices in all sales rows when produce selection changes
+                                  const updatedSales = prev.sales.map(sale => {
+                                    const currentPrices = parseSellingPrices(sale.sellingPrice || '');
+                                    if (isChecked) {
+                                      if (defaultProductPrices.sellingPrices[opt]) {
+                                        currentPrices[opt] = defaultProductPrices.sellingPrices[opt];
+                                      }
+                                    } else {
+                                      delete currentPrices[opt];
+                                    }
+                                    return {
+                                      ...sale,
+                                      sellingPrice: formatSellingPrices(currentPrices)
+                                    };
+                                  });
+                                  return { ...prev, natureOfProduce: newProduce, sales: updatedSales };
+                                });
                                 setFailedFields(prev => prev.filter(f => f !== 'natureOfProduce'));
                               }}
                               className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
@@ -4369,6 +4435,15 @@ export function DataValidationModule() {
                                     ...prev,
                                     buyingPrice: val
                                   }));
+                                  // Immediately propagate buying price to all existing sales months
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    sales: prev.sales.map(sale => ({
+                                      ...sale,
+                                      buyingPrice: val
+                                    }))
+                                  }));
+                                  setFailedFields(prev => prev.filter(f => !f.includes('-buyingPrice')));
                                 }}
                                 className="w-32 px-3 py-1.5 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-semibold text-gray-800"
                               />
@@ -4415,6 +4490,23 @@ export function DataValidationModule() {
                                                 [product]: val
                                               }
                                             }));
+
+                                            // Immediately propagate selling price for this product to all existing sales months
+                                            setFormData(prev => ({
+                                              ...prev,
+                                              sales: prev.sales.map(sale => {
+                                                const currentPrices = parseSellingPrices(sale.sellingPrice || '');
+                                                const updatedPrices = { ...currentPrices, [product]: val };
+                                                return {
+                                                  ...sale,
+                                                  sellingPrice: formatSellingPrices(updatedPrices)
+                                                };
+                                              })
+                                            }));
+
+                                            if (val.trim() !== '') {
+                                              setFailedFields(prev => prev.filter(f => !f.includes('-sellingPrice')));
+                                            }
                                           }}
                                           className="w-24 px-2 py-1 rounded border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-medium text-blue-700"
                                         />
@@ -4435,11 +4527,9 @@ export function DataValidationModule() {
                       </div>
                     ) : (
                       formData.sales.map((sale, idx) => {
-                        const isBranchValidation = !!(
+                        const isBranchValidation = dboHasBranches === true && (
                           validationPremiseMode.startsWith('branch-') ||
-                          validationPremiseMode === 'new' ||
-                          (formData.branch && formData.branch.trim() !== '') ||
-                          (selectedClient && selectedClient.premiseName && formData.premiseName && formData.premiseName.trim().toLowerCase() !== selectedClient.premiseName.trim().toLowerCase())
+                          validationPremiseMode === 'new'
                         );
                         const rowsToDisplay = isBranchValidation ? [
                           { label: 'Witnessed Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
@@ -5035,17 +5125,18 @@ export function DataValidationModule() {
 
                                         <div className="space-y-1">
                                           <label className="text-[9px] font-bold text-gray-400 uppercase">Levy Info</label>
-                                          <input
-                                            type="text"
-                                            placeholder="Paid / Unpaid / Details"
-                                            value={outlet.levyInfo}
+                                          <select
+                                            value={outlet.levyInfo || 'Does not Qualify'}
                                             onChange={(e) => {
                                               const next = [...formData.distributors];
                                               next[dIdx].outlets[oIdx].levyInfo = e.target.value;
                                               setFormData(prev => ({ ...prev, distributors: next }));
                                             }}
-                                            className="w-full px-3 py-1.5 rounded-lg border border-slate-200 focus:border-blue-500 outline-none text-xs bg-white"
-                                          />
+                                            className="w-full px-3 py-1.5 rounded-lg border border-slate-200 outline-none text-xs bg-white text-gray-700 font-semibold"
+                                          >
+                                            <option value="Does not Qualify">Does not Qualify</option>
+                                            <option value="Qualifies CSL">Qualifies CSL</option>
+                                          </select>
                                         </div>
                                       </div>
                                     </div>

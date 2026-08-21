@@ -585,17 +585,23 @@ async function startServer() {
         }
 
         let clients = await readJsonArrayFile(CLIENTS_FILE);
+        const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+        const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
 
         if (Array.isArray(req.body)) {
-          clients = req.body;
+          // Deduplicate array
+          const seen = new Set<string>();
+          const deduped: any[] = [];
+          for (const item of req.body) {
+            const pKey = cleanPermit(item.permitNumber || item.id) || cleanStr(item.clientName);
+            if (!pKey || !seen.has(pKey)) {
+              if (pKey) seen.add(pKey);
+              deduped.push(item);
+            }
+          }
+          clients = deduped;
         } else {
           const newClient = req.body;
-          if (!newClient.id) {
-            return res.status(400).json({ error: "Missing client ID" });
-          }
-          const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
-          const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-
           const pNew = cleanPermit(newClient.permitNumber || newClient.id);
           const cNew = cleanStr(newClient.clientName);
           const premNew = cleanStr(newClient.premiseName);
@@ -614,8 +620,19 @@ async function startServer() {
           });
 
           if (index !== -1) {
-            logToFile(`Updating existing client: ${clients[index].id || newClient.id}`);
-            clients[index] = { ...clients[index], ...newClient, id: clients[index].id || newClient.id };
+            const preservedId = clients[index].id || newClient.id;
+            logToFile(`Updating existing client in-place: ${preservedId}`);
+            clients[index] = { ...clients[index], ...newClient, id: preservedId };
+            
+            // Remove any other duplicate entries
+            clients = clients.filter((c: any, i: number) => {
+              if (i === index) return true;
+              const otherId = String(c.id || '').trim();
+              const otherPermit = cleanPermit(c.permitNumber || c.id);
+              if (preservedId && otherId && preservedId === otherId) return false;
+              if (pNew && otherPermit && pNew === otherPermit) return false;
+              return true;
+            });
           } else {
             logToFile(`Adding new client: ${newClient.id}`);
             clients.push(newClient);
@@ -624,7 +641,7 @@ async function startServer() {
 
         await fs.promises.writeFile(CLIENTS_FILE, JSON.stringify(clients, null, 2));
         logToFile(`Successfully saved clients`);
-        res.json({ success: true });
+        res.json({ success: true, clients });
       } catch (error: any) {
         logToFile(`CRITICAL Error saving clients: ${error.message}`);
         res.status(500).json({ error: "Failed to save clients", details: error.message });
@@ -742,6 +759,7 @@ async function startServer() {
         };
 
         const formatSupabaseRow = (v: any) => {
+          const nowIso = new Date().toISOString();
           const uuid = ensureUuid(v.id || v.raw_data?.uuid || v.rawData?.uuid);
           let valPeriod = v.period || v.validationPeriod || v.validation_period || '';
           const yearVal = v.year || (v.date ? new Date(v.date).getFullYear() : null);
@@ -750,13 +768,24 @@ async function startServer() {
           }
           const rawData = v.rawData || v.raw_data || { ...v };
           rawData.uuid = uuid;
+          if (!rawData.timestamp) rawData.timestamp = nowIso;
+          if (!rawData.created_at) rawData.created_at = nowIso;
+          if (!rawData.createdAt) rawData.createdAt = nowIso;
+          if (!rawData.submitted_at) rawData.submitted_at = nowIso;
+          if (!rawData.submittedAt) rawData.submittedAt = nowIso;
+          if (!rawData.validated_at) rawData.validated_at = v.validatedAt || nowIso;
+          if (!rawData.validatedAt) rawData.validatedAt = v.validatedAt || nowIso;
 
           return {
             id: uuid,
             dbo_name: v.clientName || v.dboName || v.dbo_name || '',
             premise_name: v.premiseName || v.premise_name || '',
             branch: v.branch || rawData.branch || 'Kericho',
-            date: v.validatedAt || v.date || new Date().toISOString().split('T')[0],
+            date: v.validatedAt || v.date || nowIso.split('T')[0],
+            created_at: nowIso,
+            submitted_at: nowIso,
+            timestamp: nowIso,
+            updated_at: nowIso,
             validation_period: valPeriod,
             category: v.category || rawData.category || '',
             permit_no: v.permitNo || v.permit_no || '',
@@ -797,13 +826,35 @@ async function startServer() {
           (async () => {
             try {
               const serverSupabase = createClient(sUrl, sKey);
+              const safeServerUpsert = async (tableName: string) => {
+                let payload = itemsToSync.map(item => ({ ...item }));
+                for (let attempt = 0; attempt < 6; attempt++) {
+                  const { error } = await serverSupabase.from(tableName).upsert(payload);
+                  if (!error) {
+                    logToFile(`[Server] Synced ${payload.length} validation(s) to ${tableName} with timestamps`);
+                    return;
+                  }
+                  const errMsg = error.message || '';
+                  const matchCol = errMsg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of relation/i) 
+                                || errMsg.match(/Could not find the '?([a-zA-Z0-9_]+)'? column/i)
+                                || errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+                  if (matchCol && matchCol[1]) {
+                    const col = matchCol[1];
+                    logToFile(`[Server] Column "${col}" not present in ${tableName}, retrying without it...`);
+                    payload.forEach(it => { delete it[col]; });
+                    continue;
+                  }
+                  logToFile(`[Server] Warning: Supabase ${tableName} upsert failed: ${error.message}`);
+                  break;
+                }
+              };
+
               await Promise.allSettled([
-                serverSupabase.from('kdb_validations').upsert(itemsToSync),
-                serverSupabase.from('data_validations').upsert(itemsToSync)
+                safeServerUpsert('kdb_validations'),
+                safeServerUpsert('data_validations')
               ]);
-              logToFile(`[Server] Synced ${itemsToSync.length} validation(s) to Supabase tables`);
             } catch (sbErr: any) {
-              logToFile(`[Server] Warning: Background Supabase validation sync: ${sbErr.message}`);
+              logToFile(`[Server] Warning: Background Supabase validation sync exception: ${sbErr.message}`);
             }
           })();
         }
