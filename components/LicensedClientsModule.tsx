@@ -163,8 +163,10 @@ export const LicensedClientsModule: React.FC = () => {
     setCounty(client.county);
     setCoolingCapacity(client.coolingCapacity ? String(client.coolingCapacity) : '');
     setPermitStatus(client.permitStatus);
-    setOperationalStatus(client.operationalStatus);
-    setLevyInfo(client.levyInfo);
+    const op = client.operationalStatus;
+    setOperationalStatus(op);
+    // Any client that their operational status reads "closed", they automatically become "DNQ-R" for the levy Qualification
+    setLevyInfo(op === 'closed' ? 'DNQ-R' : client.levyInfo);
     setExpiryDate(client.expiryDate ? formatDateToDDMMYYYY(client.expiryDate) : '');
     setBranches(client.branches || []);
     setIsModalOpen(true);
@@ -219,6 +221,9 @@ export const LicensedClientsModule: React.FC = () => {
 
     const targetId = editingClient?.id || formattedPermitNo;
 
+    // Any client whose operational status is 'closed' automatically becomes 'DNQ-R'
+    const resolvedLevyInfo: 'QFR' | 'DNQ-R' = operationalStatus === 'closed' ? 'DNQ-R' : levyInfo;
+
     const record: LicensedClient = {
       id: targetId,
       permitNumber: formattedPermitNo,
@@ -240,7 +245,7 @@ export const LicensedClientsModule: React.FC = () => {
         : undefined,
       permitStatus: resolvedPermitStatus,
       operationalStatus,
-      levyInfo,
+      levyInfo: resolvedLevyInfo,
       expiryDate: formattedExpiry,
       branches: branches.length > 0 ? branches : undefined
     };
@@ -634,10 +639,15 @@ export const LicensedClientsModule: React.FC = () => {
         let status: 'valid' | 'expired' = (rawPermitStatus === 'expired' || rawPermitStatus === 'inactive') ? 'expired' : 'valid';
         
         const rawOpStatus = getVal(rowData, ['operationalstatus', 'operational', 'operationstatus', 'operation']).trim().toLowerCase();
-        const opStatus: 'operating' | 'closed' = rawOpStatus === 'closed' ? 'closed' : 'operating';
+        const opStatus: 'operating' | 'closed' = (rawOpStatus === 'closed' || rawOpStatus.includes('close') || rawOpStatus.includes('ceas')) ? 'closed' : 'operating';
         
         const rawLevy = getVal(rowData, ['levyinfo', 'levy', 'levytype', 'qfr']).trim().toUpperCase();
-        const levy: 'QFR' | 'DNQ-R' = rawLevy === 'DNQ-R' ? 'DNQ-R' : 'QFR';
+        let levy: 'QFR' | 'DNQ-R' = (rawLevy === 'DNQ-R' || rawLevy === 'DNQ' || rawLevy.includes('DNQ')) ? 'DNQ-R' : 'QFR';
+
+        // Any client that their operational status reads "closed", they automatically become "DNQ-R" for the levy Qualification
+        if (opStatus === 'closed') {
+          levy = 'DNQ-R';
+        }
         
         let cap: number | undefined = undefined;
         if (cat === 'Cooling Plant' || cat === 'Processor') {
@@ -667,7 +677,12 @@ export const LicensedClientsModule: React.FC = () => {
         const rawEndDate = getVal(rowData, ['enddate', 'end_date', 'end', 'closuredate']).trim();
         const formattedEndDate = rawEndDate ? formatDateToDDMMYYYY(rawEndDate) : undefined;
 
-        const rawExpiryDate = getVal(rowData, ['expirydate', 'expiry', 'permitexpiry', 'expiry_date']).trim();
+        const rawExpiryDate = getVal(rowData, [
+          'expirydate', 'expiry_date', 'permitexpiry', 'permitexpirydate', 
+          'permit_expiry_date', 'permit_expiry', 'expiry', 'expdate', 'exp_date', 
+          'dateexpiry', 'expirationdate', 'expiration', 'validuntil', 'validto', 
+          'expiredate', 'expire_date', 'permitexp', 'permit_exp'
+        ]).trim();
         const formattedExpiryDate = rawExpiryDate ? formatDateToDDMMYYYY(rawExpiryDate) : undefined;
 
         // Auto-mark as expired if expiry date has passed
@@ -679,6 +694,8 @@ export const LicensedClientsModule: React.FC = () => {
             expDate.setHours(23, 59, 59, 999);
             if (expDate < today) {
               status = 'expired';
+            } else {
+              status = 'valid';
             }
           }
         }
@@ -697,7 +714,7 @@ export const LicensedClientsModule: React.FC = () => {
                 location: b.location || loc,
                 county: b.county || co,
                 expiryDate: b.expiryDate ? formatDateToDDMMYYYY(b.expiryDate) : formattedExpiryDate,
-                operationalStatus: b.operationalStatus || 'operating',
+                operationalStatus: b.operationalStatus || opStatus || 'operating',
                 permitStatus: b.permitStatus || status,
                 tel: b.tel || phone,
                 contactPerson: b.contactPerson || contact,
@@ -724,6 +741,7 @@ export const LicensedClientsModule: React.FC = () => {
             if (existingDbClient.premiseName.trim().toLowerCase() === pName.toLowerCase()) {
               updatedClient.permitStatus = status;
               updatedClient.operationalStatus = opStatus;
+              updatedClient.levyInfo = opStatus === 'closed' ? 'DNQ-R' : (levy || existingDbClient.levyInfo || 'QFR');
               if (formattedExpiryDate) updatedClient.expiryDate = formattedExpiryDate;
               if (colBranches.length > 0) {
                 const existingBranchNames = new Set((updatedClient.branches || []).map(b => b.premiseName.trim().toLowerCase()));
@@ -778,7 +796,7 @@ export const LicensedClientsModule: React.FC = () => {
               coolingCapacity: cap,
               permitStatus: status,
               operationalStatus: opStatus,
-              levyInfo: levy,
+              levyInfo: opStatus === 'closed' ? 'DNQ-R' : levy,
               expiryDate: formattedExpiryDate,
               branches: colBranches
             };
@@ -1637,7 +1655,10 @@ export const LicensedClientsModule: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setOperationalStatus('closed')}
+                      onClick={() => {
+                        setOperationalStatus('closed');
+                        setLevyInfo('DNQ-R');
+                      }}
                       className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${operationalStatus === 'closed' ? 'bg-rose-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
                     >
                       Closed
@@ -1646,19 +1667,32 @@ export const LicensedClientsModule: React.FC = () => {
                 </div>
 
                 <div className="space-y-1.5">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block ml-3">Levy Qualification</span>
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block ml-3">
+                    Levy Qualification {operationalStatus === 'closed' && <span className="text-amber-600 font-bold lowercase">(auto dnq-r for closed)</span>}
+                  </span>
                   <div className="flex bg-white p-1 rounded-xl border border-slate-150">
                     <button
                       type="button"
+                      disabled={operationalStatus === 'closed'}
                       onClick={() => setLevyInfo('QFR')}
-                      className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${levyInfo === 'QFR' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                      className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
+                        operationalStatus === 'closed'
+                          ? 'opacity-40 cursor-not-allowed text-slate-300'
+                          : levyInfo === 'QFR'
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-600'
+                      }`}
                     >
                       QFR
                     </button>
                     <button
                       type="button"
                       onClick={() => setLevyInfo('DNQ-R')}
-                      className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${levyInfo === 'DNQ-R' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                      className={`flex-1 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${
+                        levyInfo === 'DNQ-R' || operationalStatus === 'closed'
+                          ? 'bg-amber-500 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-600'
+                      }`}
                     >
                       DNQ-R
                     </button>
@@ -2136,15 +2170,23 @@ export const LicensedClientsModule: React.FC = () => {
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[9px] text-slate-400">{record.premiseName}</div>
+                                <div className="text-[9px] text-slate-400">
+                                  {record.premiseName}
+                                  {record.expiryDate && (
+                                    <span className="ml-2 font-mono text-slate-500">Exp: {record.expiryDate}</span>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-2">{record.premiseCategory}</td>
                               <td className="px-4 py-2">{record.contactPerson} ({record.tel})</td>
-                              <td className="px-4 py-2 flex items-center gap-1">
+                              <td className="px-4 py-2 flex flex-wrap items-center gap-1">
+                                <span className={`font-black px-1.5 py-0.5 rounded text-[9px] uppercase ${record.operationalStatus === 'closed' ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-slate-100 text-slate-700'}`}>
+                                  {record.operationalStatus}
+                                </span>
                                 <span className={`font-black px-1.5 py-0.5 rounded text-[9px] uppercase ${record.permitStatus === 'expired' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
                                   {record.permitStatus}
                                 </span>
-                                <span className="bg-blue-50 text-blue-700 font-black px-1.5 py-0.5 rounded text-[9px]">
+                                <span className={`font-black px-1.5 py-0.5 rounded text-[9px] uppercase ${record.levyInfo === 'DNQ-R' ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-blue-50 text-blue-700'}`}>
                                   {record.levyInfo}
                                 </span>
                               </td>

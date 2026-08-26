@@ -265,8 +265,8 @@ export const parseDDMMYYYY = (dateStr: string | undefined | null): Date | null =
 
 export const clampYear = (yearNum: number): number => {
   const currentYear = new Date().getFullYear();
-  const minYear = 2021;
-  const maxYear = currentYear + 1;
+  const minYear = 1990;
+  const maxYear = currentYear + 20;
   if (isNaN(yearNum) || yearNum === null || yearNum === undefined) return currentYear;
   let y = Number(yearNum);
   if (isNaN(y)) return currentYear;
@@ -278,12 +278,43 @@ export const clampYear = (yearNum: number): number => {
   return y;
 };
 
-export const formatDateToDDMMYYYY = (dateStr: string | Date | undefined | null): string => {
-  if (!dateStr) return '';
+export const formatDateToDDMMYYYY = (dateStr: string | Date | number | undefined | null): string => {
+  if (dateStr === undefined || dateStr === null || dateStr === '') return '';
+  
+  // Handle numeric Excel date serials
+  if (typeof dateStr === 'number') {
+    if (dateStr > 20000 && dateStr < 90000) {
+      const excelEpoch = new Date(1899, 11, 30);
+      const d = new Date(excelEpoch.getTime() + dateStr * 86400000);
+      if (!isNaN(d.getTime())) {
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = clampYear(d.getFullYear());
+        return `${day}/${month}/${year}`;
+      }
+    }
+  }
+
   if (typeof dateStr === 'string') {
     const s = dateStr.trim();
     if (!s) return '';
     if (s.toLowerCase() === 'not filed' || s.toLowerCase() === 'n/a') return s;
+
+    // Check if string is numeric Excel date serial
+    if (/^\d{5}(\.\d+)?$/.test(s)) {
+      const num = parseFloat(s);
+      if (num > 20000 && num < 90000) {
+        const excelEpoch = new Date(1899, 11, 30);
+        const d = new Date(excelEpoch.getTime() + num * 86400000);
+        if (!isNaN(d.getTime())) {
+          const day = String(d.getDate()).padStart(2, '0');
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const year = clampYear(d.getFullYear());
+          return `${day}/${month}/${year}`;
+        }
+      }
+    }
+
     if (s.includes('/')) {
       const parts = s.split('/');
       if (parts.length === 3) {

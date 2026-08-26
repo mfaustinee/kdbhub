@@ -918,26 +918,66 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     document.body.removeChild(link);
   };
 
+  // Helper to determine if client is marked/considered closed
+  const isClosedClient = (c?: LicensedClient | null): boolean => {
+    if (!c) return true;
+    const op = String(c.operationalStatus || '').toLowerCase().trim();
+    const permit = String(c.permitStatus || '').toLowerCase().trim();
+    const closedKeywords = ['closed', 'closed down', 'closeddown', 'cessation', 'ceased', 'inactive', 'non-operational', 'non operational'];
+    if (closedKeywords.includes(op) || op.includes('close') || op.includes('ceas')) return true;
+    if (closedKeywords.includes(permit) || permit.includes('close') || permit.includes('ceas')) return true;
+    return false;
+  };
+
+  // Helper to determine if client is marked/considered DNQ-R (Does not qualify to file returns)
+  const isDnqClient = (c?: LicensedClient | null): boolean => {
+    if (!c) return true;
+    const levy = String(c.levyInfo || '').toUpperCase().trim();
+    return levy === 'DNQ-R' || levy === 'DNQ' || levy.includes('DNQ') || levy.includes('DOES NOT QUALIFY') || levy !== 'QFR';
+  };
+
+  // Helper to check if client is active, operating, and qualifying for returns
+  const isQualifyingOperatingClient = (c?: LicensedClient | null): boolean => {
+    if (!c) return false;
+    if (isClosedClient(c)) return false;
+    if (isDnqClient(c)) return false;
+    if (c.levyInfo !== 'QFR') return false;
+    if (c.operationalStatus !== 'operating') return false;
+    return true;
+  };
+
   // Determine Unfiled Periods for a client
   const getUnfiledPeriodsForClient = (client: LicensedClient) => {
-    if (client.levyInfo !== 'QFR') return [];
+    // Exclude clients marked/considered closed or DNQ-R or both
+    if (!client || !isQualifyingOperatingClient(client)) return [];
 
     let startY = client.startYear || 2024;
     if (startY < 2015 || startY > new Date().getFullYear() + 2) {
-      startY = 2024; // Guard against crazy start years like 0 or 202
+      startY = 2024; // Guard against invalid start years
     }
     const startMIdx = Math.max(0, monthsList.indexOf(client.startMonth || 'January'));
     
     const today = new Date();
     const currentY = today.getFullYear();
-    const currentMIdx = today.getMonth(); // 0 - 11
+    const currentMIdx = today.getMonth(); // 0 - 11 (e.g. August = 7)
 
-    const endY = currentY;
-    const endMIdx = currentMIdx;
+    // Missing periods should show up to the current month less one.
+    // e.g. If we are in August 2026, the missing period should not show August 2026 since data collection is still running.
+    let endY = currentY;
+    let endMIdx = currentMIdx - 1;
+    if (endMIdx < 0) {
+      endY = currentY - 1;
+      endMIdx = 11; // December of previous year
+    }
+
+    // If client start is after the cutoff period, return empty
+    if (startY > endY || (startY === endY && startMIdx > endMIdx)) {
+      return [];
+    }
 
     const unfiledList: { year: number; month: string }[] = [];
 
-    // Loop through year by year, month by month since client start
+    // Loop through year by year, month by month since client start up to (current month - 1)
     for (let y = startY; y <= endY; y++) {
       const startM = (y === startY) ? startMIdx : 0;
       const endM = (y === endY) ? endMIdx : 11;
@@ -945,6 +985,14 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
       for (let m = startM; m <= endM; m++) {
         const monthName = monthsList[m];
         
+        // Ensure client has not closed operations by this period
+        if (client.endYear) {
+          const endYClient = client.endYear;
+          const endMIdxClient = Math.max(0, monthsList.indexOf(client.endMonth || 'December'));
+          const hasClosed = (y > endYClient) || (y === endYClient && m > endMIdxClient);
+          if (hasClosed) continue;
+        }
+
         // Check if there is a filed return for this client, year, month
         const returnExists = returns.some(r => 
           r.clientId === client.id && 
@@ -963,7 +1011,19 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
   // Determine ALL clients who have not filed returns for a specific target Year and Month
   const getUnfiledReturnsByPeriod = (year: number, month: string) => {
-    const qfrClients = clients.filter(c => c.levyInfo === 'QFR' && c.operationalStatus === 'operating');
+    const today = new Date();
+    const currentY = today.getFullYear();
+    const currentMIdx = today.getMonth();
+    const targetMIdx = monthsList.indexOf(month);
+
+    // If checking a period in the current month or future, data collection is ongoing
+    if (month !== 'All' && targetMIdx !== -1) {
+      if (year > currentY || (year === currentY && targetMIdx >= currentMIdx)) {
+        return [];
+      }
+    }
+
+    const qfrClients = clients.filter(c => isQualifyingOperatingClient(c));
     
     return qfrClients.filter(client => {
       // Ensure client had started operations by this period
@@ -972,7 +1032,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
         startY = 2024;
       }
       const startMIdx = Math.max(0, monthsList.indexOf(client.startMonth || 'January'));
-      const targetMIdx = monthsList.indexOf(month);
 
       const hasStarted = (year > startY) || (year === startY && targetMIdx >= startMIdx);
       if (!hasStarted) return false;
@@ -1724,8 +1783,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       // Gather unfiled across multiple years and months grouped by client
                       let missingList: { client: LicensedClient; missingPeriods: { year: number; month: string }[] }[] = [];
 
-                      // We scan active QFR operating clients
-                      const activeQfrClients = clients.filter(c => c.levyInfo === 'QFR' && c.operationalStatus === 'operating');
+                      // We scan active QFR operating clients (excluding closed, DNQ-R, or both)
+                      const activeQfrClients = clients.filter(c => isQualifyingOperatingClient(c));
 
                       activeQfrClients.forEach(client => {
                         const periods = getUnfiledPeriodsForClient(client);

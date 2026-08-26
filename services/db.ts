@@ -142,7 +142,7 @@ const clientToDb = (client: any) => {
     coolingcapacity: (client.coolingCapacity !== undefined && client.coolingCapacity !== null && !isNaN(Number(client.coolingCapacity))) ? Number(client.coolingCapacity) : null,
     permitstatus: String(client.permitStatus ?? client.permitstatus ?? 'valid').trim(),
     operationalstatus: String(client.operationalStatus ?? client.operationalstatus ?? 'operating').trim(),
-    levyinfo: String(client.levyInfo ?? client.levyinfo ?? '').trim(),
+    levyinfo: String((client.operationalStatus === 'closed' || client.operationalstatus === 'closed') ? 'DNQ-R' : (client.levyInfo ?? client.levyinfo ?? '')).trim(),
     expirydate: String(client.expiryDate ?? client.expirydate ?? '').trim(),
     permitnumber: pNo,
     branches: branchesVal
@@ -206,6 +206,9 @@ const clientFromDb = (dbObj: any): LicensedClient => {
   if (dbObj.permitstatus !== undefined) out.permitStatus = dbObj.permitstatus;
   if (dbObj.operationalstatus !== undefined) out.operationalStatus = dbObj.operationalstatus;
   if (dbObj.levyinfo !== undefined) out.levyInfo = dbObj.levyinfo;
+  if (out.operationalStatus === 'closed') {
+    out.levyInfo = 'DNQ-R';
+  }
 
   const expiryDate = dbObj.expirydate ?? dbObj.expiry_date ?? dbObj.expiryDate;
   if (expiryDate !== undefined) out.expiryDate = expiryDate;

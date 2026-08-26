@@ -589,10 +589,13 @@ async function startServer() {
         const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
 
         if (Array.isArray(req.body)) {
-          // Deduplicate array
+          // Deduplicate array and ensure closed clients are DNQ-R
           const seen = new Set<string>();
           const deduped: any[] = [];
           for (const item of req.body) {
+            if (item.operationalStatus === 'closed') {
+              item.levyInfo = 'DNQ-R';
+            }
             const pKey = cleanPermit(item.permitNumber || item.id) || cleanStr(item.clientName);
             if (!pKey || !seen.has(pKey)) {
               if (pKey) seen.add(pKey);
@@ -602,6 +605,9 @@ async function startServer() {
           clients = deduped;
         } else {
           const newClient = req.body;
+          if (newClient.operationalStatus === 'closed') {
+            newClient.levyInfo = 'DNQ-R';
+          }
           const pNew = cleanPermit(newClient.permitNumber || newClient.id);
           const cNew = cleanStr(newClient.clientName);
           const premNew = cleanStr(newClient.premiseName);
