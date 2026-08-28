@@ -515,53 +515,51 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
           continue;
         }
 
-        // Match against existing licensed clients (highly robust case-insensitive & fuzzy)
-        const csvClientNameClean = csvClientName.toLowerCase();
-        let matchedClient = clients.find(c => 
-          (c.clientName || '').trim().toLowerCase() === csvClientNameClean ||
-          (c.premiseName || '').trim().toLowerCase() === csvClientNameClean
-        );
+        // Match against existing licensed clients (Permit number, Exact DBO, Exact Premise, Branch Premise, Normalized Stem)
+        const cleanPermit = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+        const csvClientNameClean = csvClientName.trim().toLowerCase();
+        const csvClientNameNorm = normalizeForMatching(csvClientName);
+        const csvPermitClean = cleanPermit(csvClientName);
 
+        // 1. Exact Permit match (highest priority)
+        let matchedClient = csvPermitClean ? clients.find(c => 
+          cleanPermit(c.permitNumber) === csvPermitClean || 
+          cleanPermit(c.id) === csvPermitClean ||
+          (c.branches && c.branches.some(b => cleanPermit(b.permitNumber) === csvPermitClean || cleanPermit(b.id) === csvPermitClean))
+        ) : undefined;
+
+        // 2. Exact Name / Premise / Branch Premise match
         if (!matchedClient) {
-          // Try normalized match (no spacing, punctuation, or special spaces)
-          const csvClientNameNorm = normalizeForMatching(csvClientName);
           matchedClient = clients.find(c => 
-            normalizeForMatching(c.clientName) === csvClientNameNorm ||
-            normalizeForMatching(c.premiseName) === csvClientNameNorm
+            (c.clientName || '').trim().toLowerCase() === csvClientNameClean ||
+            (c.premiseName || '').trim().toLowerCase() === csvClientNameClean ||
+            (c.branches && c.branches.some(b => (b.premiseName || '').trim().toLowerCase() === csvClientNameClean))
           );
         }
 
+        // 3. Normalized alphanumeric exact match
         if (!matchedClient) {
-          // Try fuzzy includes/included match (if clean key has length >= 4)
-          const csvClientNameNorm = normalizeForMatching(csvClientName);
-          if (csvClientNameNorm.length >= 4) {
-            matchedClient = clients.find(c => {
-              const cNameNorm = normalizeForMatching(c.clientName);
-              const pNameNorm = normalizeForMatching(c.premiseName);
-              return (
-                cNameNorm.includes(csvClientNameNorm) || 
-                csvClientNameNorm.includes(cNameNorm) ||
-                pNameNorm.includes(csvClientNameNorm) ||
-                csvClientNameNorm.includes(pNameNorm)
-              );
-            });
-          }
+          matchedClient = clients.find(c => 
+            normalizeForMatching(c.clientName) === csvClientNameNorm ||
+            normalizeForMatching(c.premiseName) === csvClientNameNorm ||
+            (c.branches && c.branches.some(b => normalizeForMatching(b.premiseName) === csvClientNameNorm))
+          );
         }
 
-        if (!matchedClient) {
-          // Token/Word overlap match
-          const stopWords = ['dairy', 'dairies', 'cooperative', 'co-op', 'coop', 'ltd', 'limited', 'society', 'fc', 'group', 'plant', 'bar', 'dispenser', 'outlet', 'depot', 'station'];
-          const getWords = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2 && !stopWords.includes(w));
-          const csvWords = getWords(csvClientName);
-          if (csvWords.length > 0) {
-            matchedClient = clients.find(c => {
-              const clientWords = getWords(c.clientName);
-              const premiseWords = getWords(c.premiseName);
-              // Check if any significant word intersects
-              const hasClientOverlap = csvWords.some(w => clientWords.includes(w));
-              const hasPremiseOverlap = csvWords.some(w => premiseWords.includes(w));
-              return hasClientOverlap || hasPremiseOverlap;
+        // 4. Distinctive stem match (ignoring generic corporate suffixes, requiring unique match)
+        if (!matchedClient && csvClientNameNorm.length >= 6) {
+          const stripSuffixes = (s: string) => s.replace(/(limited|ltd|cooperative|coop|society|group|enterprises|plant|depot|station|dairy|dairies|bar|milk)/g, '').trim();
+          const csvStem = stripSuffixes(csvClientNameNorm);
+          if (csvStem.length >= 5) {
+            const candidates = clients.filter(c => {
+              const cStem = stripSuffixes(normalizeForMatching(c.clientName));
+              const pStem = stripSuffixes(normalizeForMatching(c.premiseName));
+              const bStem = (c.branches || []).some(b => stripSuffixes(normalizeForMatching(b.premiseName)) === csvStem);
+              return (cStem && cStem === csvStem) || (pStem && pStem === csvStem) || bStem;
             });
+            if (candidates.length === 1) {
+              matchedClient = candidates[0];
+            }
           }
         }
 

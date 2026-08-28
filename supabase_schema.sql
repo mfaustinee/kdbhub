@@ -289,6 +289,28 @@ CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);
 CREATE INDEX IF NOT EXISTS idx_inquiries_email ON inquiries(email);
 CREATE INDEX IF NOT EXISTS idx_inquiries_submittedat ON inquiries(submittedat DESC);
 
+-- 11. VALIDATION DRAFTS TABLE (Data validation drafts saved in Supabase only)
+CREATE TABLE IF NOT EXISTS validation_drafts (
+    id TEXT PRIMARY KEY,
+    permit_no TEXT,
+    dbo_name TEXT,
+    premise_name TEXT,
+    validation_period TEXT,
+    category TEXT,
+    location TEXT,
+    county TEXT,
+    branch TEXT,
+    step INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'draft',
+    raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_validation_drafts_permit_no ON validation_drafts(permit_no);
+CREATE INDEX IF NOT EXISTS idx_validation_drafts_status ON validation_drafts(status);
+CREATE INDEX IF NOT EXISTS idx_validation_drafts_updated_at ON validation_drafts(updated_at DESC);
+
 -- ============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- Enable full read/write access for application usage via Supabase Anon API
@@ -305,7 +327,7 @@ BEGIN
           AND table_name IN (
             'licensed_clients', 'client_returns', 'data_validations', 
             'kdb_validations', 'agreements', 'closures', 'debtors', 
-            'staff_config', 'complaints', 'inquiries'
+            'staff_config', 'complaints', 'inquiries', 'validation_drafts'
           )
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
@@ -320,7 +342,7 @@ BEGIN
     END LOOP;
 END $$;
 
--- 11. ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
+-- 12. ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
 -- Enables public API access (via Supabase anon/authenticated roles) for all application tables
 
 DO $$ 
@@ -329,7 +351,7 @@ DECLARE
     tables TEXT[] := ARRAY[
         'licensed_clients', 'client_returns', 'data_validations', 
         'kdb_validations', 'agreements', 'closures', 'debtors', 
-        'staff_config', 'complaints', 'inquiries'
+        'staff_config', 'complaints', 'inquiries', 'validation_drafts'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP

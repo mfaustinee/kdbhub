@@ -35,11 +35,21 @@ export interface EnabledModules {
   stakeholderComplaint: boolean;
 }
 
+export interface AuthoritySignature {
+  id: string;
+  name: string; // Assigned name of the authority/officer (e.g., "Officer John Doe", "Enock Langat")
+  title?: string; // Optional designation (e.g., "Compliance Officer", "Regional Inspector")
+  signature: string; // Base64 data URL
+  createdAt?: string;
+  isDefault?: boolean;
+}
+
 export interface StaffConfig {
   officialSignature: string; // Base64
   officialName?: string;
   officialTitle?: string;
   enabledModules?: EnabledModules;
+  authoritySignatures?: AuthoritySignature[];
 }
 
 export interface AgreementData extends DebtorRecord {
@@ -458,6 +468,38 @@ export const getIndividualValidationsCount = (v: DataValidation): number => {
   if (Array.isArray((v as any).sales) && (v as any).sales.length > 0) {
     return (v as any).sales.length;
   }
+  if (v.period) {
+    const clean = String(v.period).replace(/[*_]/g, ' ').replace(/\s+/g, ' ').trim();
+    // Check quarter range like Q1-Q2, Q3-Q4
+    const qRange = clean.match(/Q([1-4])\s*(?:-|to)\s*Q([1-4])/i);
+    if (qRange) {
+      const qDiff = Math.abs(parseInt(qRange[2], 10) - parseInt(qRange[1], 10)) + 1;
+      return qDiff * 3;
+    }
+    // Check month range
+    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const foundIdx: number[] = [];
+    monthNames.forEach((m, idx) => {
+      const reg = new RegExp(`\\b${m}`, 'i');
+      if (reg.test(clean)) foundIdx.push(idx);
+    });
+    if (foundIdx.length >= 2 && (clean.includes('to') || clean.includes('-') || clean.includes('–'))) {
+      const startM = foundIdx[0];
+      const endM = foundIdx[foundIdx.length - 1];
+      const yearMatches = [...clean.matchAll(/\b(20\d{2})\b/g)];
+      if (yearMatches.length >= 2) {
+        const y1 = parseInt(yearMatches[0][1], 10);
+        const y2 = parseInt(yearMatches[1][1], 10);
+        const diff = (y2 - y1) * 12 + (endM - startM) + 1;
+        if (diff > 0 && diff <= 36) return diff;
+      } else {
+        let diff = endM - startM + 1;
+        if (diff <= 0) diff += 12;
+        return diff;
+      }
+    }
+    if (foundIdx.length > 0) return foundIdx.length;
+  }
   return 1;
 };
 
@@ -496,4 +538,27 @@ export const isSameCategory = (clientCategory: string | undefined | null, target
   return false;
 };
 
+export interface ValidationDraft {
+  id: string;
+  permitNo?: string;
+  permit_no?: string;
+  dboName?: string;
+  dbo_name?: string;
+  premiseName?: string;
+  premise_name?: string;
+  validationPeriod?: string;
+  validation_period?: string;
+  category?: string;
+  location?: string;
+  county?: string;
+  branch?: string;
+  step?: number;
+  status?: 'draft' | 'submitted';
+  rawData?: any;
+  raw_data?: any;
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+}
 

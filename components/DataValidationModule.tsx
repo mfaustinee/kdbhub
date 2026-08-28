@@ -6,7 +6,7 @@ import SignatureCanvas from 'react-signature-canvas';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
-import { LicensedClient, ClientReturn, DataValidation, formatDateToDDMMYYYY, formatPermitNumber, clampYear } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature } from '../types';
 import { 
   ClipboardCheck, 
   Database, 
@@ -33,7 +33,14 @@ import {
   ShieldCheck,
   ArrowDown,
   Store,
-  GitBranch
+  GitBranch,
+  FolderOpen,
+  Search,
+  X,
+  Plus,
+  RefreshCw,
+  Check,
+  Upload
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -457,82 +464,173 @@ const getPeriodTimestamp = (periodStr: string, fallbackDate?: string): number =>
   return 0;
 };
 
+const cleanPermitNumber = (s?: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+
+const parsePeriodMonthYear = (periodStr?: string | number, yearVal?: string | number): { month: string; year: number } => {
+  const months = [
+    'january', 'february', 'march', 'april', 'may', 'june',
+    'july', 'august', 'september', 'october', 'november', 'december'
+  ];
+  const abbrs = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+  let resMonth = '';
+  let resYear = 0;
+
+  if (yearVal !== undefined && yearVal !== null && yearVal !== '') {
+    const yNum = Number(String(yearVal).replace(/[^0-9]/g, ''));
+    if (!isNaN(yNum) && yNum >= 1980 && yNum <= 2050) {
+      resYear = yNum;
+    }
+  }
+
+  if (periodStr !== undefined && periodStr !== null) {
+    const raw = String(periodStr).trim();
+    
+    // Check if period contains 4-digit year if year was not set
+    if (!resYear) {
+      const yMatch = raw.match(/\b(19\d\d|20\d\d)\b/);
+      if (yMatch) {
+        resYear = parseInt(yMatch[1], 10);
+      }
+    }
+
+    // Check if period is ISO or date format e.g. 2026-01 or 01/2026 or 15/01/2026
+    const isoMatch = raw.match(/^(\d{4})[-/](\d{1,2})/);
+    if (isoMatch) {
+      if (!resYear) resYear = parseInt(isoMatch[1], 10);
+      const mIdx = parseInt(isoMatch[2], 10) - 1;
+      if (mIdx >= 0 && mIdx < 12) resMonth = months[mIdx];
+    }
+
+    const slashMatch = raw.match(/^(\d{1,2})[-/](\d{4})/);
+    if (slashMatch) {
+      if (!resYear) resYear = parseInt(slashMatch[2], 10);
+      const mIdx = parseInt(slashMatch[1], 10) - 1;
+      if (mIdx >= 0 && mIdx < 12) resMonth = months[mIdx];
+    }
+
+    if (!resMonth) {
+      const lower = raw.toLowerCase();
+      // Check full month names
+      for (let i = 0; i < 12; i++) {
+        if (lower.includes(months[i])) {
+          resMonth = months[i];
+          break;
+        }
+      }
+      // Check abbreviations
+      if (!resMonth) {
+        for (let i = 0; i < 12; i++) {
+          const reg = new RegExp(`\\b${abbrs[i]}\\b`, 'i');
+          if (reg.test(lower) || lower.startsWith(abbrs[i])) {
+            resMonth = months[i];
+            break;
+          }
+        }
+      }
+      // Check numeric 1-12
+      if (!resMonth) {
+        const numOnly = parseInt(raw.replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(numOnly) && numOnly >= 1 && numOnly <= 12) {
+          resMonth = months[numOnly - 1];
+        }
+      }
+    }
+  }
+
+  return { month: resMonth, year: resYear };
+};
+
 const findMatchingReturn = (
   saleMonth: string,
   saleYear: string,
   dboName: string,
   premiseName: string,
+  permitNo: string,
   client: LicensedClient | null,
   returnsList: ClientReturn[]
 ): ClientReturn | undefined => {
   if (!returnsList || returnsList.length === 0) return undefined;
 
-  const targetMonth = normMonth(saleMonth);
-  const targetYear = Number(saleYear);
+  const targetPeriod = parsePeriodMonthYear(saleMonth, saleYear);
+  if (!targetPeriod.month || !targetPeriod.year) return undefined;
 
+  // Filter returns matching the exact period month and year first
+  const periodMatchingReturns = returnsList.filter(r => {
+    const rPeriod = parsePeriodMonthYear(r.period, r.year);
+    return rPeriod.month === targetPeriod.month && rPeriod.year === targetPeriod.year;
+  });
+
+  if (periodMatchingReturns.length === 0) return undefined;
+
+  // Extract client identity signatures
   const dboNorm = normStr(dboName);
   const premiseNorm = normStr(premiseName);
+  const permitClean = cleanPermitNumber(permitNo);
   const clientNameNorm = normStr(client?.clientName);
   const clientPremiseNorm = normStr(client?.premiseName);
-  const clientIdNorm = normStr(client?.id);
-  const permitNorm = normStr(client?.permitNumber);
+  const clientPermitClean = cleanPermitNumber(client?.permitNumber);
+  const clientIdClean = cleanPermitNumber(client?.id);
 
-  // Separate exact/strict period matching
-  const matchingReturns = returnsList.filter(r => {
-    // 1. Check period & year
-    const rMonth = normMonth(r.period);
-    const rYear = Number(r.year) || (r.period ? Number(r.period.replace(/[^0-9]/g, '')) : NaN);
+  // Branch permits & premise names
+  const branchPermitsClean = (client?.branches || []).map(b => cleanPermitNumber(b.permitNumber || b.id)).filter(Boolean);
+  const branchPremisesNorm = (client?.branches || []).map(b => normStr(b.premiseName)).filter(Boolean);
 
-    const monthMatch = rMonth === targetMonth || (r.period && normMonth(r.period) === targetMonth);
-    const yearMatch = !isNaN(targetYear) && (!isNaN(rYear) ? rYear === targetYear : (r.period && r.period.includes(targetYear.toString())));
-
-    if (!monthMatch || !yearMatch) return false;
-
-    // 2. Check client identification (Exact match hierarchy)
-    const rClientNorm = normStr(r.clientName);
-    const rClientIdNorm = normStr(r.clientId);
-
-    if (rClientIdNorm && (rClientIdNorm === clientIdNorm || rClientIdNorm === permitNorm)) {
-      return true;
-    }
-
-    if (rClientNorm) {
-      if (
-        (dboNorm && rClientNorm === dboNorm) ||
-        (clientNameNorm && rClientNorm === clientNameNorm) ||
-        (premiseNorm && rClientNorm === premiseNorm) ||
-        (clientPremiseNorm && rClientNorm === clientPremiseNorm)
-      ) {
-        return true;
-      }
-    }
-
-    return false;
-  });
-
-  if (matchingReturns.length > 0) {
-    return matchingReturns[0];
+  // 1. Tier 1: Highest Priority — Exact Permit / Client ID Match
+  if (permitClean || clientPermitClean || clientIdClean || branchPermitsClean.length > 0) {
+    const permitMatch = periodMatchingReturns.find(r => {
+      const rIdClean = cleanPermitNumber(r.clientId);
+      if (!rIdClean) return false;
+      return (
+        (permitClean && rIdClean === permitClean) ||
+        (clientPermitClean && rIdClean === clientPermitClean) ||
+        (clientIdClean && rIdClean === clientIdClean) ||
+        branchPermitsClean.includes(rIdClean)
+      );
+    });
+    if (permitMatch) return permitMatch;
   }
 
-  // Fallback: only if no exact match found and client identifiers are sufficiently distinctive (>= 6 chars)
-  return returnsList.find(r => {
-    const rMonth = normMonth(r.period);
-    const rYear = Number(r.year) || (r.period ? Number(r.period.replace(/[^0-9]/g, '')) : NaN);
-    const monthMatch = rMonth === targetMonth || (r.period && normMonth(r.period) === targetMonth);
-    const yearMatch = !isNaN(targetYear) && (!isNaN(rYear) ? rYear === targetYear : (r.period && r.period.includes(targetYear.toString())));
-    if (!monthMatch || !yearMatch) return false;
+  // 2. Tier 2: Exact DBO / Client Name Match
+  if (dboNorm || clientNameNorm) {
+    const nameMatch = periodMatchingReturns.find(r => {
+      const rClientNorm = normStr(r.clientName);
+      if (!rClientNorm) return false;
+      return (
+        (dboNorm && rClientNorm === dboNorm) ||
+        (clientNameNorm && rClientNorm === clientNameNorm)
+      );
+    });
+    if (nameMatch) return nameMatch;
+  }
 
-    const rClientNorm = normStr(r.clientName);
-    if (!rClientNorm || rClientNorm.length < 6) return false;
+  // 3. Tier 3: Exact Premise / Branch Premise Name Match
+  if (premiseNorm || clientPremiseNorm || branchPremisesNorm.length > 0) {
+    const premiseMatch = periodMatchingReturns.find(r => {
+      const rClientNorm = normStr(r.clientName);
+      if (!rClientNorm) return false;
+      return (
+        (premiseNorm && rClientNorm === premiseNorm) ||
+        (clientPremiseNorm && rClientNorm === clientPremiseNorm) ||
+        branchPremisesNorm.includes(rClientNorm)
+      );
+    });
+    if (premiseMatch) return premiseMatch;
+  }
 
-    if (dboNorm && dboNorm.length >= 6 && (dboNorm === rClientNorm || (dboNorm.startsWith(rClientNorm) && rClientNorm.length >= 8))) {
-      return true;
-    }
-    if (clientNameNorm && clientNameNorm.length >= 6 && (clientNameNorm === rClientNorm || (clientNameNorm.startsWith(rClientNorm) && rClientNorm.length >= 8))) {
-      return true;
-    }
-    return false;
-  });
+  // 4. Tier 4: Distinctive Stem Match (ignoring generic entity words like LTD, COOPERATIVE, etc.)
+  const stripSuffixes = (s: string) => s.replace(/(limited|ltd|cooperative|coop|society|group|enterprises|plant|depot|station|dairy|dairies|bar|milk)/g, '').trim();
+  const dboStem = stripSuffixes(dboNorm || clientNameNorm);
+  if (dboStem && dboStem.length >= 5) {
+    const stemMatches = periodMatchingReturns.filter(r => {
+      const rClientNorm = normStr(r.clientName);
+      const rStem = stripSuffixes(rClientNorm);
+      return rStem && rStem.length >= 5 && rStem === dboStem;
+    });
+    if (stemMatches.length === 1) return stemMatches[0];
+  }
+
+  return undefined;
 };
 
 const initialData: FormData = {
@@ -618,6 +716,17 @@ export function DataValidationModule() {
   const [selectedClient, setSelectedClient] = useState<LicensedClient | null>(null);
   const [validationPremiseMode, setValidationPremiseMode] = useState<string>('main');
   const [dboHasBranches, setDboHasBranches] = useState<boolean | null>(null);
+
+  // Unified branch facility detection: branch premise selected or new branch being created
+  const isBranchFacility = Boolean(
+    (dboHasBranches === true && (
+      validationPremiseMode.startsWith('branch-') ||
+      validationPremiseMode === 'new'
+    )) ||
+    validationPremiseMode.startsWith('branch-') ||
+    validationPremiseMode === 'new'
+  );
+
   const [mismatchFields, setMismatchFields] = useState<{
     key: string;
     label: string;
@@ -696,6 +805,51 @@ export function DataValidationModule() {
   const [failedFields, setFailedFields] = useState<string[]>([]);
   const [isAmendment, setIsAmendment] = useState(false);
   const [hasAutofilledDbo, setHasAutofilledDbo] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
+  const [isSubmittingDraft, setIsSubmittingDraft] = useState(false);
+  const [draftsList, setDraftsList] = useState<ValidationDraft[]>([]);
+  const [isDraftsModalOpen, setIsDraftsModalOpen] = useState(false);
+  const [draftSearchQuery, setDraftSearchQuery] = useState('');
+
+  // Authority signatures state & modal management
+  const [authoritySignatures, setAuthoritySignatures] = useState<AuthoritySignature[]>([]);
+  const [showAddAuthorityModal, setShowAddAuthorityModal] = useState(false);
+  const [newOfficerName, setNewOfficerName] = useState('');
+  const [newOfficerTitle, setNewOfficerTitle] = useState('');
+  const [newSigPreview, setNewSigPreview] = useState<string>('');
+  const [newSigMode, setNewSigMode] = useState<'upload' | 'draw'>('upload');
+  const [isSavingNewSig, setIsSavingNewSig] = useState(false);
+  const authSigCanvasRef = useRef<SignatureCanvas | null>(null);
+  const [isSelectingAuthoritySig, setIsSelectingAuthoritySig] = useState(false);
+
+  // Load and listen for authority signatures updates
+  useEffect(() => {
+    let isCancelled = false;
+    const loadAuthoritySignatures = async () => {
+      try {
+        const sigs = await DBService.getAuthoritySignatures();
+        if (!isCancelled) {
+          setAuthoritySignatures(sigs);
+        }
+      } catch (err) {
+        console.warn('Error loading authority signatures:', err);
+      }
+    };
+    loadAuthoritySignatures();
+
+    const handleSigUpdate = (e: any) => {
+      if (e?.detail && Array.isArray(e.detail)) {
+        setAuthoritySignatures(e.detail);
+      } else {
+        loadAuthoritySignatures();
+      }
+    };
+    window.addEventListener('kdb_authority_signatures_updated', handleSigUpdate);
+    return () => {
+      isCancelled = true;
+      window.removeEventListener('kdb_authority_signatures_updated', handleSigUpdate);
+    };
+  }, []);
 
   const [globalUnit, setGlobalUnit] = useState<'L' | 'Kg'>('L');
 
@@ -765,6 +919,15 @@ export function DataValidationModule() {
     const isMirroredCategory = formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor';
 
     const updatedSales = formData.sales.map(sale => {
+      if (isBranchFacility) {
+        return {
+          ...sale,
+          qtyDeclared: '',
+          underDeclared: '',
+          projectedQty: ''
+        };
+      }
+
       const declared = parseFloat(sale.qtyDeclared) || 0;
       const verified = parseFloat(sale.verifiedQty) || 0;
       const diff = Math.max(0, verified - declared);
@@ -782,8 +945,8 @@ export function DataValidationModule() {
       };
     });
 
-    // Auto populate non-compliance based on under-declaration
-    const newNonCompliance = formData.hasLocalSales 
+    // Auto populate non-compliance based on under-declaration (never for branch facilities)
+    const newNonCompliance = (!isBranchFacility && formData.hasLocalSales)
       ? updatedSales
         .filter(sale => parseFloat(sale.underDeclared) > 0 && sale.month.trim() !== '')
         .map(sale => {
@@ -811,7 +974,7 @@ export function DataValidationModule() {
         nonCompliance: newNonCompliance 
       }));
     }
-  }, [formData.sales, formData.intakes, formData.category]);
+  }, [formData.sales, formData.intakes, formData.category, isBranchFacility, formData.hasLocalSales]);
 
   const totalPenalty = formData.nonCompliance.reduce((sum, nc) => sum + (parseFloat(nc.amount) || 0), 0);
 
@@ -1216,6 +1379,19 @@ export function DataValidationModule() {
     return false;
   };
 
+  const refreshDraftsList = async () => {
+    try {
+      const drafts = await DBService.getValidationDrafts(true);
+      if (Array.isArray(drafts)) {
+        setDraftsList(drafts);
+      }
+      return drafts;
+    } catch (e) {
+      console.warn('Failed to load drafts from Supabase:', e);
+      return [];
+    }
+  };
+
   const saveDraftToStorage = (
     customFormData?: FormData,
     customStep?: number,
@@ -1243,6 +1419,7 @@ export function DataValidationModule() {
       isAmendment,
       isValidationPeriodEdited,
       hasAutofilledDbo,
+      draftId: activeDraftId,
       savedAt: now.toISOString()
     };
 
@@ -1263,58 +1440,206 @@ export function DataValidationModule() {
     }
   };
 
-  const handleManualSaveDraft = () => {
-    if (!isFormDirtyOrPopulated(formData, declarations)) {
-      setStatus({ type: 'error', message: 'Form is empty. Enter some information before saving a draft.' });
+  // Submit and save draft to Supabase only (no Google Sheets sync)
+  const handleSubmitDraftToSupabase = async (customFormData?: FormData, customStep?: number, silent = false) => {
+    const currentForm = customFormData || formData;
+    const currentStep = customStep !== undefined ? customStep : step;
+
+    if (!isFormDirtyOrPopulated(currentForm, declarations)) {
+      if (!silent) {
+        setStatus({ type: 'error', message: 'Form is empty. Enter some information before submitting a draft.' });
+      }
       return;
     }
-    saveDraftToStorage(formData, step, true);
-  };
 
-  // Load saved draft on mount
-  useEffect(() => {
+    if (!silent) setIsSubmittingDraft(true);
+
+    let sig = currentForm.dboSignature;
+    if (dboSigPad.current && !dboSigPad.current.isEmpty()) {
+      try {
+        sig = dboSigPad.current.getTrimmedCanvas().toDataURL('image/png');
+      } catch (_) {}
+    }
+
+    const now = new Date();
+    const timeFormatted = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    // Lock end time in the draft state: preserve if already set, or lock at this exact moment
+    const lockedEndTime = currentForm.endTime || timeFormatted;
+
+    const formToSave = { 
+      ...currentForm, 
+      endTime: lockedEndTime,
+      dboSignature: sig || currentForm.dboSignature 
+    };
+
+    // Update active component state so the form UI immediately reflects the locked End Time
+    setFormData(prev => ({ ...prev, endTime: lockedEndTime }));
+
+    const draftId = activeDraftId || (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' 
+      ? crypto.randomUUID() 
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        }));
+
+    const nowIso = now.toISOString();
+
+    const rawData = {
+      formData: formToSave,
+      step: currentStep,
+      declarations,
+      selectedClient,
+      validationPremiseMode,
+      globalUnit,
+      isAmendment,
+      isValidationPeriodEdited,
+      hasAutofilledDbo,
+      draftId,
+      savedAt: nowIso
+    };
+
+    const draftPayload: ValidationDraft = {
+      id: draftId,
+      permitNo: formToSave.permitNo || '',
+      permit_no: formToSave.permitNo || '',
+      dboName: formToSave.dboName || '',
+      dbo_name: formToSave.dboName || '',
+      premiseName: formToSave.premiseName || '',
+      premise_name: formToSave.premiseName || '',
+      validationPeriod: formToSave.validationPeriod || '',
+      validation_period: formToSave.validationPeriod || '',
+      category: formToSave.category || '',
+      location: formToSave.location || '',
+      county: formToSave.county || 'Kericho',
+      branch: formToSave.county || 'Kericho',
+      step: currentStep,
+      status: 'draft',
+      rawData,
+      raw_data: rawData,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+
     try {
-      const draftV2Raw = localStorage.getItem('kdb_validation_form_draft_v2');
-      const legacyDraftRaw = localStorage.getItem('kdb_validation_form_draft');
-      
-      let parsedDraft: any = null;
-      if (draftV2Raw) {
-        parsedDraft = JSON.parse(draftV2Raw);
-      } else if (legacyDraftRaw) {
-        const legacyData = JSON.parse(legacyDraftRaw);
-        const legacyStep = localStorage.getItem('kdb_validation_form_draft_step');
-        parsedDraft = {
-          formData: legacyData,
-          step: legacyStep ? parseInt(legacyStep, 10) : 0,
-          savedAt: new Date().toISOString()
-        };
-      }
+      const saved = await DBService.saveValidationDraft(draftPayload);
+      setActiveDraftId(saved.id);
 
-      if (parsedDraft && parsedDraft.formData && isFormDirtyOrPopulated(parsedDraft.formData, parsedDraft.declarations)) {
-        setHasDraft(true);
-        const form = parsedDraft.formData;
-        let timeStr = '';
-        if (parsedDraft.savedAt) {
-          try {
-            const d = new Date(parsedDraft.savedAt);
-            timeStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          } catch (_) {}
-        }
-        setDraftInfo({
-          clientOrDbo: form.dboName || form.confirmationName || form.premiseName || 'Active Validation',
-          premise: form.premiseName || '',
-          period: form.validationPeriod || '',
-          step: parsedDraft.step ?? 0,
-          savedTime: timeStr
+      // Also keep local storage copy for instantaneous backup
+      saveDraftToStorage(formToSave, currentStep, false);
+
+      const timeFormatted = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      setDraftLastSaved(timeFormatted);
+
+      await refreshDraftsList();
+
+      if (!silent) {
+        setStatus({
+          type: 'success',
+          message: `Draft successfully submitted to Supabase at ${timeFormatted}! You can retrieve and modify it later, then submit & sync to Sheet.`
         });
       }
-    } catch (e) {
-      console.error('Error reading saved draft on mount:', e);
+    } catch (err: any) {
+      console.error('Failed to save draft to Supabase:', err);
+      // Fallback: save to local storage
+      saveDraftToStorage(formToSave, currentStep, false);
+      if (!silent) {
+        setStatus({
+          type: 'success',
+          message: `Draft saved locally (Supabase offline). You can continue working.`
+        });
+      }
     } finally {
-      setTimeout(() => {
-        isMountedRef.current = true;
-      }, 150);
+      if (!silent) setIsSubmittingDraft(false);
     }
+  };
+
+  const handleManualSaveDraft = () => {
+    handleSubmitDraftToSupabase(formData, step, false);
+  };
+
+  // Load saved draft on mount from Supabase and local storage
+  useEffect(() => {
+    const initDrafts = async () => {
+      try {
+        // 1. Fetch Supabase drafts
+        const drafts = await DBService.getValidationDrafts(true);
+        if (Array.isArray(drafts) && drafts.length > 0) {
+          setDraftsList(drafts);
+          const latest = drafts[0];
+          const raw = latest.rawData || latest.raw_data || {};
+          const form = raw.formData || latest;
+          let timeStr = '';
+          if (latest.updatedAt || latest.updated_at || latest.createdAt) {
+            try {
+              const d = new Date(latest.updatedAt || latest.updated_at || latest.createdAt || '');
+              timeStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } catch (_) {}
+          }
+          setHasDraft(true);
+          setDraftInfo({
+            clientOrDbo: latest.dboName || latest.dbo_name || form.dboName || 'Saved Draft',
+            premise: latest.premiseName || latest.premise_name || form.premiseName || '',
+            period: latest.validationPeriod || latest.validation_period || form.validationPeriod || '',
+            step: latest.step ?? (raw.step ?? 0),
+            savedTime: timeStr
+          });
+          return;
+        }
+
+        // 2. Fallback to localStorage draft if no Supabase draft found
+        const draftV2Raw = localStorage.getItem('kdb_validation_form_draft_v2');
+        const legacyDraftRaw = localStorage.getItem('kdb_validation_form_draft');
+        
+        let parsedDraft: any = null;
+        if (draftV2Raw) {
+          parsedDraft = JSON.parse(draftV2Raw);
+        } else if (legacyDraftRaw) {
+          const legacyData = JSON.parse(legacyDraftRaw);
+          const legacyStep = localStorage.getItem('kdb_validation_form_draft_step');
+          parsedDraft = {
+            formData: legacyData,
+            step: legacyStep ? parseInt(legacyStep, 10) : 0,
+            savedAt: new Date().toISOString()
+          };
+        }
+
+        if (parsedDraft && parsedDraft.formData && isFormDirtyOrPopulated(parsedDraft.formData, parsedDraft.declarations)) {
+          setHasDraft(true);
+          const form = parsedDraft.formData;
+          let timeStr = '';
+          if (parsedDraft.savedAt) {
+            try {
+              const d = new Date(parsedDraft.savedAt);
+              timeStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } catch (_) {}
+          }
+          setDraftInfo({
+            clientOrDbo: form.dboName || form.confirmationName || form.premiseName || 'Active Validation',
+            premise: form.premiseName || '',
+            period: form.validationPeriod || '',
+            step: parsedDraft.step ?? 0,
+            savedTime: timeStr
+          });
+        }
+      } catch (e) {
+        console.error('Error reading saved draft on mount:', e);
+      } finally {
+        setTimeout(() => {
+          isMountedRef.current = true;
+        }, 150);
+      }
+    };
+
+    initDrafts();
+
+    const handleDraftsUpdated = () => {
+      DBService.getValidationDrafts(true).then(setDraftsList).catch(() => {});
+    };
+    window.addEventListener('validation_drafts_updated', handleDraftsUpdated);
+    return () => {
+      window.removeEventListener('validation_drafts_updated', handleDraftsUpdated);
+    };
   }, []);
 
   // Save draft automatically when form data changes
@@ -1346,22 +1671,57 @@ export function DataValidationModule() {
     hasDraft
   ]);
 
-  const handleRestoreDraft = () => {
+  const handleRestoreDraft = (draftObj?: ValidationDraft) => {
     isRestoringRef.current = true;
     try {
-      const draftV2Raw = localStorage.getItem('kdb_validation_form_draft_v2');
-      const legacyDraftRaw = localStorage.getItem('kdb_validation_form_draft');
-      
       let parsed: any = null;
-      if (draftV2Raw) {
-        parsed = JSON.parse(draftV2Raw);
-      } else if (legacyDraftRaw) {
-        const legacyData = JSON.parse(legacyDraftRaw);
-        const legacyStep = localStorage.getItem('kdb_validation_form_draft_step');
+      let restoredDraftId: string | null = null;
+
+      if (draftObj) {
+        // Restoring from a Supabase draft record
+        const raw = draftObj.rawData || draftObj.raw_data || draftObj;
         parsed = {
-          formData: legacyData,
-          step: legacyStep ? parseInt(legacyStep, 10) : 0
+          formData: raw.formData || {
+            ...initialData,
+            dboName: draftObj.dboName || draftObj.dbo_name || '',
+            premiseName: draftObj.premiseName || draftObj.premise_name || '',
+            permitNo: draftObj.permitNo || draftObj.permit_no || '',
+            validationPeriod: draftObj.validationPeriod || draftObj.validation_period || '',
+            category: draftObj.category || '',
+            location: draftObj.location || '',
+            county: draftObj.county || 'Kericho'
+          },
+          step: raw.step !== undefined ? raw.step : (draftObj.step ?? 1),
+          declarations: raw.declarations || declarations,
+          selectedClient: raw.selectedClient || null,
+          validationPremiseMode: raw.validationPremiseMode || 'main',
+          globalUnit: raw.globalUnit || 'L',
+          isAmendment: raw.isAmendment || false,
+          isValidationPeriodEdited: raw.isValidationPeriodEdited || false,
+          hasAutofilledDbo: raw.hasAutofilledDbo || false,
+          savedAt: draftObj.updatedAt || draftObj.updated_at || draftObj.createdAt
         };
+        restoredDraftId = draftObj.id;
+      } else {
+        // Restoring from local draft or most recent Supabase draft
+        const draftV2Raw = localStorage.getItem('kdb_validation_form_draft_v2');
+        const legacyDraftRaw = localStorage.getItem('kdb_validation_form_draft');
+        
+        if (draftV2Raw) {
+          parsed = JSON.parse(draftV2Raw);
+          restoredDraftId = parsed.draftId || activeDraftId || null;
+        } else if (legacyDraftRaw) {
+          const legacyData = JSON.parse(legacyDraftRaw);
+          const legacyStep = localStorage.getItem('kdb_validation_form_draft_step');
+          parsed = {
+            formData: legacyData,
+            step: legacyStep ? parseInt(legacyStep, 10) : 0,
+            savedAt: new Date().toISOString()
+          };
+        } else if (draftsList.length > 0) {
+          const latest = draftsList[0];
+          return handleRestoreDraft(latest);
+        }
       }
 
       if (parsed && parsed.formData) {
@@ -1374,7 +1734,11 @@ export function DataValidationModule() {
         if (parsed.isValidationPeriodEdited !== undefined) setIsValidationPeriodEdited(parsed.isValidationPeriodEdited);
         if (parsed.hasAutofilledDbo !== undefined) setHasAutofilledDbo(parsed.hasAutofilledDbo);
         
-        const restoredStep = typeof parsed.step === 'number' ? parsed.step : (parsed.formData.branch ? 1 : 0);
+        if (restoredDraftId) {
+          setActiveDraftId(restoredDraftId);
+        }
+
+        const restoredStep = typeof parsed.step === 'number' && parsed.step > 0 ? parsed.step : 1;
         setStep(restoredStep);
         setFailedFields([]);
         
@@ -1387,8 +1751,9 @@ export function DataValidationModule() {
 
         setStatus({ 
           type: 'success', 
-          message: `Unsaved draft successfully restored! Continued at Step ${restoredStep === 0 ? '0 (Search)' : restoredStep}.` 
+          message: `Draft restored from Supabase! You can modify it and click 'Submit & Sync to Sheet' when ready, or 'Submit Draft' to update.` 
         });
+        setIsDraftsModalOpen(false);
       }
     } catch (err) {
       console.error('Error restoring draft:', err);
@@ -1401,14 +1766,36 @@ export function DataValidationModule() {
     }
   };
 
-  const handleDiscardDraft = () => {
+  const handleDiscardDraft = async () => {
     localStorage.removeItem('kdb_validation_form_draft_v2');
     localStorage.removeItem('kdb_validation_form_draft');
     localStorage.removeItem('kdb_validation_form_draft_step');
+    if (activeDraftId) {
+      try {
+        await DBService.deleteValidationDraft(activeDraftId);
+      } catch (_) {}
+      setActiveDraftId(null);
+    }
     setHasDraft(false);
     setDraftInfo(null);
     setDraftLastSaved(null);
+    refreshDraftsList();
     setStatus({ type: 'success', message: 'Saved draft discarded.' });
+  };
+
+  const handleDeleteDraft = async (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this draft from Supabase?")) return;
+    try {
+      await DBService.deleteValidationDraft(id);
+      if (activeDraftId === id) {
+        setActiveDraftId(null);
+      }
+      await refreshDraftsList();
+      setStatus({ type: 'success', message: 'Draft deleted from Supabase.' });
+    } catch (err: any) {
+      setStatus({ type: 'error', message: `Failed to delete draft: ${err.message || err}` });
+    }
   };
 
   const handleDboAutofill = (record: any) => {
@@ -1527,7 +1914,9 @@ export function DataValidationModule() {
           category: branch.premiseCategory,
           location: branch.location,
           county: toSentenceCase(branch.county || 'Kericho'),
-          expiryDate: formatToYYYYMMDD(branch.expiryDate || '')
+          expiryDate: formatToYYYYMMDD(branch.expiryDate || ''),
+          sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '', projectedQty: '' })),
+          nonCompliance: []
         }));
       }
       // Since it's an existing branch being validated, clear reconciliation screen for parent profile
@@ -1535,6 +1924,11 @@ export function DataValidationModule() {
       setReconciliationResolved(true);
     } else if (mode === 'new') {
       // It's a new branch, clear fields or keep them so they can edit
+      setFormData(prev => ({
+        ...prev,
+        sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '', projectedQty: '' })),
+        nonCompliance: []
+      }));
       setShowReconciliation(false);
       setReconciliationResolved(true);
     }
@@ -1924,7 +2318,11 @@ export function DataValidationModule() {
 
   // Returns quantity injection pipeline
   useEffect(() => {
-    if ((!formData.dboName && !formData.premiseName && !selectedClient) || returnsData.length === 0) return;
+    if (isBranchFacility) {
+      // Branches are not subject to quantity declared or returns injection
+      return;
+    }
+    if ((!formData.dboName && !formData.premiseName && !formData.permitNo && !selectedClient) || returnsData.length === 0) return;
 
     setFormData(prev => {
       let hasChanged = false;
@@ -1943,16 +2341,16 @@ export function DataValidationModule() {
           sale.year,
           prev.dboName,
           prev.premiseName,
+          prev.permitNo,
           selectedClient,
           returnsData
         );
 
-        const targetQty = matchingReturn && matchingReturn.qty !== undefined && matchingReturn.qty !== null
-          ? matchingReturn.qty.toString()
+        const targetQty = matchingReturn && matchingReturn.qty !== undefined && matchingReturn.qty !== null && !isNaN(Number(matchingReturn.qty))
+          ? Number(matchingReturn.qty).toString()
           : 'Not Filed';
 
         const isTargetNumeric = targetQty !== 'Not Filed' && targetQty.trim() !== '';
-        const isCurrentEmptyOrNotFiled = !sale.qtyDeclared || sale.qtyDeclared === 'Not Filed';
 
         if (isTargetNumeric) {
           if (sale.qtyDeclared !== targetQty) {
@@ -1964,14 +2362,16 @@ export function DataValidationModule() {
               avgVolPerDay: (parseFloat(targetQty) / 30).toFixed(2).replace(/\.?0+$/, '')
             };
           }
-        } else if (isCurrentEmptyOrNotFiled && sale.qtyDeclared !== 'Not Filed') {
-          hasChanged = true;
-          return { 
-            ...sale, 
-            qtyDeclared: 'Not Filed',
-            verifiedQty: '0',
-            avgVolPerDay: '0'
-          };
+        } else {
+          if (sale.qtyDeclared !== 'Not Filed') {
+            hasChanged = true;
+            return { 
+              ...sale, 
+              qtyDeclared: 'Not Filed',
+              verifiedQty: sale.verifiedQty && sale.verifiedQty !== '0' && sale.verifiedQty !== sale.qtyDeclared ? sale.verifiedQty : '0',
+              avgVolPerDay: '0'
+            };
+          }
         }
         return sale;
       });
@@ -1981,7 +2381,7 @@ export function DataValidationModule() {
       }
       return prev;
     });
-  }, [formData.dboName, formData.premiseName, selectedClient, returnsData, formData.sales, manuallyEditedQtyDeclared]);
+  }, [formData.dboName, formData.premiseName, formData.permitNo, selectedClient, returnsData, formData.sales, manuallyEditedQtyDeclared, isBranchFacility]);
 
   // Re-fetch returnsData when step changes or client changes to keep absolute sync
   useEffect(() => {
@@ -2142,10 +2542,7 @@ export function DataValidationModule() {
         });
       }
       if (formData.hasLocalSales) {
-        const isBranchValidation = dboHasBranches === true && (
-          validationPremiseMode.startsWith('branch-') ||
-          validationPremiseMode === 'new'
-        );
+        const isBranchValidation = isBranchFacility;
         formData.sales.forEach((sale, idx) => {
           if (!sale.month) missing.push(`sale-${idx}-month`);
           if (!sale.year) missing.push(`sale-${idx}-year`);
@@ -2341,12 +2738,6 @@ export function DataValidationModule() {
       currentY += 10;
     }
 
-    // Check if validating a branch facility (declared returns are filed at HQ/Main facility)
-    const isBranchFacility = dboHasBranches === true && (
-      validationPremiseMode.startsWith('branch-') ||
-      validationPremiseMode === 'new'
-    );
-
     // Sales Table
     if (data.hasLocalSales) {
       checkPageBreak(25);
@@ -2356,20 +2747,14 @@ export function DataValidationModule() {
       doc.setFont("helvetica", "normal");
       
       if (isBranchFacility) {
-        // For branches, declared volume is consolidated under HQ/Main branch returns
+        // For branches, only witnessed quantity, selling price, and avg volume are recorded
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Month/Year', `Verified (${globalUnit})`, `Projected (${globalUnit})`, 'Buying Price', 'Selling Price', `Avg Vol/Day (${globalUnit}/Day)`]],
-          body: data.sales.map(s => [`${s.month} ${s.year}`, s.verifiedQty, s.projectedQty, s.buyingPrice, s.sellingPrice, s.avgVolPerDay]),
-          styles: { fontSize: 7.5 }
+          head: [['Month/Year', `Witnessed Quantity (${globalUnit})`, 'Selling Price', `Avg Vol/Day (${globalUnit}/Day)`]],
+          body: data.sales.map(s => [`${s.month} ${s.year}`, s.verifiedQty, s.sellingPrice, s.avgVolPerDay]),
+          styles: { fontSize: 8 }
         });
-        currentY = (doc as any).lastAutoTable.finalY + 4;
-        doc.setFontSize(7.5);
-        doc.setFont("helvetica", "italic");
-        doc.setTextColor(100, 100, 100);
-        doc.text("* Note: Declared return volumes are consolidated and filed under the main facility permit.", 20, currentY);
-        doc.setTextColor(0, 0, 0);
-        currentY += 6;
+        currentY = (doc as any).lastAutoTable.finalY + 6;
       } else {
         // For main facility/HQ, show standard declared and under-declared audit columns
         autoTable(doc, {
@@ -2454,31 +2839,33 @@ export function DataValidationModule() {
     currentY = (doc as any).lastAutoTable.finalY;
     currentY += 10;
 
-    // Compliance Section
-    checkPageBreak(25);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("Compliance Commitment:", 20, currentY);
-    doc.setFont("helvetica", "normal");
-    
-    if (data.nonCompliance.length === 0) {
-      doc.setFontSize(10);
-      doc.setTextColor(0, 128, 0); // Green
-      doc.text("No under-declaration was witnessed.", 20, currentY + 7);
-      doc.setTextColor(0, 0, 0); // Reset to black
-      currentY += 15;
-    } else {
-      autoTable(doc, {
-        startY: currentY + 5,
-        head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Amount (Kshs)', 'Month/Year to Pay', 'MPESA REF']],
-        body: [
-          ...data.nonCompliance.map(nc => [nc.month, nc.litres, nc.amount, nc.paymentMonthYear, nc.mpesaRef]),
-          [{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, '', { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, '', '']
-        ],
-        styles: { fontSize: 8 }
-      });
-      currentY = (doc as any).lastAutoTable.finalY;
-      currentY += 10;
+    // Compliance Section (Only for main facility / standard validations)
+    if (!isBranchFacility) {
+      checkPageBreak(25);
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text("Compliance Commitment:", 20, currentY);
+      doc.setFont("helvetica", "normal");
+      
+      if (data.nonCompliance.length === 0) {
+        doc.setFontSize(10);
+        doc.setTextColor(0, 128, 0); // Green
+        doc.text("No under-declaration was witnessed.", 20, currentY + 7);
+        doc.setTextColor(0, 0, 0); // Reset to black
+        currentY += 15;
+      } else {
+        autoTable(doc, {
+          startY: currentY + 5,
+          head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Amount (Kshs)', 'Month/Year to Pay', 'MPESA REF']],
+          body: [
+            ...data.nonCompliance.map(nc => [nc.month, nc.litres, nc.amount, nc.paymentMonthYear, nc.mpesaRef]),
+            [{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, '', { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, '', '']
+          ],
+          styles: { fontSize: 8 }
+        });
+        currentY = (doc as any).lastAutoTable.finalY;
+        currentY += 10;
+      }
     }
 
     if (data.comments) {
@@ -2491,7 +2878,7 @@ export function DataValidationModule() {
       currentY += 20;
     }
 
-    // Declarations
+    // Declarations (1st and 3rd always, 2nd if under-declaration exists)
     checkPageBreak(45);
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
@@ -2554,7 +2941,11 @@ export function DataValidationModule() {
   };
 
   const handlePreview = async () => {
-    const pdf = await generatePDF();
+    const previewData: FormData = {
+      ...formData,
+      endTime: formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    const pdf = await generatePDF(previewData);
     setPdfPreview(pdf);
   };
 
@@ -2679,11 +3070,19 @@ export function DataValidationModule() {
     }
 
     try {
-      // For amendments, keep the original recorded date, startTime, and endTime intact
-      const endTime = isAmendment 
-        ? (formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) 
-        : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const updatedData = { ...formData, endTime };
+      // Preserve locked endTime from draft state, amendment, or manual entry; fallback to current time
+      const endTime = formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const updatedData = { 
+        ...formData, 
+        endTime,
+        isBranchFacility,
+        isBranch: isBranchFacility,
+        validationPremiseMode,
+        sales: isBranchFacility 
+          ? formData.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '', projectedQty: '' }))
+          : formData.sales,
+        nonCompliance: isBranchFacility ? [] : formData.nonCompliance
+      };
       setFormData(updatedData);
 
       const pdf = await generatePDF(updatedData);
@@ -3012,6 +3411,28 @@ export function DataValidationModule() {
         setIsValidationPeriodEdited(false);
         setIsAmendment(false);
 
+        // Once the draft is submitted and synced, it ceases as draft to become a validation sent to sheets and validations table
+        if (activeDraftId) {
+          try {
+            await DBService.deleteValidationDraft(activeDraftId);
+          } catch (delDraftErr) {
+            console.warn('Failed to delete active draft from Supabase:', delDraftErr);
+          }
+          setActiveDraftId(null);
+        } else {
+          try {
+            const currentDrafts = await DBService.getValidationDrafts();
+            const matching = currentDrafts.filter(d => 
+              (d.permitNo && d.permitNo === formData.permitNo) || 
+              (d.premiseName && formData.premiseName && d.premiseName.trim().toLowerCase() === formData.premiseName.trim().toLowerCase())
+            );
+            for (const d of matching) {
+              await DBService.deleteValidationDraft(d.id);
+            }
+          } catch (_) {}
+        }
+        refreshDraftsList();
+
         setFormData(initialData);
         setStep(0); // Go back to start
       } else {
@@ -3149,6 +3570,120 @@ export function DataValidationModule() {
     setFormData(prev => ({ ...prev, [field]: '' }));
   };
 
+  const handleSelectAuthoritySignature = (sig: AuthoritySignature) => {
+    setFormData(prev => ({
+      ...prev,
+      complianceSignature: sig.signature,
+      complianceOfficer: sig.name || prev.complianceOfficer
+    }));
+    setFailedFields(prev => prev.filter(f => f !== 'complianceSignature' && f !== 'complianceOfficer'));
+    setIsSelectingAuthoritySig(false);
+  };
+
+  const handleClearComplianceSignature = () => {
+    setFormData(prev => ({
+      ...prev,
+      complianceSignature: ''
+    }));
+    setIsSelectingAuthoritySig(true);
+  };
+
+  const handleDeleteAuthoritySignature = async (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const sigToDelete = authoritySignatures.find(s => s.id === id);
+    const confirmMsg = sigToDelete?.name 
+      ? `Delete authority signature for "${sigToDelete.name}" from your saved signatures library?`
+      : 'Delete this authority signature?';
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const updated = await DBService.deleteAuthoritySignature(id);
+      setAuthoritySignatures(updated);
+      // If currently selected signature was deleted, reset complianceSignature so user can pick another
+      if (sigToDelete && formData.complianceSignature === sigToDelete.signature) {
+        setFormData(prev => ({ ...prev, complianceSignature: '' }));
+      }
+    } catch (err) {
+      console.error('Failed to delete authority signature:', err);
+    }
+  };
+
+  const handleNewSigFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      let result = reader.result as string;
+      try {
+        result = await compressImage(result, 800, 400, true);
+      } catch (_) {}
+      setNewSigPreview(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveNewAuthoritySignature = async () => {
+    const trimmedName = newOfficerName.trim();
+    if (!trimmedName) {
+      alert('Please enter the officer name for this authority signature.');
+      return;
+    }
+
+    let finalSig = newSigPreview;
+    if (newSigMode === 'draw') {
+      if (!authSigCanvasRef.current || authSigCanvasRef.current.isEmpty()) {
+        alert('Please draw the authority signature before saving.');
+        return;
+      }
+      const rawData = authSigCanvasRef.current.getTrimmedCanvas().toDataURL('image/png');
+      try {
+        finalSig = await compressImage(rawData, 800, 400, true);
+      } catch (_) {
+        finalSig = rawData;
+      }
+    }
+
+    if (!finalSig) {
+      alert('Please provide a signature image or draw a signature.');
+      return;
+    }
+
+    setIsSavingNewSig(true);
+    try {
+      const newSigObj: AuthoritySignature = {
+        id: 'auth-sig-' + Date.now(),
+        name: trimmedName,
+        title: newOfficerTitle.trim() || undefined,
+        signature: finalSig,
+        createdAt: new Date().toISOString()
+      };
+
+      const updated = await DBService.addAuthoritySignature(newSigObj);
+      setAuthoritySignatures(updated);
+
+      // Automatically apply this signature to the current form!
+      setFormData(prev => ({
+        ...prev,
+        complianceSignature: newSigObj.signature,
+        complianceOfficer: newSigObj.name
+      }));
+      setFailedFields(prev => prev.filter(f => f !== 'complianceSignature' && f !== 'complianceOfficer'));
+
+      // Reset and close modal
+      setNewOfficerName('');
+      setNewOfficerTitle('');
+      setNewSigPreview('');
+      if (authSigCanvasRef.current) authSigCanvasRef.current.clear();
+      setShowAddAuthorityModal(false);
+      setIsSelectingAuthoritySig(false);
+    } catch (err) {
+      console.error('Error saving new authority signature:', err);
+      alert('Failed to save authority signature.');
+    } finally {
+      setIsSavingNewSig(false);
+    }
+  };
+
   const saveDboSignature = async () => {
     if (dboSigPad.current && !dboSigPad.current.isEmpty()) {
       const sigData = dboSigPad.current.getTrimmedCanvas().toDataURL('image/png');
@@ -3175,6 +3710,7 @@ export function DataValidationModule() {
       setHasDraft(false);
       setDraftInfo(null);
       setDraftLastSaved(null);
+      setActiveDraftId(null);
       setIsAmendment(false);
       setIsValidationPeriodEdited(false);
       setHasAutofilledDbo(false);
@@ -3280,13 +3816,34 @@ export function DataValidationModule() {
 
             <button
               type="button"
+              onClick={() => setIsDraftsModalOpen(true)}
+              className="relative w-full sm:w-auto px-3.5 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
+              title="View all saved validation drafts in Supabase"
+              id="view-saved-drafts-btn"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-amber-600" />
+              <span>Saved Drafts</span>
+              {draftsList.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 ml-0.5">
+                  {draftsList.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={handleManualSaveDraft}
-              className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
-              title="Save current form entries to draft"
+              disabled={isSubmittingDraft}
+              className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
+              title="Save current form entries to Supabase draft"
               id="top-save-draft-btn"
             >
-              <Save className="w-3.5 h-3.5 text-blue-600" />
-              Save Draft
+              {isSubmittingDraft ? (
+                <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+              ) : (
+                <Save className="w-3.5 h-3.5 text-blue-600" />
+              )}
+              <span>{isSubmittingDraft ? 'Saving Draft...' : 'Save Draft'}</span>
             </button>
 
             <button
@@ -3301,6 +3858,57 @@ export function DataValidationModule() {
             </button>
           </div>
         </div>
+
+        {/* Active Draft Banner */}
+        <AnimatePresence>
+          {activeDraftId && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="mb-4 overflow-hidden"
+              id="active-draft-mode-banner"
+            >
+              <div className="p-3.5 bg-blue-50/90 border border-blue-200 text-blue-950 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <span className="p-2 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 shrink-0">
+                    <Database className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-xs font-bold uppercase tracking-wider text-blue-900">Draft Mode Active</p>
+                      <span className="text-[10px] bg-blue-200 text-blue-900 px-2 py-0.5 rounded-full font-mono font-bold">
+                        Supabase Draft: {activeDraftId.slice(0, 8)}...
+                      </span>
+                    </div>
+                    <p className="text-xs text-blue-800 font-medium mt-0.5">
+                      Editing draft for <strong className="text-blue-950 font-bold">{formData.dboName || formData.premiseName || 'Current Premise'}</strong> ({formData.validationPeriod || 'Current Period'}).
+                      {formData.startTime && <span> Start: <strong className="text-blue-950 font-semibold">{formData.startTime}</strong></span>}
+                      {formData.endTime ? (
+                        <span> &bull; End (Locked): <strong className="text-blue-950 font-bold bg-blue-200/60 px-1.5 py-0.5 rounded">{formData.endTime}</strong></span>
+                      ) : (
+                        <span> &bull; End: <span className="italic text-blue-600">Locks on draft save / submit</span></span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveDraftId(null);
+                      setStatus({ type: 'success', message: 'Exited draft editing mode. Your draft remains stored safely in Supabase.' });
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-blue-200 bg-white hover:bg-blue-50 text-blue-800 text-xs font-bold transition-all cursor-pointer shadow-xs"
+                    id="exit-draft-mode-btn"
+                  >
+                    Exit Draft Mode
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Draft Restore Alert */}
         <AnimatePresence>
@@ -3338,7 +3946,7 @@ export function DataValidationModule() {
                 </div>
                 <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-auto shrink-0">
                   <button
-                    onClick={handleRestoreDraft}
+                    onClick={() => handleRestoreDraft()}
                     className="px-3.5 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
                     id="restore-draft-btn"
                   >
@@ -3450,10 +4058,97 @@ export function DataValidationModule() {
                   <button
                     type="button"
                     onClick={handleStart}
-                    className="px-12 py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg shadow-xl hover:bg-blue-700 transition-all active:scale-95"
+                    className="px-12 py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg shadow-xl hover:bg-blue-700 transition-all active:scale-95 cursor-pointer"
                   >
                     Start New Validation
                   </button>
+
+                  {draftsList.length > 0 && (
+                    <div className="w-full max-w-xl mt-8 pt-8 border-t border-gray-100 flex flex-col items-center">
+                      <div className="flex items-center justify-between w-full mb-3">
+                        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-700">
+                          <Database className="w-4 h-4 text-amber-600" />
+                          <span>Saved Drafts in Supabase ({draftsList.length})</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsDraftsModalOpen(true)}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-semibold cursor-pointer flex items-center gap-1"
+                        >
+                          View all ({draftsList.length}) <ChevronRight className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      <div className="w-full space-y-2">
+                        {draftsList.slice(0, 3).map((draft) => {
+                          const raw = draft.rawData || draft.raw_data || {};
+                          const form = raw.formData || draft;
+                          const name = draft.dboName || draft.dbo_name || form.dboName || 'Saved Draft';
+                          const premise = draft.premiseName || draft.premise_name || form.premiseName || '';
+                          const period = draft.validationPeriod || draft.validation_period || form.validationPeriod || '';
+                          const stepNum = draft.step !== undefined ? draft.step : (raw.step ?? 1);
+                          return (
+                            <div 
+                              key={draft.id}
+                              className="w-full p-3.5 bg-amber-50/60 hover:bg-amber-50 rounded-xl border border-amber-200/70 flex items-center justify-between gap-3 transition-colors text-left"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-gray-900 text-xs truncate">{name}</span>
+                                  {premise && (
+                                    <span className="text-[10px] text-gray-600 font-medium truncate">
+                                      &bull; {premise}
+                                    </span>
+                                  )}
+                                  {period && (
+                                    <span className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 py-0.5 rounded">
+                                      {period}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-gray-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                                  <span>Step {stepNum === 0 ? '1 (Search)' : stepNum + 1} of 4</span>
+                                  <span>&bull;</span>
+                                  <span>Permit: {draft.permitNo || 'N/A'}</span>
+                                  {form.startTime && (
+                                    <>
+                                      <span>&bull;</span>
+                                      <span>Start: {form.startTime}</span>
+                                    </>
+                                  )}
+                                  {form.endTime && (
+                                    <>
+                                      <span>&bull;</span>
+                                      <span className="text-amber-800 font-semibold bg-amber-100/70 px-1 py-0.2 rounded">
+                                        End (Locked): {form.endTime}
+                                      </span>
+                                    </>
+                                  )}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRestoreDraft(draft)}
+                                  className="px-3 py-1 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors cursor-pointer shadow-xs"
+                                >
+                                  Resume
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleDeleteDraft(draft.id, e)}
+                                  className="p-1.5 text-gray-400 hover:text-rose-600 rounded-md transition-colors cursor-pointer"
+                                  title="Delete draft from Supabase"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               )}
 
@@ -3482,36 +4177,60 @@ export function DataValidationModule() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Branch</label>
-                      <input
-                        type="text"
-                        name="branch"
-                        value={formData.branch}
-                        onChange={handleChange}
-                        className={getInputClass('branch')}
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Date</label>
-                        <input
-                          type="date"
-                          name="date"
-                          value={formData.date}
-                          onChange={handleChange}
-                          className={getInputClass('date')}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Start Time</label>
-                        <input
-                          type="text"
-                          name="startTime"
-                          readOnly
-                          value={formData.startTime}
-                          className="w-full px-4 py-2 rounded-xl border border-gray-100 bg-gray-50 text-gray-500 outline-none text-sm"
-                        />
+                    {/* Top Row: Reduced Branch box to accommodate Date, Start Time and End Time on larger screens */}
+                    <div className="md:col-span-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3.5 items-end">
+                        <div className="space-y-2 sm:col-span-1 lg:col-span-3">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Branch</label>
+                          <input
+                            type="text"
+                            name="branch"
+                            value={formData.branch}
+                            onChange={handleChange}
+                            placeholder="e.g. Main / Branch"
+                            className={getInputClass('branch')}
+                          />
+                        </div>
+                        <div className="space-y-2 sm:col-span-1 lg:col-span-3">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Date</label>
+                          <input
+                            type="date"
+                            name="date"
+                            value={formData.date}
+                            onChange={handleChange}
+                            className={getInputClass('date')}
+                          />
+                        </div>
+                        <div className="space-y-2 sm:col-span-1 lg:col-span-3">
+                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Start Time</label>
+                          <input
+                            type="text"
+                            name="startTime"
+                            readOnly
+                            value={formData.startTime}
+                            placeholder="Auto on start"
+                            className="w-full px-3.5 py-2 rounded-xl border border-gray-100 bg-gray-50 text-gray-500 outline-none text-sm"
+                          />
+                        </div>
+                        <div className="space-y-2 sm:col-span-1 lg:col-span-3">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">End Time</label>
+                            {formData.endTime && (
+                              <span className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 py-0.5 rounded">
+                                Locked
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            name="endTime"
+                            value={formData.endTime}
+                            onChange={handleChange}
+                            placeholder="Auto on draft / submit"
+                            className={getInputClass('endTime', '', 'px-3.5 py-2 rounded-xl text-sm')}
+                            title={formData.endTime ? 'End time is locked in draft. You can edit if needed.' : 'Automatically locked when saving draft or submitting'}
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -5175,7 +5894,7 @@ export function DataValidationModule() {
                     </motion.div>
                   )}
 
-                  <div className="flex justify-between items-center gap-3 pt-4">
+                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 pt-4">
                     <button
                       type="button"
                       onClick={() => setStep(1)}
@@ -5184,7 +5903,7 @@ export function DataValidationModule() {
                       <ChevronLeft className="w-4 h-4" />
                       Back
                     </button>
-                    <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-end">
                       <button
                         type="button"
                         onClick={handleManualSaveDraft}
@@ -5194,6 +5913,7 @@ export function DataValidationModule() {
                         <Save className="w-4 h-4 text-blue-600" />
                         Save Draft
                       </button>
+
                       <button
                         type="button"
                         onClick={() => validateStep(2) && setStep(3)}
@@ -5217,84 +5937,86 @@ export function DataValidationModule() {
                 >
                   <div className="flex items-center gap-2 mb-6">
                     <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">3</div>
-                    <h2 className="text-lg font-bold">Compliance & Confirmation</h2>
+                    <h2 className="text-lg font-bold">{isBranchFacility ? "Declarations & Signatures" : "Compliance & Confirmation"}</h2>
                   </div>
 
-                  <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 space-y-4">
-                    <div className="overflow-x-auto rounded-xl border border-blue-100">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="bg-blue-100/50">
-                            <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
-                            <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
-                            <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Amount (Kshs)</th>
-                            <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Month/Year to Pay</th>
-                            <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-blue-50">
-                          {formData.nonCompliance.map((nc, idx) => (
-                            <tr key={idx}>
-                              <td className="p-3 text-xs font-bold text-blue-800">{nc.month}</td>
-                              <td className="p-3 text-xs text-blue-700">{nc.litres}</td>
-                              <td className="p-1">
-                                <input
-                                  type="text"
-                                  placeholder="0.00"
-                                  value={nc.amount}
-                                  onChange={(e) => {
-                                    const newNC = [...formData.nonCompliance];
-                                    newNC[idx].amount = e.target.value;
-                                    setFormData(prev => ({ ...prev, nonCompliance: newNC }));
-                                  }}
-                                  className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono"
-                                />
-                              </td>
-                              <td className="p-1">
-                                <input
-                                  placeholder="MM/YYYY"
-                                  value={nc.paymentMonthYear}
-                                  onChange={(e) => {
-                                    const newNC = [...formData.nonCompliance];
-                                    newNC[idx].paymentMonthYear = e.target.value;
-                                    setFormData(prev => ({ ...prev, nonCompliance: newNC }));
-                                  }}
-                                  className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs"
-                                />
-                              </td>
-                              <td className="p-1">
-                                <input
-                                  placeholder="REF NO"
-                                  value={nc.mpesaRef}
-                                  onChange={(e) => {
-                                    const newNC = [...formData.nonCompliance];
-                                    newNC[idx].mpesaRef = e.target.value;
-                                    setFormData(prev => ({ ...prev, nonCompliance: newNC }));
-                                  }}
-                                  className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs"
-                                />
-                              </td>
+                  {!isBranchFacility && (
+                    <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 space-y-4">
+                      <div className="overflow-x-auto rounded-xl border border-blue-100">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-blue-100/50">
+                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
+                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
+                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Amount (Kshs)</th>
+                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Month/Year to Pay</th>
+                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
                             </tr>
-                          ))}
-                          {formData.nonCompliance.length > 0 && (
-                            <tr className="bg-blue-50/50">
-                              <td className="p-3 text-xs font-bold text-blue-900">TOTAL</td>
-                              <td className="p-3 text-xs text-blue-700"></td>
-                              <td className="p-3 text-xs font-bold text-blue-900">
-                                {totalPenalty.toFixed(2)}
-                              </td>
-                              <td colSpan={2}></td>
-                            </tr>
-                          )}
-                          {formData.nonCompliance.length === 0 && (
-                            <tr>
-                              <td colSpan={5} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody className="divide-y divide-blue-50">
+                            {formData.nonCompliance.map((nc, idx) => (
+                              <tr key={idx}>
+                                <td className="p-3 text-xs font-bold text-blue-800">{nc.month}</td>
+                                <td className="p-3 text-xs text-blue-700">{nc.litres}</td>
+                                <td className="p-1">
+                                  <input
+                                    type="text"
+                                    placeholder="0.00"
+                                    value={nc.amount}
+                                    onChange={(e) => {
+                                      const newNC = [...formData.nonCompliance];
+                                      newNC[idx].amount = e.target.value;
+                                      setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                    }}
+                                    className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono"
+                                  />
+                                </td>
+                                <td className="p-1">
+                                  <input
+                                    placeholder="MM/YYYY"
+                                    value={nc.paymentMonthYear}
+                                    onChange={(e) => {
+                                      const newNC = [...formData.nonCompliance];
+                                      newNC[idx].paymentMonthYear = e.target.value;
+                                      setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                    }}
+                                    className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs"
+                                  />
+                                </td>
+                                <td className="p-1">
+                                  <input
+                                    placeholder="REF NO"
+                                    value={nc.mpesaRef}
+                                    onChange={(e) => {
+                                      const newNC = [...formData.nonCompliance];
+                                      newNC[idx].mpesaRef = e.target.value;
+                                      setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                    }}
+                                    className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs"
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                            {formData.nonCompliance.length > 0 && (
+                              <tr className="bg-blue-50/50">
+                                <td className="p-3 text-xs font-bold text-blue-900">TOTAL</td>
+                                <td className="p-3 text-xs text-blue-700"></td>
+                                <td className="p-3 text-xs font-bold text-blue-900">
+                                  {totalPenalty.toFixed(2)}
+                                </td>
+                                <td colSpan={2}></td>
+                              </tr>
+                            )}
+                            {formData.nonCompliance.length === 0 && (
+                              <tr>
+                                <td colSpan={5} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-4">
                     <h3 className="text-sm font-bold text-gray-900">Declarations</h3>
@@ -5404,28 +6126,174 @@ export function DataValidationModule() {
                         />
                       </div>
                       <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Compliance Officer Signature</label>
-                        <div className="flex flex-col gap-2">
-                          {!formData.complianceSignature ? (
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => handleFileChange(e, 'complianceSignature')}
-                              className="text-xs"
-                            />
-                          ) : (
-                            <div className="relative group">
-                              <img src={formData.complianceSignature} alt="Compliance Signature" className="h-20 object-contain border rounded-lg bg-white" />
-                              <button
-                                type="button"
-                                onClick={() => clearField('complianceSignature')}
-                                className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors cursor-pointer"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Compliance Officer Signature</label>
+                          {authoritySignatures.length > 0 && !formData.complianceSignature && (
+                            <span className="text-[10px] text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100">
+                              {authoritySignatures.length} saved {authoritySignatures.length === 1 ? 'signature' : 'signatures'} available
+                            </span>
                           )}
                         </div>
+
+                        {/* Selected signature state */}
+                        {formData.complianceSignature && !isSelectingAuthoritySig ? (
+                          <div className="p-3.5 bg-gradient-to-r from-blue-50/70 to-indigo-50/40 border border-blue-200/80 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                            <div className="flex items-center gap-3">
+                              <div className="h-16 w-28 bg-white rounded-xl border border-blue-100 p-1.5 flex items-center justify-center shadow-xs overflow-hidden shrink-0">
+                                <img
+                                  src={formData.complianceSignature}
+                                  alt="Compliance Signature"
+                                  className="max-h-full max-w-full object-contain"
+                                />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-800">
+                                    {formData.complianceOfficer || 'Authority Signature'}
+                                  </span>
+                                  <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                                    <Check className="w-2.5 h-2.5" /> Applied
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-0.5">
+                                  Applied to official validation PDF and Google Sheets sync
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                              <button
+                                type="button"
+                                onClick={() => setIsSelectingAuthoritySig(true)}
+                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                                title="Change or select a different authority signature"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+                                Change Signature
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleClearComplianceSignature}
+                                className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition-all cursor-pointer border border-transparent hover:border-rose-200"
+                                title="Remove signature from this form"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          /* Selection / upload state */
+                          <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3.5">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="text-xs font-bold text-slate-700">
+                                {isSelectingAuthoritySig ? 'Switch to Another Authority Signature' : 'Choose Authority Signature'}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {isSelectingAuthoritySig && formData.complianceSignature && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setIsSelectingAuthoritySig(false)}
+                                    className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 font-semibold"
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAddAuthorityModal(true)}
+                                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  Add Signature
+                                </button>
+                              </div>
+                            </div>
+
+                            {authoritySignatures.length > 0 ? (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                                {authoritySignatures.map(sig => {
+                                  const isSelected = formData.complianceSignature === sig.signature;
+                                  return (
+                                    <div
+                                      key={sig.id}
+                                      onClick={() => handleSelectAuthoritySignature(sig)}
+                                      className={`p-2.5 rounded-xl border transition-all cursor-pointer relative group flex flex-col justify-between ${
+                                        isSelected
+                                          ? 'bg-blue-50/90 border-blue-500 ring-2 ring-blue-200 shadow-xs'
+                                          : 'bg-white hover:bg-blue-50/30 border-slate-200 hover:border-blue-300 shadow-xs'
+                                      }`}
+                                    >
+                                      <div className="flex items-start justify-between gap-1 mb-1.5">
+                                        <div className="min-w-0 pr-1">
+                                          <div className="text-xs font-bold text-slate-800 truncate group-hover:text-blue-700">
+                                            {sig.name}
+                                          </div>
+                                          {sig.title && (
+                                            <div className="text-[10px] text-slate-500 truncate">
+                                              {sig.title}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          {isSelected && (
+                                            <span className="p-0.5 bg-blue-600 text-white rounded-full">
+                                              <Check className="w-3 h-3" />
+                                            </span>
+                                          )}
+                                          <button
+                                            type="button"
+                                            onClick={(e) => handleDeleteAuthoritySignature(sig.id, e)}
+                                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                            title="Delete this signature from saved authority signatures"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      <div className="h-12 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-center p-1 overflow-hidden">
+                                        <img src={sig.signature} alt={sig.name} className="max-h-full max-w-full object-contain" />
+                                      </div>
+
+                                      <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px]">
+                                        <span className="text-slate-400 font-medium">Click to select</span>
+                                        <span className="font-bold text-blue-600 group-hover:underline">
+                                          {isSelected ? 'Selected' : 'Use this'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="p-4 bg-white border border-dashed border-slate-200 rounded-xl text-center space-y-2">
+                                <p className="text-xs text-slate-500">No authority signatures saved yet.</p>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAddAuthorityModal(true)}
+                                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  Add First Authority Signature
+                                </button>
+                              </div>
+                            )}
+
+                            {/* One-off local file upload fallback */}
+                            <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-500">
+                              <span>Or upload a one-off signature file:</span>
+                              <label className="text-blue-600 hover:text-blue-800 font-bold hover:underline cursor-pointer flex items-center gap-1">
+                                <Upload className="w-3 h-3" /> Browse File
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => handleFileChange(e, 'complianceSignature')}
+                                  className="hidden"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -5562,27 +6430,55 @@ export function DataValidationModule() {
                         </button>
                       </div>
                       
-                      <button
-                        type="submit"
-                        disabled={isSubmitting}
-                        className={`w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-9 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl font-bold transition-all shadow-md text-xs sm:text-sm cursor-pointer ${
-                          isSubmitting
-                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                            : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'
-                        }`}
-                      >
-                        {isSubmitting ? (
-                          <>
-                            <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
-                            Syncing & Generating PDF...
-                          </>
-                        ) : (
-                          <>
-                            <Save className="w-4 h-4 sm:w-5 sm:h-5" />
-                            {isAmendment ? 'Submit Amendment & Overwrite' : 'Submit & Sync to Sheet'}
-                          </>
-                        )}
-                      </button>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => handleSubmitDraftToSupabase(formData, step, false)}
+                          disabled={isSubmittingDraft || isSubmitting}
+                          className={`w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-7 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl font-bold transition-all shadow-md text-xs sm:text-sm cursor-pointer ${
+                            isSubmittingDraft || isSubmitting
+                              ? 'bg-amber-100 text-amber-400 cursor-not-allowed'
+                              : 'bg-amber-600 hover:bg-amber-700 active:scale-95 text-white'
+                          }`}
+                          title="Save all form entries to Supabase draft only (without syncing to Google Sheets)"
+                          id="submit-draft-btn"
+                        >
+                          {isSubmittingDraft ? (
+                            <>
+                              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                              Saving Draft...
+                            </>
+                          ) : (
+                            <>
+                              <Database className="w-4 h-4 sm:w-5 sm:h-5" />
+                              Submit Draft
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          type="submit"
+                          disabled={isSubmitting || isSubmittingDraft}
+                          className={`w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-9 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl font-bold transition-all shadow-md text-xs sm:text-sm cursor-pointer ${
+                            isSubmitting
+                              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                              : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'
+                          }`}
+                          id="submit-and-sync-btn"
+                        >
+                          {isSubmitting ? (
+                            <>
+                              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                              Syncing & Generating PDF...
+                            </>
+                          ) : (
+                            <>
+                              <Save className="w-4 h-4 sm:w-5 sm:h-5" />
+                              {isAmendment ? 'Submit Amendment & Overwrite' : 'Submit & Sync to Sheet'}
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </motion.div>
@@ -5628,6 +6524,230 @@ export function DataValidationModule() {
                     className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all"
                   >
                     Close Preview
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Saved Drafts Modal (Supabase) */}
+        <AnimatePresence>
+          {isDraftsModalOpen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+              id="saved-drafts-modal"
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white w-full max-w-3xl rounded-3xl overflow-hidden flex flex-col shadow-2xl max-h-[88vh]"
+              >
+                {/* Modal Header */}
+                <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-amber-50 to-orange-50">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-amber-100 text-amber-800 rounded-xl">
+                      <FolderOpen className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-gray-900">Saved Validation Drafts (Supabase)</h3>
+                      <p className="text-xs text-gray-500">
+                        Select any draft to modify and resume. Once submitted & synced, it becomes a final validation.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsDraftsModalOpen(false)}
+                    className="p-2 hover:bg-gray-100 rounded-full transition-colors text-gray-400 hover:text-gray-700 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Search & Filter Bar */}
+                <div className="p-4 border-b border-gray-100 bg-gray-50/70 flex items-center gap-3">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search drafts by DBO name, premise, or permit number..."
+                      value={draftSearchQuery}
+                      onChange={(e) => setDraftSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-xs bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => refreshDraftsList()}
+                    className="px-3 py-2 text-xs font-semibold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                    title="Refresh drafts from Supabase"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                {/* Drafts List */}
+                <div className="p-6 overflow-y-auto flex-1 space-y-3">
+                  {(() => {
+                    const filteredDrafts = draftsList.filter(d => {
+                      if (!draftSearchQuery.trim()) return true;
+                      const q = draftSearchQuery.toLowerCase();
+                      const dbo = (d.dboName || d.dbo_name || '').toLowerCase();
+                      const premise = (d.premiseName || d.premise_name || '').toLowerCase();
+                      const permit = (d.permitNo || d.permit_no || '').toLowerCase();
+                      const period = (d.validationPeriod || d.validation_period || '').toLowerCase();
+                      return dbo.includes(q) || premise.includes(q) || permit.includes(q) || period.includes(q);
+                    });
+
+                    if (filteredDrafts.length === 0) {
+                      return (
+                        <div className="text-center py-12 space-y-3">
+                          <Database className="w-12 h-12 text-gray-300 mx-auto" />
+                          <p className="text-sm font-semibold text-gray-700">
+                            {draftSearchQuery ? 'No matching drafts found.' : 'No saved drafts in Supabase.'}
+                          </p>
+                          <p className="text-xs text-gray-400 max-w-sm mx-auto">
+                            You can save your progress anytime by clicking <strong className="text-gray-600">Submit Draft</strong> at the end of the form or <strong className="text-gray-600">Save Draft</strong> at the top.
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    return filteredDrafts.map((draft) => {
+                      const raw = draft.rawData || draft.raw_data || {};
+                      const form = raw.formData || draft;
+                      const dbo = draft.dboName || draft.dbo_name || form.dboName || 'Unnamed DBO';
+                      const premise = draft.premiseName || draft.premise_name || form.premiseName || 'Unknown Premise';
+                      const permit = draft.permitNo || draft.permit_no || form.permitNo || 'N/A';
+                      const period = draft.validationPeriod || draft.validation_period || form.validationPeriod || '';
+                      const category = draft.category || form.category || '';
+                      const location = draft.location || form.location || '';
+                      const stepNum = draft.step !== undefined ? draft.step : (raw.step ?? 1);
+                      const isCurrentActive = activeDraftId === draft.id;
+
+                      let dateStr = '';
+                      if (draft.updatedAt || draft.updated_at || draft.createdAt) {
+                        try {
+                          const d = new Date(draft.updatedAt || draft.updated_at || draft.createdAt || '');
+                          dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ' at ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        } catch (_) {}
+                      }
+
+                      return (
+                        <div
+                          key={draft.id}
+                          className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                            isCurrentActive
+                              ? 'bg-blue-50/70 border-blue-300 ring-2 ring-blue-500/20'
+                              : 'bg-white border-gray-200 hover:border-amber-300 hover:shadow-xs'
+                          }`}
+                        >
+                          <div className="space-y-1.5 min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-extrabold text-sm text-gray-900 truncate">
+                                {dbo}
+                              </span>
+                              {isCurrentActive && (
+                                <span className="text-[10px] bg-blue-600 text-white font-bold px-2 py-0.5 rounded-full">
+                                  Currently Editing
+                                </span>
+                              )}
+                              {period && (
+                                <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md">
+                                  {period}
+                                </span>
+                              )}
+                              {category && (
+                                <span className="text-[10px] bg-gray-100 text-gray-700 font-medium px-2 py-0.5 rounded-md">
+                                  {category}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="text-xs text-gray-600 flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-gray-800">{premise}</span>
+                              <span>&bull;</span>
+                              <span>Permit: <strong className="font-mono text-gray-700">{permit}</strong></span>
+                              {location && (
+                                <>
+                                  <span>&bull;</span>
+                                  <span>{location}</span>
+                                </>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-3 text-[11px] text-gray-400 flex-wrap">
+                              <span className="flex items-center gap-1 font-medium text-amber-800">
+                                <FileText className="w-3 h-3 text-amber-600" />
+                                Step {stepNum === 0 ? '1' : stepNum + 1} of 4
+                              </span>
+                              {form.startTime && (
+                                <>
+                                  <span>&bull;</span>
+                                  <span>Start: <strong className="text-gray-700 font-semibold">{form.startTime}</strong></span>
+                                </>
+                              )}
+                              {form.endTime && (
+                                <>
+                                  <span>&bull;</span>
+                                  <span className="text-amber-800 font-semibold bg-amber-100/70 px-1.5 py-0.2 rounded">
+                                    End (Locked): {form.endTime}
+                                  </span>
+                                </>
+                              )}
+                              {dateStr && (
+                                <>
+                                  <span>&bull;</span>
+                                  <span className="flex items-center gap-1">
+                                    <Clock className="w-3 h-3 text-gray-400" />
+                                    Saved: {dateStr}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreDraft(draft)}
+                              className="px-4 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>{isCurrentActive ? 'Keep Editing' : 'Resume & Modify'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteDraft(draft.id, e)}
+                              className="p-2 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                              title="Delete this draft from Supabase"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+
+                {/* Modal Footer */}
+                <div className="p-4 border-t border-gray-100 flex items-center justify-between bg-gray-50/50">
+                  <span className="text-xs text-gray-500 font-medium">
+                    Total drafts: <strong>{draftsList.length}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsDraftsModalOpen(false)}
+                    className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Close
                   </button>
                 </div>
               </motion.div>
@@ -5915,6 +7035,179 @@ export function DataValidationModule() {
                     className="w-full h-full rounded-xl border border-slate-200 shadow-inner bg-white"
                     title="Validation PDF Viewer"
                   />
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Add Authority Signature Modal */}
+        <AnimatePresence>
+          {showAddAuthorityModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-white rounded-3xl p-6 sm:p-7 max-w-lg w-full shadow-2xl border border-slate-100 space-y-5"
+              >
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3.5">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">Add Authority Signature</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Assign an officer name to save to the official signatures library.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddAuthorityModal(false);
+                      setNewOfficerName('');
+                      setNewOfficerTitle('');
+                      setNewSigPreview('');
+                    }}
+                    className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-700">Officer Name *</label>
+                    <input
+                      type="text"
+                      value={newOfficerName}
+                      onChange={(e) => setNewOfficerName(e.target.value)}
+                      placeholder="e.g. Officer John Doe / C. Korir"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-sm"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-700">Designation / Title (Optional)</label>
+                    <input
+                      type="text"
+                      value={newOfficerTitle}
+                      onChange={(e) => setNewOfficerTitle(e.target.value)}
+                      placeholder="e.g. Compliance Officer / Inspector"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-sm"
+                    />
+                  </div>
+
+                  {/* Mode toggle */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-700">Signature Input</label>
+                      <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => setNewSigMode('upload')}
+                          className={`px-3 py-1 rounded-md transition-all ${
+                            newSigMode === 'upload' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500'
+                          }`}
+                        >
+                          Upload File
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewSigMode('draw')}
+                          className={`px-3 py-1 rounded-md transition-all ${
+                            newSigMode === 'draw' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500'
+                          }`}
+                        >
+                          Draw Live
+                        </button>
+                      </div>
+                    </div>
+
+                    {newSigMode === 'upload' ? (
+                      <div className="border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center hover:bg-slate-50 transition-colors">
+                        {newSigPreview ? (
+                          <div className="relative inline-block">
+                            <img
+                              src={newSigPreview}
+                              alt="Signature Preview"
+                              className="h-24 object-contain bg-white rounded-lg p-2 border border-slate-200 shadow-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setNewSigPreview('')}
+                              className="absolute -top-2 -right-2 p-1 bg-rose-500 text-white rounded-full shadow-md hover:bg-rose-600 cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="cursor-pointer block py-3">
+                            <Upload className="w-7 h-7 text-slate-400 mx-auto mb-2" />
+                            <span className="text-xs font-bold text-blue-600 hover:underline">
+                              Click to upload signature image
+                            </span>
+                            <p className="text-[10px] text-slate-400 mt-1">PNG, JPG, or JPEG file</p>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleNewSigFileUpload}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="border-2 border-dashed border-slate-200 rounded-2xl p-1 bg-slate-50">
+                          <SignatureCanvas
+                            ref={authSigCanvasRef}
+                            penColor="#0f172a"
+                            canvasProps={{
+                              className: 'w-full h-28 bg-white rounded-xl border border-slate-100 cursor-crosshair'
+                            }}
+                          />
+                        </div>
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => authSigCanvasRef.current?.clear()}
+                            className="text-xs text-slate-500 hover:text-slate-800 font-semibold px-2 py-1 cursor-pointer"
+                          >
+                            Clear Pad
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-3.5 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddAuthorityModal(false);
+                      setNewOfficerName('');
+                      setNewOfficerTitle('');
+                      setNewSigPreview('');
+                    }}
+                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSavingNewSig}
+                    onClick={handleSaveNewAuthoritySignature}
+                    className="px-5 py-2.5 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-md transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSavingNewSig ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" /> Save & Select Signature
+                      </>
+                    )}
+                  </button>
                 </div>
               </motion.div>
             </div>

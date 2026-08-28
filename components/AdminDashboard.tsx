@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules } from '../types';
+import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules, AuthoritySignature } from '../types';
+import { DBService } from '../services/db';
 import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle } from 'lucide-react';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
@@ -128,6 +129,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddingDebtor, setIsAddingDebtor] = useState(false);
   const [editingDebtorId, setEditingDebtorId] = useState<string | null>(null);
+  const [authoritySigs, setAuthoritySigs] = useState<AuthoritySignature[]>([]);
+  const [showAddSigModal, setShowAddSigModal] = useState(false);
+  const [newSigName, setNewSigName] = useState('');
+  const [newSigTitle, setNewSigTitle] = useState('');
+  const [newSigImage, setNewSigImage] = useState('');
+  const [isSavingSig, setIsSavingSig] = useState(false);
   const [systemHealth, setSystemHealth] = useState<any>({
     status: 'checking',
     writable: false,
@@ -238,6 +245,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       checkHealth();
     }
   }, [tab]);
+
+  useEffect(() => {
+    const loadSignatures = async () => {
+      const sigs = await DBService.getAuthoritySignatures();
+      setAuthoritySigs(sigs);
+    };
+    loadSignatures();
+
+    const handleSigUpdate = () => {
+      loadSignatures();
+    };
+    window.addEventListener('kdb_authority_signatures_updated', handleSigUpdate);
+    return () => {
+      window.removeEventListener('kdb_authority_signatures_updated', handleSigUpdate);
+    };
+  }, []);
 
   const handleToggleModule = (moduleKey: keyof EnabledModules) => {
     const currentModules = staffConfig.enabledModules || {
@@ -504,6 +527,113 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const reader = new FileReader();
     reader.onloadend = () => {
       onStaffUpdate({ officialSignature: reader.result as string });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddAuthoritySignature = async () => {
+    if (!newSigName.trim()) {
+      alert('Please enter the officer name for this signature.');
+      return;
+    }
+    if (!newSigImage) {
+      alert('Please upload a signature image file.');
+      return;
+    }
+
+    setIsSavingSig(true);
+    try {
+      const updated = await DBService.addAuthoritySignature({
+        name: newSigName.trim(),
+        title: newSigTitle.trim() || undefined,
+        signature: newSigImage,
+        isDefault: authoritySigs.length === 0
+      });
+      setAuthoritySigs(updated);
+      if (authoritySigs.length === 0 || !staffConfig.officialSignature) {
+        onStaffUpdate({
+          ...staffConfig,
+          officialSignature: newSigImage,
+          officialName: newSigName.trim(),
+          officialTitle: newSigTitle.trim() || staffConfig.officialTitle
+        });
+      }
+      setNewSigName('');
+      setNewSigTitle('');
+      setNewSigImage('');
+      setShowAddSigModal(false);
+    } catch (err: any) {
+      alert('Failed to save signature: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSavingSig(false);
+    }
+  };
+
+  const handleDeleteAuthoritySignature = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this authority signature?')) return;
+    const updated = await DBService.deleteAuthoritySignature(id);
+    setAuthoritySigs(updated);
+    if (updated.length > 0) {
+      const def = updated.find(s => s.isDefault) || updated[0];
+      onStaffUpdate({
+        ...staffConfig,
+        officialSignature: def.signature,
+        officialName: def.name,
+        officialTitle: def.title || staffConfig.officialTitle
+      });
+    } else {
+      onStaffUpdate({
+        ...staffConfig,
+        officialSignature: ''
+      });
+    }
+  };
+
+  const handleSetDefaultAuthoritySignature = async (sig: AuthoritySignature) => {
+    const updated = authoritySigs.map(s => ({
+      ...s,
+      isDefault: s.id === sig.id
+    }));
+    await DBService.saveAuthoritySignatures(updated);
+    setAuthoritySigs(updated);
+    onStaffUpdate({
+      ...staffConfig,
+      officialSignature: sig.signature,
+      officialName: sig.name,
+      officialTitle: sig.title || staffConfig.officialTitle
+    });
+  };
+
+  const handleFileChangeForNewSig = (file: File | null) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 800;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          setNewSigImage(canvas.toDataURL('image/png', 0.85));
+        } else {
+          setNewSigImage(e.target?.result as string);
+        }
+      };
+      img.src = e.target?.result as string;
     };
     reader.readAsDataURL(file);
   };
@@ -2439,27 +2569,201 @@ CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHE
                     ) : null}
                 </div>
 
-                <div className="flex flex-col sm:flex-row items-center gap-8 bg-slate-50 p-8 rounded-[32px] border border-slate-100">
-                    <div className="w-40 h-28 bg-white rounded-2xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden shadow-inner group relative">
-                        {staffConfig.officialSignature ? (
-                            <>
-                                <img src={staffConfig.officialSignature} className="h-full w-full object-contain p-2" />
-                                <div className="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
-                                    <X className="text-white cursor-pointer" onClick={() => onStaffUpdate({ officialSignature: '' })} />
+                {/* Multi-Authority Signatures Registry */}
+                <div className="space-y-6 bg-slate-50 p-6 sm:p-8 rounded-[32px] border border-slate-100">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2.5">
+                        <h4 className="font-bold text-slate-800 text-base">Authority Signatures Registry</h4>
+                        <span className="text-[10px] font-black text-blue-700 bg-blue-100/80 px-2.5 py-0.5 rounded-full">
+                          {authoritySigs.length} Registered
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Add as many authority signatures as needed, assign officer names, set the active default stamp, or delete and re-assign anytime.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddSigModal(true)}
+                      className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-sm cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-4 h-4" /> Add Authority Signature
+                    </button>
+                  </div>
+
+                  {/* Add Signature Inline Form */}
+                  {showAddSigModal && (
+                    <div className="bg-white p-5 rounded-2xl border border-blue-200 shadow-sm space-y-4 animate-in fade-in duration-200">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <h5 className="text-xs font-bold text-slate-800 uppercase tracking-wider">New Authority Signature Profile</h5>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAddSigModal(false);
+                            setNewSigName('');
+                            setNewSigTitle('');
+                            setNewSigImage('');
+                          }}
+                          className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Officer Full Name *</label>
+                          <input
+                            type="text"
+                            value={newSigName}
+                            onChange={(e) => setNewSigName(e.target.value)}
+                            placeholder="e.g. Officer John Doe"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Designation / Title (Optional)</label>
+                          <input
+                            type="text"
+                            value={newSigTitle}
+                            onChange={(e) => setNewSigTitle(e.target.value)}
+                            placeholder="e.g. Compliance Officer / Inspector"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signature File *</label>
+                        <div className="flex flex-col sm:flex-row items-center gap-4">
+                          <div className="w-36 h-20 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden p-1">
+                            {newSigImage ? (
+                              <img src={newSigImage} alt="Preview" className="max-h-full max-w-full object-contain" />
+                            ) : (
+                              <Upload className="w-5 h-5 text-slate-300" />
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => handleFileChangeForNewSig(e.target.files?.[0] || null)}
+                              className="text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                            />
+                            <p className="text-[10px] text-slate-400 mt-1">PNG or JPEG format with transparent or white background.</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAddSigModal(false);
+                            setNewSigName('');
+                            setNewSigTitle('');
+                            setNewSigImage('');
+                          }}
+                          className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSavingSig}
+                          onClick={handleAddAuthoritySignature}
+                          className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          {isSavingSig ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                          Save Signature
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Signatures List Grid */}
+                  {authoritySigs.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {authoritySigs.map((sig) => {
+                        const isDefault = sig.isDefault || (!authoritySigs.some(s => s.isDefault) && sig.signature === staffConfig.officialSignature);
+                        return (
+                          <div
+                            key={sig.id}
+                            className={`bg-white rounded-2xl p-4 border transition-all flex flex-col justify-between gap-3 shadow-xs ${
+                              isDefault ? 'border-emerald-300 ring-2 ring-emerald-100 bg-emerald-50/20' : 'border-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-slate-800 truncate" title={sig.name}>
+                                  {sig.name}
                                 </div>
-                            </>
+                                <div className="text-[10px] text-slate-500 truncate">
+                                  {sig.title || 'Authorized Officer'}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteAuthoritySignature(sig.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Delete this signature"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <div className="h-16 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-center p-2 overflow-hidden">
+                              <img src={sig.signature} alt={sig.name} className="max-h-full max-w-full object-contain" />
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                              {isDefault ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
+                                  <Check className="w-3 h-3" /> Default Stamp
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSetDefaultAuthoritySignature(sig)}
+                                  className="text-[10px] font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                >
+                                  Set as Default
+                                </button>
+                              )}
+                              <span className="text-[9px] text-slate-400 font-mono">
+                                ID: {sig.id.slice(0, 8)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    /* Legacy fallback when no authority signatures exist yet */
+                    <div className="flex flex-col sm:flex-row items-center gap-6 bg-white p-6 rounded-2xl border border-dashed border-slate-200">
+                      <div className="w-32 h-20 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-center overflow-hidden">
+                        {staffConfig.officialSignature ? (
+                          <img src={staffConfig.officialSignature} className="max-h-full max-w-full object-contain p-2" alt="Stamp" />
                         ) : (
-                            <Upload className="w-8 h-8 text-slate-200" />
+                          <Upload className="w-6 h-6 text-slate-300" />
                         )}
+                      </div>
+                      <div className="flex-1 text-center sm:text-left space-y-2">
+                        <div className="text-xs font-bold text-slate-800">No multi-officer signatures registered yet</div>
+                        <p className="text-[11px] text-slate-500">
+                          Add your compliance officer authority signatures to easily pick between officers in Data Validation and official approvals.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setShowAddSigModal(true)}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Add First Authority Signature
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex-grow space-y-4 text-center sm:text-left">
-                        <h4 className="font-bold text-slate-800">Authority Signature</h4>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-relaxed">Official KDB Execution Stamp.</p>
-                        <input type="file" accept="image/*" onChange={(e) => handleSignatureUpload(e.target.files?.[0] || null)} className="hidden" id="staff-sig-upload" />
-                        <label htmlFor="staff-sig-upload" className="inline-flex px-6 py-3 bg-white border border-slate-200 rounded-xl text-[10px] font-black text-slate-700 hover:bg-slate-50 cursor-pointer shadow-sm uppercase tracking-widest transition-all">
-                            {staffConfig.officialSignature ? 'Change Image' : 'Add Signature'}
-                        </label>
-                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-4">

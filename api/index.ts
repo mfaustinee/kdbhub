@@ -22,6 +22,7 @@ const STAFF_FILE = path.join(DATA_DIR, "staff.json");
 const CLIENTS_FILE = path.join(DATA_DIR, "clients.json");
 const RETURNS_FILE = path.join(DATA_DIR, "returns.json");
 const VALIDATIONS_FILE = path.join(DATA_DIR, "validations.json");
+const VALIDATION_DRAFTS_FILE = path.join(DATA_DIR, "validation_drafts.json");
 const LOG_FILE = path.join(DATA_DIR, "server.log");
 
 // Ensure data directory exists early for logging
@@ -912,6 +913,123 @@ async function startServer() {
       }
     });
 
+    logToFile("[Server] Registering validation drafts routes...");
+    app.get("/api/validation-drafts", async (req, res) => {
+      try {
+        const draftsList = await readJsonArrayFile(VALIDATION_DRAFTS_FILE);
+        res.json(draftsList);
+      } catch (error: any) {
+        logToFile(`Error reading validation drafts: ${error.message}`);
+        res.status(500).json({ error: "Failed to read drafts" });
+      }
+    });
+
+    app.post("/api/validation-drafts", async (req, res) => {
+      try {
+        if (!req.body) {
+          return res.status(400).json({ error: "Missing request body" });
+        }
+        const draft = req.body;
+        const nowIso = new Date().toISOString();
+        if (!draft.id) {
+          draft.id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          });
+        }
+        draft.updated_at = nowIso;
+        if (!draft.created_at) draft.created_at = nowIso;
+
+        let draftsList = await readJsonArrayFile(VALIDATION_DRAFTS_FILE);
+        const idx = draftsList.findIndex((d: any) => d.id === draft.id);
+        if (idx > -1) {
+          draftsList[idx] = draft;
+        } else {
+          draftsList.unshift(draft);
+        }
+
+        await fs.promises.writeFile(VALIDATION_DRAFTS_FILE, JSON.stringify(draftsList, null, 2));
+        logToFile(`[Server] Saved draft locally: ${draft.id}`);
+
+        if (sUrl && sKey) {
+          (async () => {
+            try {
+              const serverSupabase = createClient(sUrl, sKey);
+              const supabaseRow: any = {
+                id: draft.id,
+                permit_no: draft.permit_no || draft.permitNo || '',
+                dbo_name: draft.dbo_name || draft.dboName || '',
+                premise_name: draft.premise_name || draft.premiseName || '',
+                validation_period: draft.validation_period || draft.validationPeriod || '',
+                category: draft.category || '',
+                location: draft.location || '',
+                county: draft.county || 'Kericho',
+                branch: draft.branch || 'Kericho',
+                step: draft.step ?? 0,
+                status: 'draft',
+                raw_data: draft.raw_data || draft.rawData || draft,
+                created_at: draft.created_at,
+                updated_at: draft.updated_at
+              };
+
+              for (let attempt = 0; attempt < 5; attempt++) {
+                const { error } = await serverSupabase.from('validation_drafts').upsert([supabaseRow]);
+                if (!error) {
+                  logToFile(`[Server] Synced draft ${draft.id} to Supabase validation_drafts`);
+                  break;
+                }
+                const errMsg = error.message || '';
+                const matchCol = errMsg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of relation/i) 
+                              || errMsg.match(/Could not find the '?([a-zA-Z0-9_]+)'? column/i)
+                              || errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+                if (matchCol && matchCol[1] && supabaseRow.hasOwnProperty(matchCol[1])) {
+                  delete supabaseRow[matchCol[1]];
+                  continue;
+                }
+                logToFile(`[Server] Warning: Supabase validation_drafts upsert failed: ${error.message}`);
+                break;
+              }
+            } catch (sbErr: any) {
+              logToFile(`[Server] Supabase draft sync exception: ${sbErr.message}`);
+            }
+          })();
+        }
+
+        res.json({ success: true, draft });
+      } catch (error: any) {
+        logToFile(`CRITICAL Error saving draft: ${error.message}`);
+        res.status(500).json({ error: "Failed to save draft", details: error.message });
+      }
+    });
+
+    app.delete("/api/validation-drafts/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        logToFile(`[Server] Attempting to delete draft: ${id}`);
+        const draftsList = await readJsonArrayFile(VALIDATION_DRAFTS_FILE);
+        const filtered = draftsList.filter((d: any) => d.id !== id);
+        await fs.promises.writeFile(VALIDATION_DRAFTS_FILE, JSON.stringify(filtered, null, 2));
+
+        if (sUrl && sKey) {
+          (async () => {
+            try {
+              const serverSupabase = createClient(sUrl, sKey);
+              await serverSupabase.from('validation_drafts').delete().eq('id', id);
+              logToFile(`[Server] Deleted draft ${id} from Supabase validation_drafts`);
+            } catch (sbErr: any) {
+              logToFile(`[Server] Supabase delete draft warning: ${sbErr.message}`);
+            }
+          })();
+        }
+
+        res.json({ success: true });
+      } catch (error: any) {
+        logToFile(`CRITICAL Error deleting draft: ${error.message}`);
+        res.status(500).json({ error: "Failed to delete draft", details: error.message });
+      }
+    });
+
     logToFile("[Server] Registering staff routes...");
     app.get("/api/staff", async (req, res) => {
     try {
@@ -972,50 +1090,80 @@ async function startServer() {
     return google.sheets({ version: "v4", auth });
   };
 
-  const formatSellingPriceForSheets = (sellingPriceStr: any): string => {
-    if (!sellingPriceStr) return "";
-    if (typeof sellingPriceStr !== 'string') {
-      sellingPriceStr = String(sellingPriceStr);
-    }
-    sellingPriceStr = sellingPriceStr.trim();
-    if (!sellingPriceStr) return "";
+  const formatSellingPriceForSheets = (sellingPriceInput: any): string => {
+    if (sellingPriceInput === undefined || sellingPriceInput === null) return "";
+    
+    let priceList: string[] = [];
 
-    let prices: Record<string, string> = {};
-
-    try {
-      const parsed = JSON.parse(sellingPriceStr);
-      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-        prices = parsed;
+    // Helper to extract clean numeric price value from a string (e.g. "Raw Milk: 53", "53", "Raw Milk: Kshs 53")
+    const cleanSinglePrice = (val: any): string => {
+      if (val === undefined || val === null) return "";
+      let str = String(val).trim();
+      if (!str) return "";
+      
+      // If string contains "Product: Price", extract the portion after the colon
+      if (str.includes(':')) {
+        str = str.substring(str.lastIndexOf(':') + 1).trim();
       }
-    } catch (e) {
-      // Ignore JSON parse error
+      // Strip common currency prefixes and suffixes
+      str = str.replace(/^(?:kshs?\.?|kes\.?)\s*/i, '').replace(/\s*(?:\/=|per\s+.*)$/i, '').trim();
+      return str;
+    };
+
+    if (typeof sellingPriceInput === 'number') {
+      return String(sellingPriceInput);
     }
 
-    if (Object.keys(prices).length === 0) {
-      const parts = sellingPriceStr.split(/[|,]/);
-      parts.forEach(part => {
-        const colonIdx = part.indexOf(':');
-        if (colonIdx !== -1) {
-          const product = part.substring(0, colonIdx).trim();
-          const price = part.substring(colonIdx + 1).trim();
-          if (product) {
-            prices[product] = price;
-          }
-        } else {
-          const trimmed = part.trim();
-          if (trimmed) {
-            prices[trimmed] = trimmed;
-          }
+    if (Array.isArray(sellingPriceInput)) {
+      priceList = sellingPriceInput
+        .map(cleanSinglePrice)
+        .filter(p => p !== '');
+      return priceList.join(' | ');
+    }
+
+    if (typeof sellingPriceInput === 'object') {
+      priceList = Object.values(sellingPriceInput)
+        .map(cleanSinglePrice)
+        .filter(p => p !== '');
+      return priceList.join(' | ');
+    }
+
+    const sellingPriceStr = String(sellingPriceInput).trim();
+    if (!sellingPriceStr) return "";
+
+    // Check if string is a JSON object or array
+    if ((sellingPriceStr.startsWith('{') && sellingPriceStr.endsWith('}')) || 
+        (sellingPriceStr.startsWith('[') && sellingPriceStr.endsWith(']'))) {
+      try {
+        const parsed = JSON.parse(sellingPriceStr);
+        if (Array.isArray(parsed)) {
+          priceList = parsed.map(cleanSinglePrice).filter(p => p !== '');
+          if (priceList.length > 0) return priceList.join(' | ');
+        } else if (typeof parsed === 'object' && parsed !== null) {
+          priceList = Object.values(parsed).map(cleanSinglePrice).filter(p => p !== '');
+          if (priceList.length > 0) return priceList.join(' | ');
         }
-      });
+      } catch {
+        // Not JSON, continue with string splitting
+      }
     }
 
-    const values = Object.values(prices).filter(v => v !== undefined && v !== null && v !== '');
-    if (values.length > 0) {
-      return values.join(' / ');
+    // Handle strings like "Raw Milk: 53 | Mala: 60" or "Raw Milk: 53, Mala: 60"
+    const delimiter = sellingPriceStr.includes('|') ? '|' : (sellingPriceStr.includes(';') ? ';' : ',');
+    const parts = sellingPriceStr.split(delimiter);
+
+    parts.forEach(part => {
+      const cleaned = cleanSinglePrice(part);
+      if (cleaned) {
+        priceList.push(cleaned);
+      }
+    });
+
+    if (priceList.length > 0) {
+      return priceList.join(' | ');
     }
 
-    return sellingPriceStr;
+    return cleanSinglePrice(sellingPriceStr);
   };
 
   app.post("/api/submit", async (req, res) => {
@@ -1039,6 +1187,12 @@ async function startServer() {
 
       // Mapping logic
       const allRows: { sheet: string, rows: any[][] }[] = [];
+
+      const isBranch = Boolean(
+        data.isBranchFacility ||
+        (data.validationPremiseMode && data.validationPremiseMode !== 'main') ||
+        data.isBranch
+      );
 
       if (data.category === 'Mini Dairy' || data.category === 'Cottage Industry' || data.category === 'Milk Bar' || data.category === 'Dispenser') {
         const sheet = (data.category === 'Mini Dairy' || data.category === 'Cottage Industry') 
@@ -1090,7 +1244,7 @@ async function startServer() {
 
           distPriceFormatted = distributors.map((d: any, dIdx: number) => {
             const priceStr = d.prices && Object.keys(d.prices).length > 0
-              ? Object.values(d.prices).filter((p: any) => p !== undefined && p !== '' && p !== null).join(' / ')
+              ? formatSellingPriceForSheets(d.prices)
               : formatSellingPriceForSheets(d.distPrice || '');
             return `Distributor #${dIdx + 1}: ${priceStr}`;
           }).join(' | ');
@@ -1098,10 +1252,10 @@ async function startServer() {
 
         const rows = data.sales.map((sale: any) => [
           data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
-          sale.avgVolPerDay || "", sale.buyingPrice || "", formatSellingPriceForSheets(sale.sellingPrice), data.traceability,
-          `${sale.month} ${sale.year}`, sale.qtyDeclared, sale.verifiedQty, sale.underDeclared,
+          sale.avgVolPerDay || "", (isBranch ? "" : (sale.buyingPrice || "")), formatSellingPriceForSheets(sale.sellingPrice), data.traceability,
+          `${sale.month} ${sale.year}`, (isBranch ? "" : (sale.qtyDeclared || "")), sale.verifiedQty || "", (isBranch ? "" : (sale.underDeclared || "")),
           data.date, data.startTime, data.endTime,
-          Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : data.natureOfProduce,
+          Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : (data.natureOfProduce || ""),
           // Appended Option A Columns (for MD & CI - Distribution sheet)
           distNameFormatted,
           distContactsFormatted,
@@ -1120,18 +1274,20 @@ async function startServer() {
           data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
           intake.avgVolPerDay || "", intake.farmerPrice || "", intake.processorPrice || "", data.traceability,
           `${intake.month} ${intake.year}`, intake.quantity, "TOTAL INTAKE", "", "",
-          data.date, data.startTime, data.endTime
+          data.date, data.startTime, data.endTime,
+          Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : (data.natureOfProduce || "")
         ]);
         allRows.push({ sheet, rows: intakeRows });
         
         // Capture Sales for Cooling Plants
         const salesRows = data.sales
-          .filter((s: any) => s.qtyDeclared || s.verifiedQty)
+          .filter((s: any) => s.verifiedQty || (!isBranch && s.qtyDeclared))
           .map((sale: any) => [
             data.dboName, data.location, data.contacts, data.permitNo, data.expiryDate, 
-            sale.avgVolPerDay || "", sale.buyingPrice || "", formatSellingPriceForSheets(sale.sellingPrice), data.traceability,
-            `${sale.month} ${sale.year}`, sale.qtyDeclared, "LOCAL SALES", sale.verifiedQty, sale.underDeclared,
-            data.date, data.startTime, data.endTime
+            sale.avgVolPerDay || "", (isBranch ? "" : (sale.buyingPrice || "")), formatSellingPriceForSheets(sale.sellingPrice), data.traceability,
+            `${sale.month} ${sale.year}`, (isBranch ? "" : (sale.qtyDeclared || "")), "LOCAL SALES", sale.verifiedQty || "", (isBranch ? "" : (sale.underDeclared || "")),
+            data.date, data.startTime, data.endTime,
+            Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : (data.natureOfProduce || "")
           ]);
         if (salesRows.length > 0) {
           allRows.push({ sheet, rows: salesRows });

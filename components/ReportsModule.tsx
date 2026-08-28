@@ -5,7 +5,7 @@ import { processValidationsToTimeline } from '../utils/validationAggregator';
 import { QuarterlyReportsView } from './QuarterlyReportsView';
 import { HalfYearlyReportsView } from './HalfYearlyReportsView';
 import { AnnualReportsView } from './AnnualReportsView';
-import { CollectionAnalysisView } from './CollectionAnalysisView';
+import { ValidationsCounterView } from './ValidationsCounterView';
 import { exportMonthlyReportToExcel } from '../utils/excelExport';
 import { 
   FileText, 
@@ -40,7 +40,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
   const [returns, setReturns] = useState<ClientReturn[]>([]);
   const [validations, setValidations] = useState<DataValidation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [reportType, setReportType] = useState<'monthly' | 'quarterly' | 'half-yearly' | 'annual' | 'collection-analysis'>('monthly');
+  const [reportType, setReportType] = useState<'monthly' | 'quarterly' | 'half-yearly' | 'annual' | 'validations-counter'>('monthly');
   const [showDebtSummary, setShowDebtSummary] = useState(true);
 
   // Filter selection
@@ -119,6 +119,20 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
 
   useEffect(() => {
     fetchData();
+    const handleUpdate = () => {
+      fetchData();
+    };
+    window.addEventListener('kdb_validations_updated', handleUpdate);
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'kdb_validations_last_updated' || e.key === 'kdb_validations_cache') {
+        fetchData();
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('kdb_validations_updated', handleUpdate);
+      window.removeEventListener('storage', handleStorage);
+    };
   }, []);
 
   // Sync / Load localStorage settings when month/year changes
@@ -592,19 +606,19 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
           Annual Report
         </button>
         <button
-          onClick={() => setReportType('collection-analysis')}
+          onClick={() => setReportType('validations-counter')}
           className={`flex-1 min-w-[160px] py-3 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${
-            reportType === 'collection-analysis'
-              ? 'bg-emerald-600 text-white shadow-md'
-              : 'text-emerald-700 hover:text-emerald-900 font-bold bg-emerald-50/40 hover:bg-emerald-50/80'
+            reportType === 'validations-counter'
+              ? 'bg-purple-700 text-white shadow-md'
+              : 'text-purple-700 hover:text-purple-900 font-bold bg-purple-50/40 hover:bg-purple-50/80'
           }`}
         >
-          Collection Analysis
+          Validations Counter
         </button>
       </div>
 
-      {reportType === 'collection-analysis' && (
-        <CollectionAnalysisView clients={clients} returns={returns} validations={validations} />
+      {reportType === 'validations-counter' && (
+        <ValidationsCounterView clients={clients} returns={returns} validations={validations} onRefresh={fetchData} />
       )}
 
       {reportType === 'quarterly' && (

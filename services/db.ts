@@ -1,4 +1,4 @@
-import { AgreementData, DebtorRecord, StaffConfig, ClosureNotificationData, LicensedClient, ClientReturn, DataValidation, ComplaintData, InquiryData } from '../types';
+import { AgreementData, DebtorRecord, StaffConfig, ClosureNotificationData, LicensedClient, ClientReturn, DataValidation, ComplaintData, InquiryData, getIndividualValidationsCount, ValidationDraft, AuthoritySignature } from '../types';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 let supabase: SupabaseClient | null = null;
@@ -172,6 +172,28 @@ const returnToDb = (r: any) => {
   };
 };
 
+const returnFromDb = (dbObj: any): ClientReturn => {
+  if (!dbObj) return dbObj;
+  return {
+    id: String(dbObj.id || '').trim(),
+    clientId: String(dbObj.clientid ?? dbObj.clientId ?? '').trim(),
+    clientName: String(dbObj.clientname ?? dbObj.clientName ?? '').trim(),
+    year: Number(dbObj.year ?? 2026),
+    period: String(dbObj.period ?? 'January').trim(),
+    qty: Number(dbObj.qty ?? 0),
+    invoiceAmount: Number(dbObj.invoiceamount ?? dbObj.invoiceAmount ?? 0),
+    returnDate: String(dbObj.returndate ?? dbObj.returnDate ?? '').trim(),
+    paymentAmount: Number(dbObj.paymentamount ?? dbObj.paymentAmount ?? 0),
+    paymentDate: String(dbObj.paymentdate ?? dbObj.paymentDate ?? '').trim(),
+    txnRef: String(dbObj.txnref ?? dbObj.txnRef ?? '').trim(),
+    lessCF: Number(dbObj.lesscf ?? dbObj.lessCF ?? 0),
+    outstandingBalance: Number(dbObj.outstandingbalance ?? dbObj.outstandingBalance ?? 0),
+    agingDays: Number(dbObj.agingdays ?? dbObj.agingDays ?? 0),
+    paymentStatus: (dbObj.paymentstatus ?? dbObj.paymentStatus ?? 'Unpaid') as any,
+    comments: String(dbObj.comments ?? '').trim()
+  };
+};
+
 const clientFromDb = (dbObj: any): LicensedClient => {
   if (!dbObj) return dbObj;
   const out: any = { ...dbObj };
@@ -308,6 +330,10 @@ let validationsCacheTimestamp = 0;
 let isRevalidatingValidations = false;
 let lastRevalidationTime = 0;
 const VALIDATIONS_CACHE_TTL_MS = 60000; // 1 minute TTL for in-memory cache
+
+// In-memory validation drafts cache
+let validationDraftsMemoryCache: ValidationDraft[] | null = null;
+let validationDraftsCacheTimestamp = 0;
 
 export const DBService = {
   // Synchronous, zero-latency validation getter from in-memory or localStorage cache
@@ -1569,7 +1595,7 @@ export const DBService = {
       
       if (error) {
         console.warn("[DBService] saveStaffConfig Supabase upsert with enabledmodules failed, retrying without it:", error.message);
-        const { enabledmodules, enabledModules, ...fallbackConfig } = payload;
+        const { enabledmodules, enabledModules, authoritySignatures, authority_signatures, ...fallbackConfig } = payload;
         await client
           .from('staff_config')
           .upsert({ id: 1, ...fallbackConfig });
@@ -1577,6 +1603,120 @@ export const DBService = {
     } catch (error) {
       console.error("[DBService] saveStaffConfig error:", error);
     }
+  },
+
+  async getAuthoritySignatures(): Promise<AuthoritySignature[]> {
+    let signatures: AuthoritySignature[] = [];
+    try {
+      const stored = localStorage.getItem('kdb_authority_signatures');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          signatures = parsed;
+        }
+      }
+    } catch (e) {
+      console.warn("[DBService] Error reading authority signatures from localStorage:", e);
+    }
+
+    if (signatures.length === 0) {
+      try {
+        const cachedStaff = localStorage.getItem('kdb_staff_cache');
+        if (cachedStaff) {
+          const parsed = JSON.parse(cachedStaff);
+          if (Array.isArray(parsed.authoritySignatures) && parsed.authoritySignatures.length > 0) {
+            signatures = parsed.authoritySignatures;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (signatures.length === 0) {
+      try {
+        const res = await fetch('/api/staff');
+        if (res.ok) {
+          const staff = await res.json();
+          if (Array.isArray(staff.authoritySignatures) && staff.authoritySignatures.length > 0) {
+            signatures = staff.authoritySignatures;
+          } else if (staff.officialSignature) {
+            signatures = [{
+              id: 'sig-default-1',
+              name: staff.officialName || 'Compliance Officer',
+              title: staff.officialTitle || 'KDB Official Authority',
+              signature: staff.officialSignature,
+              createdAt: new Date().toISOString(),
+              isDefault: true
+            }];
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Persist cache
+    if (signatures.length > 0) {
+      try {
+        localStorage.setItem('kdb_authority_signatures', JSON.stringify(signatures));
+      } catch (e) {}
+    }
+
+    return signatures;
+  },
+
+  async saveAuthoritySignatures(signatures: AuthoritySignature[]): Promise<void> {
+    try {
+      localStorage.setItem('kdb_authority_signatures', JSON.stringify(signatures));
+    } catch (e) {}
+
+    // Update staff config cache and server
+    try {
+      let currentStaff: any = {};
+      const cached = localStorage.getItem('kdb_staff_cache');
+      if (cached) {
+        try { currentStaff = JSON.parse(cached); } catch (_) {}
+      }
+      currentStaff.authoritySignatures = signatures;
+      if (signatures.length > 0) {
+        const defaultSig = signatures.find(s => s.isDefault) || signatures[0];
+        currentStaff.officialSignature = defaultSig.signature;
+        currentStaff.officialName = defaultSig.name;
+        if (defaultSig.title) currentStaff.officialTitle = defaultSig.title;
+      }
+      localStorage.setItem('kdb_staff_cache', JSON.stringify(currentStaff));
+
+      await fetch('/api/staff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(currentStaff)
+      }).catch(() => {});
+    } catch (e) {
+      console.warn("[DBService] saveAuthoritySignatures sync error:", e);
+    }
+
+    // Dispatch global event so open modules react immediately
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kdb_authority_signatures_updated', { detail: signatures }));
+      }
+    } catch (_) {}
+  },
+
+  async addAuthoritySignature(sig: Omit<AuthoritySignature, 'id'> & { id?: string }): Promise<AuthoritySignature[]> {
+    const current = await this.getAuthoritySignatures();
+    const newSig: AuthoritySignature = {
+      ...sig,
+      id: sig.id || `sig-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      createdAt: sig.createdAt || new Date().toISOString()
+    };
+    const updated = [newSig, ...current.filter(s => s.id !== newSig.id)];
+    await this.saveAuthoritySignatures(updated);
+    return updated;
+  },
+
+  async deleteAuthoritySignature(id: string): Promise<AuthoritySignature[]> {
+    const current = await this.getAuthoritySignatures();
+    const updated = current.filter(s => s.id !== id);
+    await this.saveAuthoritySignatures(updated);
+    return updated;
   },
 
   async getClients(forceFresh: boolean = false): Promise<LicensedClient[]> {
@@ -1949,7 +2089,7 @@ export const DBService = {
         if (client) {
           const { data, error } = await client.from('client_returns').select('*');
           if (!error && data) {
-            const mapped = data.map(r => fromDb(r, template));
+            const mapped = data.map(r => returnFromDb(r));
             safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
           }
         } else {
@@ -1965,7 +2105,7 @@ export const DBService = {
       setTimeout(revalidate, 50);
       try {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) return parsed.map(r => returnFromDb(r));
       } catch (e) {
         // Fall through
       }
@@ -1974,8 +2114,9 @@ export const DBService = {
     const client = await getSupabase();
     if (!client) {
       const local = await fetchLocal();
-      safeSetLocalStorage('kdb_returns_cache', JSON.stringify(local));
-      return local;
+      const mapped = local.map(r => returnFromDb(r));
+      safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
+      return mapped;
     }
 
     try {
@@ -1985,15 +2126,17 @@ export const DBService = {
       
       if (error) {
         console.warn("[DBService] Supabase getReturns failed, falling back to local. Error:", error);
-        return await fetchLocal();
+        const local = await fetchLocal();
+        return local.map(r => returnFromDb(r));
       }
 
-      const mapped = (data || []).map(r => fromDb(r, template));
+      const mapped = (data || []).map(r => returnFromDb(r));
       safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
       return mapped;
     } catch (e) {
       console.warn("[DBService] Supabase getReturns exception, falling back to local. Error:", e);
-      return await fetchLocal();
+      const local = await fetchLocal();
+      return local.map(r => returnFromDb(r));
     }
   },
 
@@ -2019,7 +2162,7 @@ export const DBService = {
     }
 
     try {
-      const dbObj = toDb(clientReturn);
+      const dbObj = returnToDb(clientReturn);
       const { error } = await client
         .from('client_returns')
         .upsert(dbObj);
@@ -2192,149 +2335,27 @@ export const DBService = {
       return safe;
     };
 
-    const revalidate = async () => {
-      if (isRevalidatingValidations) return;
-      isRevalidatingValidations = true;
-      lastRevalidationTime = Date.now();
-
-      try {
-        const client = await getSupabase();
-        if (client) {
-          const timeoutPromise = new Promise<{ status: 'rejected'; reason: Error }>((_, reject) =>
-            setTimeout(() => reject(new Error('Supabase getValidations query timeout')), 3500)
-          );
-
-          const queryPromise = Promise.allSettled([
-            client.from('data_validations').select('*'),
-            client.from('kdb_validations').select('*')
-          ]);
-
-          const results = await Promise.race([queryPromise, timeoutPromise]) as PromiseSettledResult<any>[];
-          const [res1, res2] = results;
-
-          const list1: any[] = res1.status === 'fulfilled' && !res1.value.error ? (res1.value.data || []) : [];
-          const list2: any[] = res2.status === 'fulfilled' && !res2.value.error ? (res2.value.data || []) : [];
-
-          const mapped1 = list1.map(r => {
-            const item = fromDb(r, template);
-            const mCount = r.months_count || r.monthsCount || (Array.isArray(r.raw_data?.sales) && r.raw_data.sales.length > 0 ? r.raw_data.sales.length : 1);
-            return { ...item, monthsCount: mCount };
-          });
-
-          const mapped2 = list2.map(r => {
-            let year = 2026;
-            let period = r.validation_period || '';
-            
-            if (r.validation_period) {
-              const parts = r.validation_period.split(' ');
-              if (parts.length >= 2) {
-                period = parts[0];
-                year = Number(parts[1]) || 2026;
-              }
-            } else if (r.date) {
-              const d = new Date(r.date);
-              if (!isNaN(d.getTime())) {
-                period = d.toLocaleString('default', { month: 'long' });
-                year = d.getFullYear();
-              }
-            }
-
-            const raw = typeof r.raw_data === 'string' ? (() => { try { return JSON.parse(r.raw_data); } catch { return {}; } })() : (r.raw_data || {});
-            const qDeclared = raw.sales?.[0]?.qtyDeclared || '';
-            const bPrice = parseFloat(raw.sales?.[0]?.buyingPrice) || 0;
-            const total = raw.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0;
-            const mCount = Array.isArray(raw.sales) && raw.sales.length > 0 ? raw.sales.length : (r.months_count || 1);
-
-            return {
-              id: r.id || `${r.permit_no || ''}-${r.validation_period || ''}`,
-              clientId: r.permit_no || '',
-              clientName: r.dbo_name || '',
-              premiseName: r.premise_name || '',
-              permitNo: r.permit_no || '',
-              location: r.location || '',
-              category: r.category || '',
-              contacts: r.contacts || raw.contacts || '',
-              expiryDate: raw.expiryDate || '',
-              year,
-              period,
-              quantityDeclared: qDeclared,
-              unitPrice: bPrice,
-              totalSales: total,
-              validatorName: raw.complianceOfficer || '',
-              validatedAt: r.date || '',
-              status: 'Approved' as const,
-              remarks: raw.comments || '',
-              monthsCount: mCount,
-              pdfPath: r.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf,
-              rawData: raw
-            };
-          });
-
-          const combined = [...mapped1];
-          mapped2.forEach(m => {
-            const exists = combined.some(c => 
-              c.id === m.id || 
-              (c.permitNo === m.permitNo && c.period.toLowerCase() === m.period.toLowerCase() && Number(c.year) === m.year)
-            );
-            if (!exists) {
-              combined.push(m);
-            }
-          });
-
-          validationsMemoryCache = combined;
-          validationsCacheTimestamp = Date.now();
-          safeSetLocalStorage('kdb_validations_cache', JSON.stringify(combined));
-        } else {
-          await fetchLocal();
-        }
-      } catch (e) {
-        console.warn("[DBService] Background validations sync note:", e);
-      } finally {
-        isRevalidatingValidations = false;
-      }
-    };
-
-    if (!forceRefresh && cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          validationsMemoryCache = parsed;
-          validationsCacheTimestamp = Date.now();
-          // Only revalidate if more than 30 seconds since last sync
-          if (Date.now() - lastRevalidationTime > 30000) {
-            setTimeout(revalidate, 100);
-          }
-          return parsed;
-        }
-      } catch (e) {
-        // Fall through
-      }
-    }
-
-    const client = await getSupabase();
-    if (!client) {
-      return await fetchLocal();
-    }
-
-    try {
+    const fetchFromSupabase = async (client: any): Promise<DataValidation[]> => {
       const timeoutPromise = new Promise<{ status: 'rejected'; reason: Error }>((_, reject) =>
-        setTimeout(() => reject(new Error('Supabase getValidations query timeout')), 3500)
+        setTimeout(() => reject(new Error('Supabase getValidations query timeout')), 5000)
       );
 
       const queryPromise = Promise.allSettled([
         client.from('data_validations').select('*'),
-        client.from('kdb_validations').select('*')
+        client.from('kdb_validations').select('*'),
+        client.storage.from('ValidationPdfs').list('', { limit: 1000 })
       ]);
 
       const results = await Promise.race([queryPromise, timeoutPromise]) as PromiseSettledResult<any>[];
-      const [res1, res2] = results;
+      const [res1, res2, resStorage] = results;
 
       const list1: any[] = res1.status === 'fulfilled' && !res1.value.error ? (res1.value.data || []) : [];
       const list2: any[] = res2.status === 'fulfilled' && !res2.value.error ? (res2.value.data || []) : [];
+      const storageFiles: any[] = resStorage.status === 'fulfilled' && !resStorage.value.error ? (resStorage.value.data || []) : [];
 
       const mapped1 = list1.map(r => {
         const item = fromDb(r, template);
-        const mCount = r.months_count || r.monthsCount || (Array.isArray(r.raw_data?.sales) && r.raw_data.sales.length > 0 ? r.raw_data.sales.length : 1);
+        const mCount = r.months_count || r.monthsCount || (Array.isArray(r.raw_data?.sales) && r.raw_data.sales.length > 0 ? r.raw_data.sales.length : undefined) || getIndividualValidationsCount(item);
         return { ...item, monthsCount: mCount };
       });
 
@@ -2343,10 +2364,14 @@ export const DBService = {
         let period = r.validation_period || '';
         
         if (r.validation_period) {
-          const parts = r.validation_period.split(' ');
-          if (parts.length >= 2) {
-            period = parts[0];
-            year = Number(parts[1]) || 2026;
+          const yMatch = r.validation_period.match(/\b(20\d{2})\b/);
+          if (yMatch) {
+            year = Number(yMatch[1]);
+          } else {
+            const shortMatch = r.validation_period.match(/-(\d{2})$/);
+            if (shortMatch) {
+              year = 2000 + Number(shortMatch[1]);
+            }
           }
         } else if (r.date) {
           const d = new Date(r.date);
@@ -2360,7 +2385,13 @@ export const DBService = {
         const qDeclared = raw.sales?.[0]?.qtyDeclared || '';
         const bPrice = parseFloat(raw.sales?.[0]?.buyingPrice) || 0;
         const total = raw.sales?.reduce((sum: number, s: any) => sum + (parseFloat(s.qtyDeclared) || 0) * (parseFloat(s.buyingPrice) || 0), 0) || 0;
-        const mCount = Array.isArray(raw.sales) && raw.sales.length > 0 ? raw.sales.length : (r.months_count || 1);
+        
+        let mCount = Array.isArray(raw.sales) && raw.sales.length > 0 
+          ? raw.sales.length 
+          : (r.months_count || 1);
+        if (mCount <= 1 && period) {
+          mCount = getIndividualValidationsCount({ period, monthsCount: 0 } as any);
+        }
 
         return {
           id: r.id || `${r.permit_no || ''}-${r.validation_period || ''}`,
@@ -2387,17 +2418,152 @@ export const DBService = {
         };
       });
 
-      const combined = [...mapped1];
+      const combined: DataValidation[] = [...mapped1];
       mapped2.forEach(m => {
         const exists = combined.some(c => 
           c.id === m.id || 
-          (c.permitNo === m.permitNo && c.period.toLowerCase() === m.period.toLowerCase() && Number(c.year) === m.year)
+          (c.permitNo && m.permitNo && c.permitNo === m.permitNo && c.period.toLowerCase() === m.period.toLowerCase() && Number(c.year) === m.year)
         );
         if (!exists) {
           combined.push(m);
         }
       });
 
+      // Reconcile with Supabase storage bucket ValidationPdfs
+      if (Array.isArray(storageFiles) && storageFiles.length > 0) {
+        const monthsRegex = /(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|Q1|Q2|Q3|Q4)/i;
+
+        storageFiles.forEach(f => {
+          if (!f || !f.name || !f.name.toLowerCase().endsWith('.pdf')) return;
+          
+          let base = f.name.replace(/\.pdf$/i, '');
+          const tsMatch = base.match(/_(\d{10,14})$/);
+          let timestamp: number | null = null;
+          if (tsMatch) {
+            timestamp = parseInt(tsMatch[1], 10);
+            base = base.substring(0, tsMatch.index);
+          }
+          const isAmendment = /_Amended(_v\d+)?$/i.test(base);
+          base = base.replace(/_Amended(_v\d+)?$/i, '');
+
+          const parts = base.split('_').filter(Boolean);
+          let periodStartIndex = -1;
+          for (let i = 0; i < parts.length; i++) {
+            if (monthsRegex.test(parts[i])) {
+              periodStartIndex = i;
+              break;
+            }
+          }
+
+          let pName = '';
+          let pPeriod = '';
+          let pYear = 2026;
+
+          if (periodStartIndex > 0) {
+            pName = parts.slice(0, periodStartIndex).join(' ').trim();
+            pPeriod = parts.slice(periodStartIndex).join(' ').replace(/[*_]/g, ' ').replace(/\s+/g, ' ').trim();
+            const yMatch = pPeriod.match(/\b(202\d)\b/);
+            if (yMatch) pYear = parseInt(yMatch[1], 10);
+          } else {
+            pName = base.replace(/_/g, ' ').trim();
+          }
+
+          const cleanP = pName.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const cleanPeriod = pPeriod.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+          // Check if this storage file matches an existing table record
+          const existing = combined.find(c => {
+            if (c.pdfPath === f.name) return true;
+            if (c.rawData && JSON.stringify(c.rawData).includes(f.name)) return true;
+            const cPrem = (c.premiseName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const cPeriod = (c.period || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cPrem === cleanP && (cPeriod === cleanPeriod || cPeriod.includes(cleanPeriod) || cleanPeriod.includes(cPeriod));
+          });
+
+          if (existing) {
+            if (!existing.pdfPath) {
+              existing.pdfPath = f.name;
+            }
+          } else {
+            // Unmatched storage file: add as a verified validation form
+            const fileMonthsCount = getIndividualValidationsCount({ period: pPeriod, monthsCount: 0 } as any);
+            const fileDate = timestamp ? new Date(timestamp).toISOString() : (f.created_at || new Date().toISOString());
+            combined.push({
+              id: `storage-${f.name}`,
+              clientId: '',
+              clientName: pName,
+              premiseName: pName,
+              permitNo: '',
+              location: 'Kericho',
+              category: 'Milk Bar',
+              contacts: '',
+              expiryDate: '',
+              year: pYear,
+              period: pPeriod || 'June 2026',
+              quantityDeclared: '',
+              unitPrice: 0,
+              totalSales: 0,
+              validatorName: 'Compliance Officer',
+              validatedAt: fileDate.split('T')[0],
+              status: 'Approved' as const,
+              remarks: isAmendment ? 'Amended submission' : 'Submitted validation record',
+              monthsCount: fileMonthsCount,
+              pdfPath: f.name,
+              rawData: { fromStorage: true, fileName: f.name, isAmendment }
+            });
+          }
+        });
+      }
+
+      return combined;
+    };
+
+    const revalidate = async () => {
+      if (isRevalidatingValidations) return;
+      isRevalidatingValidations = true;
+      lastRevalidationTime = Date.now();
+
+      try {
+        const client = await getSupabase();
+        if (client) {
+          const combined = await fetchFromSupabase(client);
+          validationsMemoryCache = combined;
+          validationsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_validations_cache', JSON.stringify(combined));
+        } else {
+          await fetchLocal();
+        }
+      } catch (e) {
+        console.warn("[DBService] Background validations sync note:", e);
+      } finally {
+        isRevalidatingValidations = false;
+      }
+    };
+
+    if (!forceRefresh && cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          validationsMemoryCache = parsed;
+          validationsCacheTimestamp = Date.now();
+          // Only revalidate in background if more than 30 seconds since last sync
+          if (Date.now() - lastRevalidationTime > 30000) {
+            setTimeout(revalidate, 100);
+          }
+          return parsed;
+        }
+      } catch (e) {
+        // Fall through
+      }
+    }
+
+    const client = await getSupabase();
+    if (!client) {
+      return await fetchLocal();
+    }
+
+    try {
+      const combined = await fetchFromSupabase(client);
       validationsMemoryCache = combined;
       validationsCacheTimestamp = Date.now();
       lastRevalidationTime = Date.now();
@@ -2520,6 +2686,13 @@ export const DBService = {
       ]);
     } catch (e) {
       console.warn("[DBService] Supabase saveValidation exception:", e);
+    } finally {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kdb_validations_updated', { detail: validation }));
+        try {
+          localStorage.setItem('kdb_validations_last_updated', String(Date.now()));
+        } catch (_) {}
+      }
     }
   },
 
@@ -2544,6 +2717,12 @@ export const DBService = {
     const client = await getSupabase();
     if (!client) {
       await deleteLocal();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kdb_validations_updated', { detail: { deletedId: id } }));
+        try {
+          localStorage.setItem('kdb_validations_last_updated', String(Date.now()));
+        } catch (_) {}
+      }
       return;
     }
 
@@ -2565,6 +2744,13 @@ export const DBService = {
     } catch (e) {
       console.warn("[DBService] Supabase deleteValidation exception, falling back to local.", e);
       await deleteLocal();
+    } finally {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kdb_validations_updated', { detail: { deletedId: id } }));
+        try {
+          localStorage.setItem('kdb_validations_last_updated', String(Date.now()));
+        } catch (_) {}
+      }
     }
   },
 
@@ -2681,6 +2867,206 @@ export const DBService = {
     } catch (e) {
       console.warn("[DBService] Supabase saveValidationsBulk exception, falling back to local.", e);
       await saveLocal();
+    }
+  },
+
+  async getValidationDrafts(forceRefresh = false): Promise<ValidationDraft[]> {
+    if (!forceRefresh && validationDraftsMemoryCache && (Date.now() - validationDraftsCacheTimestamp < 30000)) {
+      return validationDraftsMemoryCache;
+    }
+
+    const localDrafts = getArrayFromLocalStorage<ValidationDraft>('kdb_validation_drafts_cache');
+    const client = await getSupabase();
+    if (!client) {
+      validationDraftsMemoryCache = localDrafts;
+      validationDraftsCacheTimestamp = Date.now();
+      return localDrafts;
+    }
+
+    try {
+      const { data, error } = await client
+        .from('validation_drafts')
+        .select('*')
+        .eq('status', 'draft')
+        .order('updated_at', { ascending: false });
+
+      if (!error && Array.isArray(data)) {
+        const mapped: ValidationDraft[] = data.map((row: any) => ({
+          id: row.id,
+          permitNo: row.permit_no || row.permitNo || '',
+          permit_no: row.permit_no || row.permitNo || '',
+          dboName: row.dbo_name || row.dboName || '',
+          dbo_name: row.dbo_name || row.dboName || '',
+          premiseName: row.premise_name || row.premiseName || '',
+          premise_name: row.premise_name || row.premiseName || '',
+          validationPeriod: row.validation_period || row.validationPeriod || '',
+          validation_period: row.validation_period || row.validationPeriod || '',
+          category: row.category || '',
+          location: row.location || '',
+          county: row.county || '',
+          branch: row.branch || '',
+          step: row.step ?? 0,
+          status: row.status || 'draft',
+          rawData: row.raw_data || row.rawData || {},
+          raw_data: row.raw_data || row.rawData || {},
+          createdAt: row.created_at || row.createdAt,
+          created_at: row.created_at || row.createdAt,
+          updatedAt: row.updated_at || row.updatedAt,
+          updated_at: row.updated_at || row.updatedAt
+        }));
+
+        validationDraftsMemoryCache = mapped;
+        validationDraftsCacheTimestamp = Date.now();
+        safeSetLocalStorage('kdb_validation_drafts_cache', JSON.stringify(mapped));
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[DBService] Supabase getValidationDrafts warning, using local cache:', err);
+    }
+
+    validationDraftsMemoryCache = localDrafts;
+    validationDraftsCacheTimestamp = Date.now();
+    return localDrafts;
+  },
+
+  async saveValidationDraft(draft: ValidationDraft): Promise<ValidationDraft> {
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const uuid = (draft.id && UUID_REGEX.test(draft.id)) 
+      ? draft.id 
+      : (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+        ? crypto.randomUUID()
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          });
+
+    const nowIso = new Date().toISOString();
+    const finalDraft: ValidationDraft = {
+      ...draft,
+      id: uuid,
+      permitNo: draft.permitNo || draft.permit_no || '',
+      permit_no: draft.permitNo || draft.permit_no || '',
+      dboName: draft.dboName || draft.dbo_name || '',
+      dbo_name: draft.dboName || draft.dbo_name || '',
+      premiseName: draft.premiseName || draft.premise_name || '',
+      premise_name: draft.premiseName || draft.premise_name || '',
+      validationPeriod: draft.validationPeriod || draft.validation_period || '',
+      validation_period: draft.validationPeriod || draft.validation_period || '',
+      category: draft.category || '',
+      location: draft.location || '',
+      county: draft.county || 'Kericho',
+      branch: draft.branch || 'Kericho',
+      step: draft.step ?? 0,
+      status: 'draft',
+      rawData: draft.rawData || draft.raw_data || { ...draft },
+      raw_data: draft.rawData || draft.raw_data || { ...draft },
+      createdAt: draft.createdAt || draft.created_at || nowIso,
+      created_at: draft.createdAt || draft.created_at || nowIso,
+      updatedAt: nowIso,
+      updated_at: nowIso
+    };
+
+    // 1. Update in-memory and local storage immediately
+    const list = getArrayFromLocalStorage<ValidationDraft>('kdb_validation_drafts_cache');
+    const idx = list.findIndex(d => d.id === finalDraft.id);
+    if (idx > -1) list[idx] = finalDraft;
+    else list.unshift(finalDraft);
+    validationDraftsMemoryCache = list;
+    validationDraftsCacheTimestamp = Date.now();
+    safeSetLocalStorage('kdb_validation_drafts_cache', JSON.stringify(list));
+
+    // 2. Persist to local backend API fallback
+    try {
+      await fetch('/api/validation-drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(finalDraft)
+      });
+    } catch (apiErr) {
+      console.warn('[DBService] Local API saveValidationDraft warning:', apiErr);
+    }
+
+    // 3. Upsert to Supabase validation_drafts table
+    const client = await getSupabase();
+    if (client) {
+      try {
+        const supabaseRow: Record<string, any> = {
+          id: finalDraft.id,
+          permit_no: finalDraft.permitNo || '',
+          dbo_name: finalDraft.dboName || '',
+          premise_name: finalDraft.premiseName || '',
+          validation_period: finalDraft.validationPeriod || '',
+          category: finalDraft.category || '',
+          location: finalDraft.location || '',
+          county: finalDraft.county || 'Kericho',
+          branch: finalDraft.branch || 'Kericho',
+          step: finalDraft.step ?? 0,
+          status: 'draft',
+          raw_data: finalDraft.rawData,
+          created_at: finalDraft.createdAt,
+          updated_at: finalDraft.updatedAt
+        };
+
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const { error } = await client.from('validation_drafts').upsert([supabaseRow]);
+          if (!error) {
+            console.log('[DBService] Saved draft to Supabase validation_drafts successfully:', finalDraft.id);
+            break;
+          }
+          const errMsg = error.message || '';
+          const matchCol = errMsg.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+of relation/i) 
+                        || errMsg.match(/Could not find the '?([a-zA-Z0-9_]+)'? column/i)
+                        || errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+          if (matchCol && matchCol[1] && supabaseRow.hasOwnProperty(matchCol[1])) {
+            delete supabaseRow[matchCol[1]];
+            continue;
+          }
+          console.warn('[DBService] Supabase save draft warning:', error.message);
+          break;
+        }
+      } catch (sbErr) {
+        console.warn('[DBService] Supabase saveValidationDraft exception:', sbErr);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('validation_drafts_updated', { detail: finalDraft }));
+      try {
+        localStorage.setItem('kdb_validation_drafts_last_updated', String(Date.now()));
+      } catch (_) {}
+    }
+
+    return finalDraft;
+  },
+
+  async deleteValidationDraft(id: string): Promise<void> {
+    if (validationDraftsMemoryCache) {
+      validationDraftsMemoryCache = validationDraftsMemoryCache.filter(d => d.id !== id);
+      validationDraftsCacheTimestamp = Date.now();
+    }
+    removeFromLocalStorageCollection('kdb_validation_drafts_cache', id, 'id');
+
+    try {
+      await fetch(`/api/validation-drafts/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.warn('[DBService] Local API deleteValidationDraft warning:', e);
+    }
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        await client.from('validation_drafts').delete().eq('id', id);
+      } catch (err) {
+        console.warn('[DBService] Supabase deleteValidationDraft warning:', err);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('validation_drafts_updated', { detail: { deletedId: id } }));
+      try {
+        localStorage.setItem('kdb_validation_drafts_last_updated', String(Date.now()));
+      } catch (_) {}
     }
   }
 };

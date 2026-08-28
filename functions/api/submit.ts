@@ -1,5 +1,81 @@
 import { getGoogleAccessToken, appendToGoogleSheet } from "../utils/googleSheets";
 
+const formatSellingPriceForSheets = (sellingPriceInput: any): string => {
+  if (sellingPriceInput === undefined || sellingPriceInput === null) return "";
+  
+  let priceList: string[] = [];
+
+  // Helper to extract clean numeric price value from a string (e.g. "Raw Milk: 53", "53", "Raw Milk: Kshs 53")
+  const cleanSinglePrice = (val: any): string => {
+    if (val === undefined || val === null) return "";
+    let str = String(val).trim();
+    if (!str) return "";
+    
+    // If string contains "Product: Price", extract the portion after the colon
+    if (str.includes(':')) {
+      str = str.substring(str.lastIndexOf(':') + 1).trim();
+    }
+    // Strip common currency prefixes and suffixes
+    str = str.replace(/^(?:kshs?\.?|kes\.?)\s*/i, '').replace(/\s*(?:\/=|per\s+.*)$/i, '').trim();
+    return str;
+  };
+
+  if (typeof sellingPriceInput === 'number') {
+    return String(sellingPriceInput);
+  }
+
+  if (Array.isArray(sellingPriceInput)) {
+    priceList = sellingPriceInput
+      .map(cleanSinglePrice)
+      .filter(p => p !== '');
+    return priceList.join(' | ');
+  }
+
+  if (typeof sellingPriceInput === 'object') {
+    priceList = Object.values(sellingPriceInput)
+      .map(cleanSinglePrice)
+      .filter(p => p !== '');
+    return priceList.join(' | ');
+  }
+
+  const sellingPriceStr = String(sellingPriceInput).trim();
+  if (!sellingPriceStr) return "";
+
+  // Check if string is a JSON object or array
+  if ((sellingPriceStr.startsWith('{') && sellingPriceStr.endsWith('}')) || 
+      (sellingPriceStr.startsWith('[') && sellingPriceStr.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(sellingPriceStr);
+      if (Array.isArray(parsed)) {
+        priceList = parsed.map(cleanSinglePrice).filter(p => p !== '');
+        if (priceList.length > 0) return priceList.join(' | ');
+      } else if (typeof parsed === 'object' && parsed !== null) {
+        priceList = Object.values(parsed).map(cleanSinglePrice).filter(p => p !== '');
+        if (priceList.length > 0) return priceList.join(' | ');
+      }
+    } catch {
+      // Not JSON, continue with string splitting
+    }
+  }
+
+  // Handle strings like "Raw Milk: 53 | Mala: 60" or "Raw Milk: 53, Mala: 60"
+  const delimiter = sellingPriceStr.includes('|') ? '|' : (sellingPriceStr.includes(';') ? ';' : ',');
+  const parts = sellingPriceStr.split(delimiter);
+
+  parts.forEach(part => {
+    const cleaned = cleanSinglePrice(part);
+    if (cleaned) {
+      priceList.push(cleaned);
+    }
+  });
+
+  if (priceList.length > 0) {
+    return priceList.join(' | ');
+  }
+
+  return cleanSinglePrice(sellingPriceStr);
+};
+
 export async function onRequest(context: { request: Request; env: Record<string, string> }) {
   const jsonHeaders = {
     "Content-Type": "application/json",
@@ -131,10 +207,8 @@ export async function onRequest(context: { request: Request; env: Record<string,
           .map((d: any, dIdx: number) => {
             const priceStr =
               d.prices && Object.keys(d.prices).length > 0
-                ? Object.entries(d.prices)
-                    .map(([prod, price]) => `${prod}: ${price}`)
-                    .join(", ")
-                : "";
+                ? formatSellingPriceForSheets(d.prices)
+                : formatSellingPriceForSheets(d.distPrice || "");
             return `Distributor #${dIdx + 1}: ${priceStr}`;
           })
           .join(" | ");
@@ -148,7 +222,7 @@ export async function onRequest(context: { request: Request; env: Record<string,
         data.expiryDate,
         sale.avgVolPerDay || "",
         sale.buyingPrice || "",
-        sale.sellingPrice || "",
+        formatSellingPriceForSheets(sale.sellingPrice),
         data.traceability,
         `${sale.month} ${sale.year}`,
         sale.qtyDeclared,
@@ -159,7 +233,7 @@ export async function onRequest(context: { request: Request; env: Record<string,
         data.endTime,
         Array.isArray(data.natureOfProduce)
           ? data.natureOfProduce.join(", ")
-          : data.natureOfProduce,
+          : (data.natureOfProduce || ""),
         distNameFormatted,
         distContactsFormatted,
         distVolPerDayFormatted,
@@ -195,6 +269,9 @@ export async function onRequest(context: { request: Request; env: Record<string,
         data.date,
         data.startTime,
         data.endTime,
+        Array.isArray(data.natureOfProduce)
+          ? data.natureOfProduce.join(", ")
+          : (data.natureOfProduce || ""),
       ]);
       allRows.push({ sheet, rows: intakeRows });
 
@@ -208,7 +285,7 @@ export async function onRequest(context: { request: Request; env: Record<string,
           data.expiryDate,
           sale.avgVolPerDay || "",
           sale.buyingPrice || "",
-          sale.sellingPrice || "",
+          formatSellingPriceForSheets(sale.sellingPrice),
           data.traceability,
           `${sale.month} ${sale.year}`,
           sale.qtyDeclared,
@@ -218,6 +295,9 @@ export async function onRequest(context: { request: Request; env: Record<string,
           data.date,
           data.startTime,
           data.endTime,
+          Array.isArray(data.natureOfProduce)
+            ? data.natureOfProduce.join(", ")
+            : (data.natureOfProduce || ""),
         ]);
       if (salesRows.length > 0) {
         allRows.push({ sheet, rows: salesRows });
