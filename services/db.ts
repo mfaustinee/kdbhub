@@ -1719,6 +1719,27 @@ export const DBService = {
     return updated;
   },
 
+  async reorderAuthoritySignatures(newSignatures: AuthoritySignature[]): Promise<AuthoritySignature[]> {
+    await this.saveAuthoritySignatures(newSignatures);
+    return newSignatures;
+  },
+
+  async moveAuthoritySignature(id: string, direction: 'up' | 'down'): Promise<AuthoritySignature[]> {
+    const current = await this.getAuthoritySignatures();
+    const index = current.findIndex(s => s.id === id);
+    if (index === -1) return current;
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= current.length) return current;
+
+    const reordered = [...current];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+
+    await this.saveAuthoritySignatures(reordered);
+    return reordered;
+  },
+
   async getClients(forceFresh: boolean = false): Promise<LicensedClient[]> {
     const deduplicateClients = (list: LicensedClient[]): LicensedClient[] => {
       const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
