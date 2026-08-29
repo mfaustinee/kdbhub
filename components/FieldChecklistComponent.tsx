@@ -1,0 +1,512 @@
+import React, { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  ClipboardList, 
+  ChevronDown, 
+  ChevronUp, 
+  CheckCircle2, 
+  AlertTriangle, 
+  XCircle, 
+  MinusCircle, 
+  Check, 
+  RotateCcw,
+  Sparkles,
+  Search,
+  CheckCheck
+} from 'lucide-react';
+import { FieldChecklistResultStatus } from '../types';
+import { 
+  FIELD_CHECKLIST_SECTIONS, 
+  FIELD_CHECKLIST_STATUS_OPTIONS, 
+  findSuggestedSectionId, 
+  FieldChecklistSection,
+  FieldChecklistItem
+} from './fieldChecklistData';
+
+interface FieldChecklistComponentProps {
+  value: Record<string, { status: FieldChecklistResultStatus; notes: string }>;
+  onChange: (updated: Record<string, { status: FieldChecklistResultStatus; notes: string }>) => void;
+  clientCategory?: string;
+  readOnly?: boolean;
+}
+
+export const FieldChecklistComponent: React.FC<FieldChecklistComponentProps> = ({
+  value = {},
+  onChange,
+  clientCategory,
+  readOnly = false
+}) => {
+  const suggestedSectionId = useMemo(() => findSuggestedSectionId(clientCategory), [clientCategory]);
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeSectionId, setActiveSectionId] = useState<string>(suggestedSectionId);
+  const [searchFilter, setSearchFilter] = useState('');
+
+  // Calculate statistics across all sections
+  const stats = useMemo(() => {
+    let evaluated = 0;
+    let reconciled = 0;
+    let discrepancies = 0;
+    let missing = 0;
+    let na = 0;
+
+    Object.values(value).forEach(item => {
+      if (item?.status) {
+        evaluated++;
+        if (item.status === 'Available & Reconciled') reconciled++;
+        else if (item.status === 'Available (Discrepancies)') discrepancies++;
+        else if (item.status === 'Not Available / Missing') missing++;
+        else if (item.status === 'Not Applicable (N/A)') na++;
+      } else if (item?.notes && item.notes.trim() !== '') {
+        evaluated++;
+      }
+    });
+
+    return { evaluated, reconciled, discrepancies, missing, na };
+  }, [value]);
+
+  const handleStatusChange = (ref: string, newStatus: FieldChecklistResultStatus) => {
+    if (readOnly) return;
+    const current = value[ref] || { status: '', notes: '' };
+    // Toggle off if clicked again
+    const finalStatus = current.status === newStatus ? '' : newStatus;
+    onChange({
+      ...value,
+      [ref]: {
+        ...current,
+        status: finalStatus
+      }
+    });
+  };
+
+  const handleNotesChange = (ref: string, notes: string) => {
+    if (readOnly) return;
+    const current = value[ref] || { status: '', notes: '' };
+    onChange({
+      ...value,
+      [ref]: {
+        ...current,
+        notes
+      }
+    });
+  };
+
+  const handleMarkSection = (section: FieldChecklistSection, status: FieldChecklistResultStatus) => {
+    if (readOnly) return;
+    const updated = { ...value };
+    section.items.forEach(item => {
+      const current = updated[item.ref] || { status: '', notes: '' };
+      updated[item.ref] = {
+        ...current,
+        status
+      };
+    });
+    onChange(updated);
+  };
+
+  const handleClearSection = (section: FieldChecklistSection) => {
+    if (readOnly) return;
+    const updated = { ...value };
+    section.items.forEach(item => {
+      delete updated[item.ref];
+    });
+    onChange(updated);
+  };
+
+  const handleClearAll = () => {
+    if (readOnly) return;
+    if (window.confirm('Clear all filled checklist statuses and notes?')) {
+      onChange({});
+    }
+  };
+
+  // Filter sections and items based on search
+  const displayedSections = useMemo(() => {
+    if (!searchFilter.trim()) {
+      if (activeSectionId === 'all') {
+        return FIELD_CHECKLIST_SECTIONS;
+      }
+      return FIELD_CHECKLIST_SECTIONS.filter(sec => sec.id === activeSectionId);
+    }
+
+    const query = searchFilter.toLowerCase().trim();
+    return FIELD_CHECKLIST_SECTIONS.map(sec => ({
+      ...sec,
+      items: sec.items.filter(item => 
+        item.ref.toLowerCase().includes(query) ||
+        item.title.toLowerCase().includes(query) ||
+        item.description.toLowerCase().includes(query) ||
+        sec.title.toLowerCase().includes(query)
+      )
+    })).filter(sec => sec.items.length > 0);
+  }, [activeSectionId, searchFilter]);
+
+  return (
+    <div className="w-full bg-white rounded-3xl border border-slate-200/80 shadow-xs overflow-hidden transition-all">
+      {/* Accordion / Header Banner */}
+      <div 
+        onClick={() => setIsOpen(prev => !prev)}
+        className="p-4 sm:p-5 flex items-center justify-between gap-3 cursor-pointer select-none bg-linear-to-r from-slate-50 via-white to-blue-50/30 hover:bg-slate-50 transition-all border-b border-transparent data-[open=true]:border-slate-200"
+        data-open={isOpen}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-2xl bg-blue-600/10 text-blue-700 flex items-center justify-center shrink-0 border border-blue-200/50">
+            <ClipboardList className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs sm:text-sm font-extrabold text-slate-900 tracking-tight">
+                FIELD CHECKLIST: Records & Traceability Reconciliation
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                Optional
+              </span>
+              {stats.evaluated > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                  {stats.evaluated} Recorded
+                </span>
+              )}
+              {stats.discrepancies > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                  <AlertTriangle className="w-2.5 h-2.5" />
+                  {stats.discrepancies} Discrepancies
+                </span>
+              )}
+              {stats.missing > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
+                  <XCircle className="w-2.5 h-2.5" />
+                  {stats.missing} Missing
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 truncate mt-0.5">
+              Premise verification criteria for Milk Bars, Dispensers, Cooling Plants, Cottage Industries, Mini Dairies & Processors
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+          >
+            <span>{isOpen ? 'Hide Checklist' : 'Open Checklist'}</span>
+            {isOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Expandable Checklist Content */}
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="overflow-hidden bg-slate-50/40"
+          >
+            <div className="p-4 sm:p-6 space-y-5 border-t border-slate-200">
+              {/* Category / Section Tabs and Search bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full scrollbar-thin">
+                  {FIELD_CHECKLIST_SECTIONS.map(sec => {
+                    const isSuggested = sec.id === suggestedSectionId;
+                    const isActive = activeSectionId === sec.id;
+                    const filledCount = sec.items.filter(item => value[item.ref]?.status).length;
+                    
+                    return (
+                      <button
+                        key={sec.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveSectionId(sec.id);
+                          setSearchFilter('');
+                        }}
+                        className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0 border ${
+                          isActive
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>Sec {sec.sectionNumber}: {sec.shortName}</span>
+                        {filledCount > 0 && (
+                          <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-black ${
+                            isActive ? 'bg-blue-800 text-white' : 'bg-slate-100 text-slate-700'
+                          }`}>
+                            {filledCount}/{sec.items.length}
+                          </span>
+                        )}
+                        {isSuggested && (
+                          <span className={`text-[9px] px-1 py-0.2 rounded font-semibold ${
+                            isActive ? 'bg-blue-500 text-white' : 'bg-emerald-100 text-emerald-800'
+                          }`} title="Suggested category based on client profile">
+                            Target
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveSectionId('all');
+                      setSearchFilter('');
+                    }}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer shrink-0 border ${
+                      activeSectionId === 'all'
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    View All Sections
+                  </button>
+                </div>
+
+                {/* Quick filter search */}
+                <div className="relative min-w-[200px] shrink-0">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchFilter}
+                    onChange={(e) => setSearchFilter(e.target.value)}
+                    placeholder="Search checklist items..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white outline-none focus:border-blue-500 transition-all placeholder:text-slate-400"
+                  />
+                  {searchFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchFilter('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Sections Display */}
+              <div className="space-y-6">
+                {displayedSections.map(section => {
+                  const sectionFilledCount = section.items.filter(item => value[item.ref]?.status).length;
+                  const isSectionMatch = section.id === suggestedSectionId;
+
+                  return (
+                    <div 
+                      key={section.id} 
+                      className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden"
+                    >
+                      {/* Section Title & Focus Banner */}
+                      <div className="p-4 bg-slate-50/80 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 uppercase tracking-wide">
+                              {section.title}
+                            </h4>
+                            {isSectionMatch && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                                <Sparkles className="w-2.5 h-2.5" />
+                                Matches Operator Category
+                              </span>
+                            )}
+                            <span className="text-[10px] font-semibold text-slate-500">
+                              ({sectionFilledCount} of {section.items.length} completed)
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                            <strong className="text-slate-800">Focus:</strong> {section.focus}
+                          </p>
+                        </div>
+
+                        {!readOnly && (
+                          <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handleMarkSection(section, 'Available & Reconciled')}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                              title="Mark all items in this section as Available & Reconciled"
+                            >
+                              <CheckCheck className="w-3 h-3" />
+                              <span>All Reconciled</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMarkSection(section, 'Not Applicable (N/A)')}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                              title="Mark all items in this section as N/A"
+                            >
+                              <MinusCircle className="w-3 h-3" />
+                              <span>All N/A</span>
+                            </button>
+                            {sectionFilledCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => handleClearSection(section)}
+                                className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                                title="Reset entries for this section"
+                              >
+                                Reset
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Items List */}
+                      <div className="divide-y divide-slate-100">
+                        {section.items.map(item => {
+                          const currentVal = value[item.ref] || { status: '', notes: '' };
+                          const hasDiscrepancy = currentVal.status === 'Available (Discrepancies)';
+                          const isMissing = currentVal.status === 'Not Available / Missing';
+
+                          return (
+                            <div 
+                              key={item.ref}
+                              className="p-4 hover:bg-slate-50/50 transition-all grid grid-cols-1 lg:grid-cols-12 gap-3.5"
+                            >
+                              {/* Ref & Item Details (cols 1-5) */}
+                              <div className="lg:col-span-5 space-y-1.5">
+                                <div className="flex items-start gap-2">
+                                  <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 text-[10px] font-extrabold font-mono shrink-0 mt-0.5">
+                                    Ref {item.ref}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <h5 className="text-xs font-bold text-slate-900 leading-snug">
+                                      {item.title}
+                                    </h5>
+                                    <p className="text-[11px] text-slate-600 leading-relaxed mt-1">
+                                      {item.description}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Status / Existence (cols 6-8) */}
+                              <div className="lg:col-span-4 space-y-1.5">
+                                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                  Result Status / Existence
+                                </label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                  {FIELD_CHECKLIST_STATUS_OPTIONS.map(opt => {
+                                    const isSelected = currentVal.status === opt.value;
+                                    return (
+                                      <button
+                                        key={opt.value}
+                                        type="button"
+                                        disabled={readOnly}
+                                        onClick={() => handleStatusChange(item.ref, opt.value)}
+                                        className={`px-2.5 py-1.5 rounded-xl border text-left text-[11px] transition-all flex items-center justify-between gap-1.5 cursor-pointer disabled:cursor-not-allowed ${
+                                          isSelected
+                                            ? opt.activeClass
+                                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                                        }`}
+                                      >
+                                        <span className="truncate">{opt.label}</span>
+                                        {isSelected && (
+                                          <Check className="w-3.5 h-3.5 shrink-0" />
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              {/* Observations & Reconciliation Notes (cols 9-12) */}
+                              <div className="lg:col-span-3 space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                    Observations & Notes
+                                  </label>
+                                  {(hasDiscrepancy || isMissing) && !currentVal.notes && (
+                                    <span className="text-[9px] text-amber-600 font-bold animate-pulse">
+                                      Note recommended
+                                    </span>
+                                  )}
+                                </div>
+                                <textarea
+                                  rows={2}
+                                  disabled={readOnly}
+                                  value={currentVal.notes || ''}
+                                  onChange={(e) => handleNotesChange(item.ref, e.target.value)}
+                                  placeholder="Observations, batch IDs, or variance notes..."
+                                  className={`w-full px-3 py-1.5 text-xs rounded-xl border outline-none transition-all placeholder:text-slate-400 resize-y bg-white ${
+                                    hasDiscrepancy
+                                      ? 'border-amber-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 bg-amber-50/20'
+                                      : isMissing
+                                      ? 'border-rose-300 focus:border-rose-500 focus:ring-2 focus:ring-rose-100 bg-rose-50/20'
+                                      : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+                                  }`}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {displayedSections.length === 0 && (
+                  <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 space-y-2">
+                    <ClipboardList className="w-8 h-8 text-slate-300 mx-auto" />
+                    <p className="text-xs font-bold text-slate-700">No matching checklist items</p>
+                    <button
+                      type="button"
+                      onClick={() => setSearchFilter('')}
+                      className="text-xs text-blue-600 font-bold hover:underline"
+                    >
+                      Clear search filter
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Summary Bar */}
+              <div className="p-4 bg-white rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="font-bold text-slate-700">Total Progress:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 font-bold text-[11px]">
+                    {stats.evaluated} of 27 items recorded
+                  </span>
+                  <span className="text-emerald-700 font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    {stats.reconciled} Reconciled
+                  </span>
+                  {stats.discrepancies > 0 && (
+                    <span className="text-amber-700 font-bold flex items-center gap-1">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      {stats.discrepancies} Discrepancies
+                    </span>
+                  )}
+                  {stats.missing > 0 && (
+                    <span className="text-rose-700 font-bold flex items-center gap-1">
+                      <XCircle className="w-3.5 h-3.5" />
+                      {stats.missing} Missing
+                    </span>
+                  )}
+                  {stats.na > 0 && (
+                    <span className="text-slate-600 font-semibold flex items-center gap-1">
+                      <MinusCircle className="w-3.5 h-3.5" />
+                      {stats.na} N/A
+                    </span>
+                  )}
+                </div>
+
+                {!readOnly && stats.evaluated > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleClearAll}
+                      className="px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Clear Checklist
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};

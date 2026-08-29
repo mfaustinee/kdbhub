@@ -6,7 +6,9 @@ import SignatureCanvas from 'react-signature-canvas';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
-import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, FieldChecklistResultStatus } from '../types';
+import { FieldChecklistComponent } from './FieldChecklistComponent';
+import { FIELD_CHECKLIST_SECTIONS } from './fieldChecklistData';
 import { 
   ClipboardCheck, 
   Database, 
@@ -174,6 +176,7 @@ interface FormData {
   distNatureOfProduce: string[];
   distPrice: string;
   distributors: DistributorEntry[];
+  fieldChecklist?: Record<string, { status: FieldChecklistResultStatus; notes: string }>;
 }
 
 const parseSellingPrices = (sellingPriceStr: string): Record<string, string> => {
@@ -694,7 +697,8 @@ const initialData: FormData = {
     outlets: [{ location: '', volPerDay: '', permitStatus: 'None', levyInfo: 'Does not Qualify' }],
     natureOfProduce: [],
     prices: {}
-  }]
+  }],
+  fieldChecklist: {}
 };
 
 const getMirroredSellingPrice = (product: string, sales: SalesEntry[]): string => {
@@ -2082,7 +2086,11 @@ export function DataValidationModule() {
       }
 
       if (parsed && parsed.formData) {
-        setFormData(parsed.formData);
+        setFormData({
+          ...initialData,
+          ...parsed.formData,
+          fieldChecklist: parsed.formData.fieldChecklist || {}
+        });
         if (parsed.declarations) setDeclarations(parsed.declarations);
         if (parsed.selectedClient) setSelectedClient(parsed.selectedClient);
         if (parsed.validationPremiseMode) setValidationPremiseMode(parsed.validationPremiseMode);
@@ -3227,6 +3235,48 @@ export function DataValidationModule() {
     currentY = (doc as any).lastAutoTable.finalY;
     currentY += 10;
 
+    // Optional Field Records Checklist (rendered when checklist items are evaluated)
+    if (data.fieldChecklist && Object.keys(data.fieldChecklist).length > 0) {
+      const evaluatedItems: Array<[string, string, string, string]> = [];
+
+      FIELD_CHECKLIST_SECTIONS.forEach(sec => {
+        sec.items.forEach(item => {
+          const entry = data.fieldChecklist?.[item.ref];
+          if (entry && (entry.status || (entry.notes && entry.notes.trim() !== ''))) {
+            evaluatedItems.push([
+              item.ref,
+              `${item.title} (${sec.shortName})`,
+              entry.status || 'Evaluated',
+              entry.notes || '-'
+            ]);
+          }
+        });
+      });
+
+      if (evaluatedItems.length > 0) {
+        checkPageBreak(40);
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.text("Field Records Checklist & Reconciliation:", 20, currentY);
+        doc.setFont("helvetica", "normal");
+
+        autoTable(doc, {
+          startY: currentY + 4,
+          head: [['Ref', 'Item for Data Validation & Reconciliation', 'Result Status', 'Observations & Notes']],
+          body: evaluatedItems,
+          styles: { fontSize: 7, cellPadding: 2.5 },
+          headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
+          columnStyles: {
+            0: { cellWidth: 14, fontStyle: 'bold' },
+            1: { cellWidth: 68 },
+            2: { cellWidth: 40 },
+            3: { cellWidth: 53 }
+          }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 10;
+      }
+    }
+
     // Compliance Section (Only for main facility / standard validations)
     if (!isBranchFacility) {
       checkPageBreak(25);
@@ -3759,7 +3809,8 @@ export function DataValidationModule() {
         remarks: updatedData.comments || '',
         monthsCount: Array.isArray(updatedData.sales) && updatedData.sales.length > 0 ? updatedData.sales.length : 1,
         pdfPath: pdfPath || pdf,
-        rawData: payloadRawData
+        rawData: payloadRawData,
+        fieldChecklist: updatedData.fieldChecklist || {}
       };
 
       // 4. Concurrent execution of DBService save, Google Sheets submission, and Supabase sync
@@ -5436,6 +5487,15 @@ export function DataValidationModule() {
                             ? 'border-red-500 focus:border-red-500 focus:ring-red-200 ring-2 ring-red-100 bg-red-50/20'
                             : 'border-gray-200 focus:border-blue-500'
                         }`}
+                      />
+                    </div>
+
+                    {/* Optional Field Records Checklist Harboured in Traceability & Records */}
+                    <div className="md:col-span-2 pt-2">
+                      <FieldChecklistComponent
+                        value={formData.fieldChecklist || {}}
+                        onChange={(updated) => setFormData(prev => ({ ...prev, fieldChecklist: updated }))}
+                        clientCategory={formData.category}
                       />
                     </div>
                   </div>

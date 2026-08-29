@@ -455,6 +455,23 @@ export interface DataValidation {
   monthsCount?: number; // Number of individual months / sales entries validated within this form
   pdfPath?: string;
   rawData?: any;
+  fieldChecklist?: Record<string, FieldChecklistEntry>;
+}
+
+export type FieldChecklistResultStatus =
+  | 'Available & Reconciled'
+  | 'Available (Discrepancies)'
+  | 'Not Available / Missing'
+  | 'Not Applicable (N/A)'
+  | '';
+
+export interface FieldChecklistEntry {
+  status: FieldChecklistResultStatus;
+  notes: string;
+}
+
+export interface FieldChecklistMap {
+  [ref: string]: FieldChecklistEntry;
 }
 
 export const getIndividualValidationsCount = (v: DataValidation): number => {
