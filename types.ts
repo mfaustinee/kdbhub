@@ -553,12 +553,18 @@ export interface ValidationDraft {
   county?: string;
   branch?: string;
   step?: number;
-  status?: 'draft' | 'submitted';
+  status?: 'draft' | 'pending_dbo_signature' | 'signed_by_dbo' | 'submitted';
   rawData?: any;
   raw_data?: any;
   createdAt?: string;
   created_at?: string;
   updatedAt?: string;
   updated_at?: string;
+  signingToken?: string;
+  signing_token?: string;
+  signingExpiresAt?: string;
+  signing_expires_at?: string;
+  dboSignedAt?: string;
+  dbo_signed_at?: string;
 }
 

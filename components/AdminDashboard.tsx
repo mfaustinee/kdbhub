@@ -554,9 +554,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (authoritySigs.length === 0 || !staffConfig.officialSignature) {
         onStaffUpdate({
           ...staffConfig,
+          authoritySignatures: updated,
           officialSignature: newSigImage,
           officialName: newSigName.trim(),
           officialTitle: newSigTitle.trim() || staffConfig.officialTitle
+        });
+      } else {
+        onStaffUpdate({
+          ...staffConfig,
+          authoritySignatures: updated
         });
       }
       setNewSigName('');
@@ -578,6 +584,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const def = updated.find(s => s.isDefault) || updated[0];
       onStaffUpdate({
         ...staffConfig,
+        authoritySignatures: updated,
         officialSignature: def.signature,
         officialName: def.name,
         officialTitle: def.title || staffConfig.officialTitle
@@ -585,6 +592,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } else {
       onStaffUpdate({
         ...staffConfig,
+        authoritySignatures: [],
         officialSignature: ''
       });
     }
@@ -599,6 +607,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setAuthoritySigs(updated);
     onStaffUpdate({
       ...staffConfig,
+      authoritySignatures: updated,
       officialSignature: sig.signature,
       officialName: sig.name,
       officialTitle: sig.title || staffConfig.officialTitle
@@ -608,6 +617,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleMoveAuthoritySignature = async (id: string, direction: 'up' | 'down') => {
     const updated = await DBService.moveAuthoritySignature(id, direction);
     setAuthoritySigs(updated);
+    onStaffUpdate({
+      ...staffConfig,
+      authoritySignatures: updated
+    });
   };
 
   const handleMoveToTop = async (id: string) => {
@@ -618,6 +631,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     reordered.unshift(item);
     await DBService.saveAuthoritySignatures(reordered);
     setAuthoritySigs(reordered);
+    onStaffUpdate({
+      ...staffConfig,
+      authoritySignatures: reordered
+    });
   };
 
   const handleMoveToBottom = async (id: string) => {
@@ -628,6 +645,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     reordered.push(item);
     await DBService.saveAuthoritySignatures(reordered);
     setAuthoritySigs(reordered);
+    onStaffUpdate({
+      ...staffConfig,
+      authoritySignatures: reordered
+    });
   };
 
   const handleFileChangeForNewSig = (file: File | null) => {

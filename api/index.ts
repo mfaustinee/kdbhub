@@ -19,6 +19,7 @@ const COMPLAINTS_FILE = path.join(DATA_DIR, "complaints.json");
 const INQUIRIES_FILE = path.join(DATA_DIR, "inquiries.json");
 const DEBTORS_FILE = path.join(DATA_DIR, "debtors.json");
 const STAFF_FILE = path.join(DATA_DIR, "staff.json");
+const AUTHORITY_SIGNATURES_FILE = path.join(DATA_DIR, "authority_signatures.json");
 const CLIENTS_FILE = path.join(DATA_DIR, "clients.json");
 const RETURNS_FILE = path.join(DATA_DIR, "returns.json");
 const VALIDATIONS_FILE = path.join(DATA_DIR, "validations.json");
@@ -924,6 +925,55 @@ async function startServer() {
       }
     });
 
+    app.get("/api/validation-drafts/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const draftsList = await readJsonArrayFile(VALIDATION_DRAFTS_FILE);
+        const match = draftsList.find((d: any) => d.id === id);
+        if (match) {
+          return res.json(match);
+        }
+
+        if (sUrl && sKey) {
+          try {
+            const serverSupabase = createClient(sUrl, sKey);
+            const { data, error } = await serverSupabase
+              .from('validation_drafts')
+              .select('*')
+              .eq('id', id)
+              .maybeSingle();
+
+            if (data && !error) {
+              return res.json({
+                id: data.id,
+                permitNo: data.permit_no || data.permitNo || '',
+                dboName: data.dbo_name || data.dboName || '',
+                premiseName: data.premise_name || data.premiseName || '',
+                validationPeriod: data.validation_period || data.validationPeriod || '',
+                category: data.category || '',
+                location: data.location || '',
+                county: data.county || 'Kericho',
+                branch: data.branch || 'Kericho',
+                step: data.step ?? 0,
+                status: data.status || 'draft',
+                rawData: data.raw_data || data.rawData || {},
+                raw_data: data.raw_data || data.rawData || {},
+                createdAt: data.created_at || data.createdAt,
+                updatedAt: data.updated_at || data.updatedAt
+              });
+            }
+          } catch (sbErr: any) {
+            logToFile(`[Server] Supabase draft fetch exception: ${sbErr.message}`);
+          }
+        }
+
+        return res.status(404).json({ error: "Draft not found" });
+      } catch (error: any) {
+        logToFile(`Error reading validation draft: ${error.message}`);
+        res.status(500).json({ error: "Failed to read draft" });
+      }
+    });
+
     app.post("/api/validation-drafts", async (req, res) => {
       try {
         if (!req.body) {
@@ -967,7 +1017,7 @@ async function startServer() {
                 county: draft.county || 'Kericho',
                 branch: draft.branch || 'Kericho',
                 step: draft.step ?? 0,
-                status: 'draft',
+                status: draft.status || 'draft',
                 raw_data: draft.raw_data || draft.rawData || draft,
                 created_at: draft.created_at,
                 updated_at: draft.updated_at
@@ -1030,35 +1080,121 @@ async function startServer() {
       }
     });
 
-    logToFile("[Server] Registering staff routes...");
-    app.get("/api/staff", async (req, res) => {
-    try {
-      if (!fs.existsSync(STAFF_FILE)) {
-        return res.json({ officialSignature: '' });
-      }
-      const data = await fs.promises.readFile(STAFF_FILE, "utf-8");
+    logToFile("[Server] Registering staff and authority signatures routes...");
+    app.get("/api/authority-signatures", async (req, res) => {
       try {
-        res.json(JSON.parse(data));
-      } catch (parseError) {
-        logToFile(`Error parsing staff JSON: ${parseError}`);
-        res.json({ officialSignature: '' });
+        if (!fs.existsSync(AUTHORITY_SIGNATURES_FILE)) {
+          return res.json([]);
+        }
+        const data = await fs.promises.readFile(AUTHORITY_SIGNATURES_FILE, "utf-8");
+        try {
+          const parsed = JSON.parse(data);
+          res.json(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          res.json([]);
+        }
+      } catch (error: any) {
+        logToFile(`Error reading authority signatures: ${error.message}`);
+        res.status(500).json({ error: "Failed to read authority signatures" });
       }
-    } catch (error) {
-      res.status(500).json({ error: "Failed to read staff config" });
-    }
-  });
+    });
+
+    app.post("/api/authority-signatures", async (req, res) => {
+      try {
+        const raw = req.body;
+        const sigs = Array.isArray(raw) ? raw : (Array.isArray(raw?.signatures) ? raw.signatures : []);
+        await fs.promises.writeFile(AUTHORITY_SIGNATURES_FILE, JSON.stringify(sigs, null, 2));
+        logToFile(`Successfully saved ${sigs.length} authority signatures to ${AUTHORITY_SIGNATURES_FILE}`);
+
+        // Sync with staff.json so officialSignature is aligned with default
+        try {
+          let currentStaff: any = {};
+          if (fs.existsSync(STAFF_FILE)) {
+            try { currentStaff = JSON.parse(await fs.promises.readFile(STAFF_FILE, "utf-8")); } catch (_) {}
+          }
+          currentStaff.authoritySignatures = sigs;
+          if (sigs.length > 0) {
+            const def = sigs.find((s: any) => s.isDefault) || sigs[0];
+            currentStaff.officialSignature = def.signature;
+            currentStaff.officialName = def.name;
+            if (def.title) currentStaff.officialTitle = def.title;
+          }
+          await fs.promises.writeFile(STAFF_FILE, JSON.stringify(currentStaff, null, 2));
+        } catch (e: any) {
+          logToFile(`Warning updating staff.json from authority signatures: ${e.message}`);
+        }
+
+        res.json({ success: true, count: sigs.length });
+      } catch (error: any) {
+        logToFile(`CRITICAL Error saving authority signatures: ${error.message}`);
+        res.status(500).json({ error: "Failed to save authority signatures", details: error.message });
+      }
+    });
+
+    app.get("/api/staff", async (req, res) => {
+      try {
+        if (!fs.existsSync(STAFF_FILE)) {
+          return res.json({ officialSignature: '' });
+        }
+        const data = await fs.promises.readFile(STAFF_FILE, "utf-8");
+        try {
+          const parsed = JSON.parse(data);
+          // If staff config doesn't have authoritySignatures but authority file does, merge it
+          if (!parsed.authoritySignatures && fs.existsSync(AUTHORITY_SIGNATURES_FILE)) {
+            try {
+              const authData = JSON.parse(await fs.promises.readFile(AUTHORITY_SIGNATURES_FILE, "utf-8"));
+              if (Array.isArray(authData) && authData.length > 0) {
+                parsed.authoritySignatures = authData;
+              }
+            } catch (_) {}
+          }
+          res.json(parsed);
+        } catch (parseError) {
+          logToFile(`Error parsing staff JSON: ${parseError}`);
+          res.json({ officialSignature: '' });
+        }
+      } catch (error) {
+        res.status(500).json({ error: "Failed to read staff config" });
+      }
+    });
 
     app.post("/api/staff", async (req, res) => {
-    try {
-      logToFile(`Attempting to save staff config`);
-      await fs.promises.writeFile(STAFF_FILE, JSON.stringify(req.body, null, 2));
-      logToFile(`Successfully saved staff config`);
-      res.json({ success: true });
-    } catch (error: any) {
-      logToFile(`CRITICAL Error saving staff config: ${error.message}`);
-      res.status(500).json({ error: "Failed to save staff config", details: error.message });
-    }
-  });
+      try {
+        logToFile(`Attempting to save staff config`);
+        let payload = { ...req.body };
+
+        // Do not wipe authoritySignatures if incoming body did not pass them
+        if (!payload.authoritySignatures || (Array.isArray(payload.authoritySignatures) && payload.authoritySignatures.length === 0)) {
+          if (fs.existsSync(AUTHORITY_SIGNATURES_FILE)) {
+            try {
+              const authData = JSON.parse(await fs.promises.readFile(AUTHORITY_SIGNATURES_FILE, "utf-8"));
+              if (Array.isArray(authData) && authData.length > 0) {
+                payload.authoritySignatures = authData;
+              }
+            } catch (_) {}
+          } else if (fs.existsSync(STAFF_FILE)) {
+            try {
+              const existingStaff = JSON.parse(await fs.promises.readFile(STAFF_FILE, "utf-8"));
+              if (Array.isArray(existingStaff.authoritySignatures) && existingStaff.authoritySignatures.length > 0) {
+                payload.authoritySignatures = existingStaff.authoritySignatures;
+              }
+            } catch (_) {}
+          }
+        } else if (Array.isArray(payload.authoritySignatures) && payload.authoritySignatures.length > 0) {
+          // If incoming staff config has authoritySignatures, persist them to authority_signatures.json
+          try {
+            await fs.promises.writeFile(AUTHORITY_SIGNATURES_FILE, JSON.stringify(payload.authoritySignatures, null, 2));
+          } catch (_) {}
+        }
+
+        await fs.promises.writeFile(STAFF_FILE, JSON.stringify(payload, null, 2));
+        logToFile(`Successfully saved staff config`);
+        res.json({ success: true });
+      } catch (error: any) {
+        logToFile(`CRITICAL Error saving staff config: ${error.message}`);
+        res.status(500).json({ error: "Failed to save staff config", details: error.message });
+      }
+    });
 
   // Service Account Auth Helper for Google Sheets
   const getSheetsClient = () => {
@@ -1542,6 +1678,11 @@ async function startServer() {
     if (!fs.existsSync(STAFF_FILE)) {
       console.log(`[Server] Initializing staff file: ${STAFF_FILE}`);
       fs.writeFileSync(STAFF_FILE, JSON.stringify({ officialSignature: '' }, null, 2));
+    }
+
+    if (!fs.existsSync(AUTHORITY_SIGNATURES_FILE)) {
+      console.log(`[Server] Initializing authority signatures file: ${AUTHORITY_SIGNATURES_FILE}`);
+      fs.writeFileSync(AUTHORITY_SIGNATURES_FILE, JSON.stringify([], null, 2));
     }
   } catch (e) {
     console.warn("Could not write initial json seed files (read-only filesystem or Supabase primary mode):", e);

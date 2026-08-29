@@ -9,6 +9,7 @@ import { PortalHub } from './components/PortalHub.tsx';
 import { ClosureForm } from './components/ClosureForm.tsx';
 import { ComplaintForm } from './components/ComplaintForm.tsx';
 import { InquiryForm } from './components/InquiryForm.tsx';
+import { DboSigningPortal } from './components/DboSigningPortal.tsx';
 import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient, ComplaintData, InquiryData } from './types.ts';
 import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck } from 'lucide-react';
 import { DBService } from './services/db.ts';
@@ -569,73 +570,79 @@ const App: React.FC = () => {
     await DBService.saveStaffConfig(config);
   };
 
+  const isSigningPortal = location.pathname.startsWith('/sign-validation');
+
   return (
     <div className="min-h-screen flex flex-col font-sans bg-slate-50 text-slate-900">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm print:hidden">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="flex justify-between h-14 items-center">
-            <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => navigate('/')}>
-              <div className="bg-emerald-600 p-1.5 rounded-lg flex items-center shadow-sm">
-                <ShieldCheck className="text-white w-4 h-4" />
-              </div>
-              <div className="hidden sm:block">
-                <div className="flex items-center space-x-2">
-                  <span className="font-bold text-xs uppercase tracking-wider text-slate-800">KDB Hub</span>
-                  <div className={`flex items-center space-x-1 px-2 py-0.5 rounded-full border ${isSyncing ? 'bg-amber-50 border-amber-100' : 'bg-emerald-50 border-emerald-100'}`}>
-                    {isSyncing ? (
-                      <Loader2 className="w-2.5 h-2.5 text-amber-500 animate-spin" />
-                    ) : (
-                      <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                    )}
-                    <span className={`text-[9px] font-bold uppercase tracking-tight ${isSyncing ? 'text-amber-600' : 'text-emerald-600'}`}>
-                      {isSyncing ? 'Syncing...' : 'Connected'}
-                    </span>
+      {!isSigningPortal && (
+        <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm print:hidden">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6">
+            <div className="flex justify-between h-14 items-center">
+              <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => navigate('/')}>
+                <div className="bg-emerald-600 p-1.5 rounded-lg flex items-center shadow-sm">
+                  <ShieldCheck className="text-white w-4 h-4" />
+                </div>
+                <div className="hidden sm:block">
+                  <div className="flex items-center space-x-2">
+                    <span className="font-bold text-xs uppercase tracking-wider text-slate-800">KDB Hub</span>
+                    <div className={`flex items-center space-x-1 px-2 py-0.5 rounded-full border ${isSyncing ? 'bg-amber-50 border-amber-100' : 'bg-emerald-50 border-emerald-100'}`}>
+                      {isSyncing ? (
+                        <Loader2 className="w-2.5 h-2.5 text-amber-500 animate-spin" />
+                      ) : (
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                      )}
+                      <span className={`text-[9px] font-bold uppercase tracking-tight ${isSyncing ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {isSyncing ? 'Syncing...' : 'Connected'}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
+              
+              <nav className="flex space-x-1">
+                <button 
+                  onClick={() => navigate('/')}
+                  className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${['/', '/portal'].includes(location.pathname) ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                >
+                  <User className="w-3.5 h-3.5 mr-1.5" />
+                  Public Portals
+                </button>
+
+
+                {(isAdminAuthenticated || location.pathname === '/admin') && (
+                  <button 
+                    onClick={handleAdminAccess}
+                    className={`relative flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${location.pathname === '/admin' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                  >
+                    <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
+                    Admin
+                    {unreadCount > 0 && location.pathname !== '/admin' && (
+                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white text-[9px] flex items-center justify-center rounded-full border border-white animate-bounce font-bold">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </button>
+                )}
+
+                {isAdminAuthenticated && (
+                  <button 
+                    onClick={handleAdminLogout}
+                    className="flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-all"
+                  >
+                    <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                    Logout
+                  </button>
+                )}
+              </nav>
             </div>
-            
-            <nav className="flex space-x-1">
-              <button 
-                onClick={() => navigate('/')}
-                className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${['/', '/portal'].includes(location.pathname) ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-              >
-                <User className="w-3.5 h-3.5 mr-1.5" />
-                Public Portals
-              </button>
-
-
-              {(isAdminAuthenticated || location.pathname === '/admin') && (
-                <button 
-                  onClick={handleAdminAccess}
-                  className={`relative flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${location.pathname === '/admin' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-                >
-                  <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
-                  Admin
-                  {unreadCount > 0 && location.pathname !== '/admin' && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white text-[9px] flex items-center justify-center rounded-full border border-white animate-bounce font-bold">
-                      {unreadCount}
-                    </span>
-                  )}
-                </button>
-              )}
-
-              {isAdminAuthenticated && (
-                <button 
-                  onClick={handleAdminLogout}
-                  className="flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-all"
-                >
-                  <LogOut className="w-3.5 h-3.5 mr-1.5" />
-                  Logout
-                </button>
-              )}
-            </nav>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       <main className="flex-grow">
         <Routes>
+          <Route path="/sign-validation/:draftId" element={<DboSigningPortal />} />
+          <Route path="/sign-validation" element={<DboSigningPortal />} />
           <Route path="/" element={
             <PortalHub 
               onSelectPaymentPortal={() => navigate('/payment-agreement')} 

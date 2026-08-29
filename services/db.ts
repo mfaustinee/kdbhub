@@ -1563,15 +1563,31 @@ export const DBService = {
   },
 
   async saveStaffConfig(config: StaffConfig): Promise<void> {
+    // Preserve authority signatures if not explicitly provided
+    let authSigs = config.authoritySignatures;
+    if (!authSigs || authSigs.length === 0) {
+      try {
+        const stored = localStorage.getItem('kdb_authority_signatures');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) authSigs = parsed;
+        }
+      } catch (_) {}
+    }
+    const fullConfig = {
+      ...config,
+      authoritySignatures: authSigs || []
+    };
+
     // 1. Always save to local storage immediately
-    localStorage.setItem('kdb_staff_cache', JSON.stringify(config));
+    localStorage.setItem('kdb_staff_cache', JSON.stringify(fullConfig));
 
     // 2. Save to local server file /api/staff as backup
     try {
       await fetch('/api/staff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
+        body: JSON.stringify(fullConfig)
       });
     } catch (e) {
       console.warn("[DBService] /api/staff save warning:", e);
@@ -1582,11 +1598,11 @@ export const DBService = {
     if (!client) return;
 
     try {
-      const dbConfig = toDb(config);
+      const dbConfig = toDb(fullConfig);
       const payload: any = {
         id: 1,
         ...dbConfig,
-        enabledmodules: config.enabledModules ? JSON.stringify(config.enabledModules) : null
+        enabledmodules: fullConfig.enabledModules ? JSON.stringify(fullConfig.enabledModules) : null
       };
 
       const { error } = await client
@@ -1607,6 +1623,8 @@ export const DBService = {
 
   async getAuthoritySignatures(): Promise<AuthoritySignature[]> {
     let signatures: AuthoritySignature[] = [];
+    
+    // 1. Check local storage cache first
     try {
       const stored = localStorage.getItem('kdb_authority_signatures');
       if (stored) {
@@ -1619,6 +1637,37 @@ export const DBService = {
       console.warn("[DBService] Error reading authority signatures from localStorage:", e);
     }
 
+    // 2. Check dedicated server API
+    if (signatures.length === 0) {
+      try {
+        const res = await fetch('/api/authority-signatures');
+        if (res.ok) {
+          const apiSigs = await res.json();
+          if (Array.isArray(apiSigs) && apiSigs.length > 0) {
+            signatures = apiSigs;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Check Supabase kdb_validations backup row
+    if (signatures.length === 0) {
+      try {
+        const client = await getSupabase();
+        if (client) {
+          const { data } = await client
+            .from('kdb_validations')
+            .select('raw_data')
+            .eq('id', 'system_authority_signatures')
+            .maybeSingle();
+          if (data?.raw_data?.signatures && Array.isArray(data.raw_data.signatures) && data.raw_data.signatures.length > 0) {
+            signatures = data.raw_data.signatures;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 4. Check staff cache and /api/staff
     if (signatures.length === 0) {
       try {
         const cachedStaff = localStorage.getItem('kdb_staff_cache');
@@ -1663,11 +1712,21 @@ export const DBService = {
   },
 
   async saveAuthoritySignatures(signatures: AuthoritySignature[]): Promise<void> {
+    // 1. Immediately update localStorage
     try {
       localStorage.setItem('kdb_authority_signatures', JSON.stringify(signatures));
     } catch (e) {}
 
-    // Update staff config cache and server
+    // 2. Save to server API endpoint for authority signatures
+    try {
+      await fetch('/api/authority-signatures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signatures })
+      }).catch(() => {});
+    } catch (e) {}
+
+    // 3. Update staff config cache and server
     try {
       let currentStaff: any = {};
       const cached = localStorage.getItem('kdb_staff_cache');
@@ -1692,7 +1751,23 @@ export const DBService = {
       console.warn("[DBService] saveAuthoritySignatures sync error:", e);
     }
 
-    // Dispatch global event so open modules react immediately
+    // 4. Save to Supabase kdb_validations table backup row
+    try {
+      const client = await getSupabase();
+      if (client) {
+        await client.from('kdb_validations').upsert({
+          id: 'system_authority_signatures',
+          dbo_name: 'SYSTEM_AUTHORITY_SIGNATURES',
+          premise_name: 'SYSTEM',
+          permit_no: 'SYS-AUTH-SIG',
+          validation_period: 'CONFIG',
+          date: new Date().toISOString(),
+          raw_data: { signatures, updatedAt: new Date().toISOString() }
+        });
+      }
+    } catch (e) {}
+
+    // 5. Dispatch global event so open modules react immediately
     try {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('kdb_authority_signatures_updated', { detail: signatures }));
@@ -1705,16 +1780,22 @@ export const DBService = {
     const newSig: AuthoritySignature = {
       ...sig,
       id: sig.id || `sig-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      createdAt: sig.createdAt || new Date().toISOString()
+      createdAt: sig.createdAt || new Date().toISOString(),
+      isDefault: current.length === 0 || !!sig.isDefault
     };
-    const updated = [newSig, ...current.filter(s => s.id !== newSig.id)];
+    // If new signature is default, unmark others
+    const baseList = newSig.isDefault ? current.map(s => ({ ...s, isDefault: false })) : current;
+    const updated = [...baseList.filter(s => s.id !== newSig.id), newSig];
     await this.saveAuthoritySignatures(updated);
     return updated;
   },
 
   async deleteAuthoritySignature(id: string): Promise<AuthoritySignature[]> {
     const current = await this.getAuthoritySignatures();
-    const updated = current.filter(s => s.id !== id);
+    let updated = current.filter(s => s.id !== id);
+    if (updated.length > 0 && !updated.some(s => s.isDefault)) {
+      updated[0].isDefault = true;
+    }
     await this.saveAuthoritySignatures(updated);
     return updated;
   },
@@ -2908,7 +2989,7 @@ export const DBService = {
       const { data, error } = await client
         .from('validation_drafts')
         .select('*')
-        .eq('status', 'draft')
+        .neq('status', 'submitted')
         .order('updated_at', { ascending: false });
 
       if (!error && Array.isArray(data)) {
@@ -2933,7 +3014,10 @@ export const DBService = {
           createdAt: row.created_at || row.createdAt,
           created_at: row.created_at || row.createdAt,
           updatedAt: row.updated_at || row.updatedAt,
-          updated_at: row.updated_at || row.updatedAt
+          updated_at: row.updated_at || row.updatedAt,
+          signingToken: (row.raw_data || row.rawData)?.signingToken || row.signing_token,
+          signingExpiresAt: (row.raw_data || row.rawData)?.signingExpiresAt || row.signing_expires_at,
+          dboSignedAt: (row.raw_data || row.rawData)?.dboSignedAt || row.dbo_signed_at
         }));
 
         validationDraftsMemoryCache = mapped;
@@ -2950,6 +3034,108 @@ export const DBService = {
     return localDrafts;
   },
 
+  async getValidationDraftById(id: string): Promise<ValidationDraft | null> {
+    if (!id) return null;
+
+    // 1. Try Supabase first for real-time remote updates
+    const client = await getSupabase();
+    if (client) {
+      try {
+        const { data, error } = await client
+          .from('validation_drafts')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (data && !error) {
+          const raw = data.raw_data || data.rawData || {};
+          const mapped: ValidationDraft = {
+            id: data.id,
+            permitNo: data.permit_no || data.permitNo || '',
+            permit_no: data.permit_no || data.permitNo || '',
+            dboName: data.dbo_name || data.dboName || '',
+            dbo_name: data.dbo_name || data.dboName || '',
+            premiseName: data.premise_name || data.premiseName || '',
+            premise_name: data.premise_name || data.premiseName || '',
+            validationPeriod: data.validation_period || data.validationPeriod || '',
+            validation_period: data.validation_period || data.validationPeriod || '',
+            category: data.category || '',
+            location: data.location || '',
+            county: data.county || '',
+            branch: data.branch || '',
+            step: data.step ?? 0,
+            status: data.status || 'draft',
+            rawData: raw,
+            raw_data: raw,
+            createdAt: data.created_at || data.createdAt,
+            created_at: data.created_at || data.createdAt,
+            updatedAt: data.updated_at || data.updatedAt,
+            updated_at: data.updated_at || data.updatedAt,
+            signingToken: raw.signingToken || data.signing_token,
+            signingExpiresAt: raw.signingExpiresAt || data.signing_expires_at,
+            dboSignedAt: raw.dboSignedAt || data.dbo_signed_at
+          };
+
+          // Update local cache
+          const list = getArrayFromLocalStorage<ValidationDraft>('kdb_validation_drafts_cache');
+          const idx = list.findIndex(d => d.id === id);
+          if (idx > -1) list[idx] = mapped;
+          else list.unshift(mapped);
+          safeSetLocalStorage('kdb_validation_drafts_cache', JSON.stringify(list));
+
+          return mapped;
+        }
+      } catch (err) {
+        console.warn('[DBService] Supabase getValidationDraftById warning:', err);
+      }
+    }
+
+    // 2. Try backend API endpoint
+    try {
+      const resp = await fetch(`/api/validation-drafts/${id}`);
+      if (resp.ok) {
+        const row = await resp.json();
+        if (row && row.id) {
+          const raw = row.raw_data || row.rawData || {};
+          const mapped: ValidationDraft = {
+            id: row.id,
+            permitNo: row.permit_no || row.permitNo || '',
+            dboName: row.dbo_name || row.dboName || '',
+            premiseName: row.premise_name || row.premiseName || '',
+            validationPeriod: row.validation_period || row.validationPeriod || '',
+            category: row.category || '',
+            location: row.location || '',
+            county: row.county || 'Kericho',
+            branch: row.branch || 'Kericho',
+            step: row.step ?? 0,
+            status: row.status || 'draft',
+            rawData: raw,
+            raw_data: raw,
+            createdAt: row.created_at || row.createdAt,
+            updatedAt: row.updated_at || row.updatedAt,
+            signingToken: raw.signingToken || row.signing_token,
+            signingExpiresAt: raw.signingExpiresAt || row.signing_expires_at,
+            dboSignedAt: raw.dboSignedAt || row.dbo_signed_at
+          };
+
+          const list = getArrayFromLocalStorage<ValidationDraft>('kdb_validation_drafts_cache');
+          const idx = list.findIndex(d => d.id === id);
+          if (idx > -1) list[idx] = mapped;
+          else list.unshift(mapped);
+          safeSetLocalStorage('kdb_validation_drafts_cache', JSON.stringify(list));
+
+          return mapped;
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[DBService] API getValidationDraftById warning:', apiErr);
+    }
+
+    // 3. Fallback to localStorage
+    const localDrafts = getArrayFromLocalStorage<ValidationDraft>('kdb_validation_drafts_cache');
+    return localDrafts.find(d => d.id === id) || null;
+  },
+
   async saveValidationDraft(draft: ValidationDraft): Promise<ValidationDraft> {
     const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     const uuid = (draft.id && UUID_REGEX.test(draft.id)) 
@@ -2963,6 +3149,11 @@ export const DBService = {
           });
 
     const nowIso = new Date().toISOString();
+    const rawData = draft.rawData || draft.raw_data || { ...draft };
+    if (draft.signingToken) rawData.signingToken = draft.signingToken;
+    if (draft.signingExpiresAt) rawData.signingExpiresAt = draft.signingExpiresAt;
+    if (draft.dboSignedAt) rawData.dboSignedAt = draft.dboSignedAt;
+
     const finalDraft: ValidationDraft = {
       ...draft,
       id: uuid,
@@ -2979,13 +3170,16 @@ export const DBService = {
       county: draft.county || 'Kericho',
       branch: draft.branch || 'Kericho',
       step: draft.step ?? 0,
-      status: 'draft',
-      rawData: draft.rawData || draft.raw_data || { ...draft },
-      raw_data: draft.rawData || draft.raw_data || { ...draft },
+      status: draft.status || 'draft',
+      rawData: rawData,
+      raw_data: rawData,
       createdAt: draft.createdAt || draft.created_at || nowIso,
       created_at: draft.createdAt || draft.created_at || nowIso,
       updatedAt: nowIso,
-      updated_at: nowIso
+      updated_at: nowIso,
+      signingToken: draft.signingToken || rawData.signingToken,
+      signingExpiresAt: draft.signingExpiresAt || rawData.signingExpiresAt,
+      dboSignedAt: draft.dboSignedAt || rawData.dboSignedAt
     };
 
     // 1. Update in-memory and local storage immediately
@@ -3023,7 +3217,7 @@ export const DBService = {
           county: finalDraft.county || 'Kericho',
           branch: finalDraft.branch || 'Kericho',
           step: finalDraft.step ?? 0,
-          status: 'draft',
+          status: finalDraft.status || 'draft',
           raw_data: finalDraft.rawData,
           created_at: finalDraft.createdAt,
           updated_at: finalDraft.updatedAt

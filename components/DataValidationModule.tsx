@@ -31,9 +31,7 @@ import {
   Building2,
   RotateCcw,
   ShieldCheck,
-  ArrowUp,
   ArrowDown,
-  ArrowUpDown,
   Store,
   GitBranch,
   FolderOpen,
@@ -42,7 +40,13 @@ import {
   Plus,
   RefreshCw,
   Check,
-  Upload
+  Upload,
+  Smartphone,
+  Share2,
+  ExternalLink,
+  Copy,
+  MessageSquare,
+  CheckCheck
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -813,6 +817,21 @@ export function DataValidationModule() {
   const [isDraftsModalOpen, setIsDraftsModalOpen] = useState(false);
   const [draftSearchQuery, setDraftSearchQuery] = useState('');
 
+  // DBO Remote 5-Minute Signing Link State
+  const [isDboLinkModalOpen, setIsDboLinkModalOpen] = useState(false);
+  const [currentSigningLink, setCurrentSigningLink] = useState('');
+  const [signingDraftTarget, setSigningDraftTarget] = useState<ValidationDraft | null>(null);
+  const [signingExpiresAtTimestamp, setSigningExpiresAtTimestamp] = useState<number | null>(null);
+  const [signingRemainingSeconds, setSigningRemainingSeconds] = useState<number | null>(null);
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [isCheckingDboStatus, setIsCheckingDboStatus] = useState(false);
+  const [dboSignedNotification, setDboSignedNotification] = useState<{
+    name: string;
+    designation: string;
+    signedAt: string;
+  } | null>(null);
+
   // Authority signatures state & modal management
   const [authoritySignatures, setAuthoritySignatures] = useState<AuthoritySignature[]>([]);
   const [showAddAuthorityModal, setShowAddAuthorityModal] = useState(false);
@@ -823,7 +842,6 @@ export function DataValidationModule() {
   const [isSavingNewSig, setIsSavingNewSig] = useState(false);
   const authSigCanvasRef = useRef<SignatureCanvas | null>(null);
   const [isSelectingAuthoritySig, setIsSelectingAuthoritySig] = useState(false);
-  const [isReorderingSignatures, setIsReorderingSignatures] = useState(false);
 
   // Load and listen for authority signatures updates
   useEffect(() => {
@@ -853,6 +871,87 @@ export function DataValidationModule() {
       window.removeEventListener('kdb_authority_signatures_updated', handleSigUpdate);
     };
   }, []);
+
+  // 5-Minute Countdown timer for DBO remote signing link
+  useEffect(() => {
+    if (!signingExpiresAtTimestamp) {
+      setSigningRemainingSeconds(null);
+      return;
+    }
+
+    const updateRemaining = () => {
+      const now = Date.now();
+      const diff = Math.max(0, Math.floor((signingExpiresAtTimestamp - now) / 1000));
+      setSigningRemainingSeconds(diff);
+    };
+
+    updateRemaining();
+    const interval = setInterval(updateRemaining, 1000);
+    return () => clearInterval(interval);
+  }, [signingExpiresAtTimestamp]);
+
+  // Polling for DBO remote signature (auto-detects when DBO submits on external device)
+  useEffect(() => {
+    const targetId = signingDraftTarget?.id || activeDraftId;
+    if (!targetId) return;
+
+    let isSubscribed = true;
+
+    const pollForSignature = async () => {
+      try {
+        const d = await DBService.getValidationDraftById(targetId);
+        if (!d || !isSubscribed) return;
+
+        const raw = d.rawData || d.raw_data || {};
+        const form = raw.formData || {};
+
+        if (d.status === 'signed_by_dbo' || d.dboSignedAt || raw.dboSignedAt || form.dboSignature) {
+          if (form.dboSignature && (!formData.dboSignature || formData.dboSignature !== form.dboSignature)) {
+            setFormData(prev => ({
+              ...prev,
+              confirmationName: form.confirmationName || prev.confirmationName,
+              designation: form.designation || prev.designation,
+              dboSignature: form.dboSignature
+            }));
+
+            if (raw.declarations) {
+              setDeclarations(prev => ({
+                ...prev,
+                ...raw.declarations
+              }));
+            }
+
+            const signedName = form.confirmationName || d.dboName || 'DBO';
+            const signedDesig = form.designation || '';
+            const signedTime = d.dboSignedAt || raw.dboSignedAt || new Date().toISOString();
+
+            setDboSignedNotification({
+              name: signedName,
+              designation: signedDesig,
+              signedAt: signedTime
+            });
+
+            setStatus({
+              type: 'success',
+              message: `DBO ${signedName} has completed remote signing! Signature & statutory declarations loaded.`
+            });
+
+            setSigningDraftTarget(d);
+            refreshDraftsList();
+          }
+        }
+      } catch (err) {
+        console.warn('Error polling for DBO signature:', err);
+      }
+    };
+
+    // Poll every 5 seconds if link modal is open or draft has pending DBO signature
+    const interval = setInterval(pollForSignature, 5000);
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  }, [signingDraftTarget, activeDraftId, formData.dboSignature]);
 
   const [globalUnit, setGlobalUnit] = useState<'L' | 'Kg'>('L');
 
@@ -1444,7 +1543,7 @@ export function DataValidationModule() {
   };
 
   // Submit and save draft to Supabase only (no Google Sheets sync)
-  const handleSubmitDraftToSupabase = async (customFormData?: FormData, customStep?: number, silent = false) => {
+  const handleSubmitDraftToSupabase = async (customFormData?: FormData, customStep?: number, silent = false, resetToStart = false) => {
     const currentForm = customFormData || formData;
     const currentStep = customStep !== undefined ? customStep : step;
 
@@ -1536,22 +1635,72 @@ export function DataValidationModule() {
 
       await refreshDraftsList();
 
-      if (!silent) {
+      if (resetToStart) {
+        // Clear active working draft from localStorage so it does not auto-restore into step 1/2/3
+        try {
+          localStorage.removeItem('kdb_validation_form_draft_v2');
+          localStorage.removeItem('kdb_validation_form_draft');
+          localStorage.removeItem('kdb_validation_form_draft_step');
+        } catch (_) {}
+
+        setFormData(initialData);
+        setStep(0);
+        setSelectedClient(null);
+        setValidationPremiseMode('main');
+        setMismatchFields([]);
+        setShowReconciliation(false);
+        setReconciliationResolved(true);
+        setActiveDraftId(null);
+        setIsAmendment(false);
+        setHasDraft(false);
+        setDraftInfo(null);
+
         setStatus({
           type: 'success',
-          message: `Draft successfully submitted to Supabase at ${timeFormatted}! You can retrieve and modify it later, then submit & sync to Sheet.`
+          message: `Draft successfully submitted at ${timeFormatted}! You can start a new validation or access saved drafts anytime.`
+        });
+      } else if (!silent) {
+        setStatus({
+          type: 'success',
+          message: `Draft successfully saved at ${timeFormatted}! You can retrieve and modify it later, then submit & sync to Sheet.`
         });
       }
+      return saved;
     } catch (err: any) {
       console.error('Failed to save draft to Supabase:', err);
       // Fallback: save to local storage
       saveDraftToStorage(formToSave, currentStep, false);
-      if (!silent) {
+
+      if (resetToStart) {
+        try {
+          localStorage.removeItem('kdb_validation_form_draft_v2');
+          localStorage.removeItem('kdb_validation_form_draft');
+          localStorage.removeItem('kdb_validation_form_draft_step');
+        } catch (_) {}
+
+        setFormData(initialData);
+        setStep(0);
+        setSelectedClient(null);
+        setValidationPremiseMode('main');
+        setMismatchFields([]);
+        setShowReconciliation(false);
+        setReconciliationResolved(true);
+        setActiveDraftId(null);
+        setIsAmendment(false);
+        setHasDraft(false);
+        setDraftInfo(null);
+
         setStatus({
           type: 'success',
-          message: `Draft saved locally (Supabase offline). You can continue working.`
+          message: `Draft saved locally. Ready to start a new validation.`
+        });
+      } else if (!silent) {
+        setStatus({
+          type: 'success',
+          message: `Draft saved locally. You can continue working.`
         });
       }
+      return null;
     } finally {
       if (!silent) setIsSubmittingDraft(false);
     }
@@ -1559,6 +1708,211 @@ export function DataValidationModule() {
 
   const handleManualSaveDraft = () => {
     handleSubmitDraftToSupabase(formData, step, false);
+  };
+
+  const formatSecondsToMMSS = (seconds: number | null) => {
+    if (seconds === null || seconds < 0) return '00:00';
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const handleCopySigningLink = async () => {
+    if (!currentSigningLink) return;
+    try {
+      await navigator.clipboard.writeText(currentSigningLink);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 3000);
+      setStatus({ type: 'success', message: 'Signing link copied to clipboard!' });
+    } catch (e) {
+      const textArea = document.createElement('textarea');
+      textArea.value = currentSigningLink;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 3000);
+      setStatus({ type: 'success', message: 'Signing link copied to clipboard!' });
+    }
+  };
+
+  const handleShareWhatsApp = () => {
+    if (!currentSigningLink) return;
+    const premise = signingDraftTarget?.premiseName || formData.premiseName || 'your premise';
+    const text = `Kenya Dairy Board: Please review and sign the validation inspection document for ${premise} within the next 5 minutes: ${currentSigningLink}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+  };
+
+  const handleCheckDboStatus = async () => {
+    const targetId = signingDraftTarget?.id || activeDraftId;
+    if (!targetId) return;
+
+    setIsCheckingDboStatus(true);
+    try {
+      const d = await DBService.getValidationDraftById(targetId);
+      if (!d) {
+        setStatus({ type: 'error', message: 'Draft not found or expired.' });
+        return;
+      }
+
+      const raw = d.rawData || d.raw_data || {};
+      const form = raw.formData || {};
+
+      if (d.status === 'signed_by_dbo' || d.dboSignedAt || raw.dboSignedAt || form.dboSignature) {
+        setFormData(prev => ({
+          ...prev,
+          confirmationName: form.confirmationName || prev.confirmationName,
+          designation: form.designation || prev.designation,
+          dboSignature: form.dboSignature || prev.dboSignature
+        }));
+
+        if (raw.declarations) {
+          setDeclarations(prev => ({
+            ...prev,
+            ...raw.declarations
+          }));
+        }
+
+        const signedName = form.confirmationName || d.dboName || 'DBO';
+        setDboSignedNotification({
+          name: signedName,
+          designation: form.designation || '',
+          signedAt: d.dboSignedAt || raw.dboSignedAt || new Date().toISOString()
+        });
+
+        setStatus({
+          type: 'success',
+          message: `DBO ${signedName} has signed the document! Signature has been synchronized.`
+        });
+        setSigningDraftTarget(d);
+        await refreshDraftsList();
+      } else {
+        setStatus({
+          type: 'success',
+          message: 'Status check: DBO has not submitted signature yet. Remote link remains active.'
+        });
+      }
+    } catch (err: any) {
+      console.error('Error checking DBO status:', err);
+    } finally {
+      setIsCheckingDboStatus(false);
+    }
+  };
+
+  const handleGenerateDboSigningLink = async (specificDraft?: ValidationDraft) => {
+    setIsGeneratingLink(true);
+    try {
+      let draftTarget = specificDraft;
+      if (!draftTarget) {
+        // Save current form state as draft first
+        const saved = await handleSubmitDraftToSupabase(formData, step, true);
+        if (saved) {
+          draftTarget = saved;
+        } else if (activeDraftId) {
+          draftTarget = await DBService.getValidationDraftById(activeDraftId) || undefined;
+        }
+      }
+
+      if (!draftTarget) {
+        const draftId = activeDraftId || (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' 
+          ? crypto.randomUUID() 
+          : 'draft-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7));
+        const nowIso = new Date().toISOString();
+        const rawData = {
+          formData,
+          step,
+          declarations,
+          selectedClient,
+          validationPremiseMode,
+          globalUnit,
+          isAmendment,
+          isValidationPeriodEdited,
+          hasAutofilledDbo,
+          draftId,
+          savedAt: nowIso
+        };
+        draftTarget = {
+          id: draftId,
+          permitNo: formData.permitNo || '',
+          permit_no: formData.permitNo || '',
+          dboName: formData.dboName || '',
+          dbo_name: formData.dboName || '',
+          premiseName: formData.premiseName || '',
+          premise_name: formData.premiseName || '',
+          validationPeriod: formData.validationPeriod || '',
+          validation_period: formData.validationPeriod || '',
+          category: formData.category || '',
+          location: formData.location || '',
+          county: formData.county || 'Kericho',
+          branch: formData.county || 'Kericho',
+          step,
+          status: 'draft',
+          rawData,
+          raw_data: rawData,
+          createdAt: nowIso,
+          updatedAt: nowIso
+        };
+      }
+
+      // Generate 5-min expiry timestamp
+      const expiryMs = Date.now() + 5 * 60 * 1000;
+      const signingExpiresAt = new Date(expiryMs).toISOString();
+      const signingToken = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+        ? crypto.randomUUID()
+        : Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
+
+      const raw = draftTarget.rawData || draftTarget.raw_data || {};
+      const updatedDraft: ValidationDraft = {
+        ...draftTarget,
+        status: 'pending_dbo_signature',
+        signingToken,
+        signing_token: signingToken,
+        signingExpiresAt,
+        signing_expires_at: signingExpiresAt,
+        updatedAt: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        rawData: {
+          ...raw,
+          signingToken,
+          signingExpiresAt,
+          status: 'pending_dbo_signature'
+        },
+        raw_data: {
+          ...raw,
+          signingToken,
+          signingExpiresAt,
+          status: 'pending_dbo_signature'
+        }
+      };
+
+      const saved = await DBService.saveValidationDraft(updatedDraft);
+      setActiveDraftId(saved.id);
+      setSigningDraftTarget(saved);
+
+      const origin = window.location.origin;
+      const url = `${origin}/sign-validation/${saved.id}?token=${signingToken}&exp=${expiryMs}`;
+
+      setCurrentSigningLink(url);
+      setSigningExpiresAtTimestamp(expiryMs);
+      setSigningRemainingSeconds(300);
+      setLinkCopied(false);
+      setIsDboLinkModalOpen(true);
+      await refreshDraftsList();
+
+      setStatus({
+        type: 'success',
+        message: '5-Minute DBO signing link generated successfully!'
+      });
+    } catch (err: any) {
+      console.error('Failed to generate DBO signing link:', err);
+      setStatus({
+        type: 'error',
+        message: `Failed to generate signing link: ${err.message || err}`
+      });
+    } finally {
+      setIsGeneratingLink(false);
+    }
   };
 
   // Load saved draft on mount from Supabase and local storage
@@ -1752,10 +2106,41 @@ export function DataValidationModule() {
           } catch (_) {}
         }
 
-        setStatus({ 
-          type: 'success', 
-          message: `Draft restored from Supabase! You can modify it and click 'Submit & Sync to Sheet' when ready, or 'Submit Draft' to update.` 
-        });
+        if (draftObj) {
+          setSigningDraftTarget(draftObj);
+          const rawObj = draftObj.rawData || draftObj.raw_data || {};
+          const isSigned = draftObj.status === 'signed_by_dbo' || draftObj.dboSignedAt || rawObj.dboSignedAt || parsed.formData.dboSignature;
+          if (isSigned) {
+            setDboSignedNotification({
+              name: parsed.formData.confirmationName || draftObj.dboName || 'DBO',
+              designation: parsed.formData.designation || '',
+              signedAt: draftObj.dboSignedAt || rawObj.dboSignedAt || new Date().toISOString()
+            });
+            setStatus({ 
+              type: 'success', 
+              message: `Draft restored! DBO signature and statutory declarations are recorded. Review details, sign as Compliance Officer, and submit.` 
+            });
+          } else {
+            const exp = draftObj.signingExpiresAt || rawObj.signingExpiresAt;
+            if (exp) {
+              const expTime = new Date(exp).getTime();
+              if (expTime > Date.now()) {
+                setSigningExpiresAtTimestamp(expTime);
+                const url = `${window.location.origin}/sign-validation/${draftObj.id}?token=${draftObj.signingToken || rawObj.signingToken || ''}&exp=${expTime}`;
+                setCurrentSigningLink(url);
+              }
+            }
+            setStatus({ 
+              type: 'success', 
+              message: `Draft restored from Supabase! You can modify it and click 'Submit & Sync to Sheet' when ready, or 'Submit Draft' to update.` 
+            });
+          }
+        } else {
+          setStatus({ 
+            type: 'success', 
+            message: `Draft restored from Supabase! You can modify it and click 'Submit & Sync to Sheet' when ready, or 'Submit Draft' to update.` 
+          });
+        }
         setIsDraftsModalOpen(false);
       }
     } catch (err) {
@@ -3611,16 +3996,6 @@ export function DataValidationModule() {
     }
   };
 
-  const handleMoveAuthoritySignature = async (id: string, direction: 'up' | 'down', e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    try {
-      const updated = await DBService.moveAuthoritySignature(id, direction);
-      setAuthoritySignatures(updated);
-    } catch (err) {
-      console.error('Failed to move authority signature:', err);
-    }
-  };
-
   const handleNewSigFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -3831,7 +4206,7 @@ export function DataValidationModule() {
               type="button"
               onClick={() => setIsDraftsModalOpen(true)}
               className="relative w-full sm:w-auto px-3.5 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
-              title="View all saved validation drafts in Supabase"
+              title="View all saved validation drafts"
               id="view-saved-drafts-btn"
             >
               <FolderOpen className="w-3.5 h-3.5 text-amber-600" />
@@ -3848,7 +4223,7 @@ export function DataValidationModule() {
               onClick={handleManualSaveDraft}
               disabled={isSubmittingDraft}
               className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
-              title="Save current form entries to Supabase draft"
+              title="Save current form entries to draft"
               id="top-save-draft-btn"
             >
               {isSubmittingDraft ? (
@@ -3891,7 +4266,7 @@ export function DataValidationModule() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-xs font-bold uppercase tracking-wider text-blue-900">Draft Mode Active</p>
                       <span className="text-[10px] bg-blue-200 text-blue-900 px-2 py-0.5 rounded-full font-mono font-bold">
-                        Supabase Draft: {activeDraftId.slice(0, 8)}...
+                        Draft: {activeDraftId.slice(0, 8)}...
                       </span>
                     </div>
                     <p className="text-xs text-blue-800 font-medium mt-0.5">
@@ -3910,7 +4285,7 @@ export function DataValidationModule() {
                     type="button"
                     onClick={() => {
                       setActiveDraftId(null);
-                      setStatus({ type: 'success', message: 'Exited draft editing mode. Your draft remains stored safely in Supabase.' });
+                      setStatus({ type: 'success', message: 'Exited draft editing mode. Your draft remains stored safely.' });
                     }}
                     className="px-3 py-1.5 rounded-lg border border-blue-200 bg-white hover:bg-blue-50 text-blue-800 text-xs font-bold transition-all cursor-pointer shadow-xs"
                     id="exit-draft-mode-btn"
@@ -4081,7 +4456,7 @@ export function DataValidationModule() {
                       <div className="flex items-center justify-between w-full mb-3">
                         <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-700">
                           <Database className="w-4 h-4 text-amber-600" />
-                          <span>Saved Drafts in Supabase ({draftsList.length})</span>
+                          <span>Saved Drafts ({draftsList.length})</span>
                         </div>
                         <button
                           type="button"
@@ -4219,10 +4594,10 @@ export function DataValidationModule() {
                           <input
                             type="text"
                             name="startTime"
-                            readOnly
                             value={formData.startTime}
-                            placeholder="Auto on start"
-                            className="w-full px-3.5 py-2 rounded-xl border border-gray-100 bg-gray-50 text-gray-500 outline-none text-sm"
+                            onChange={handleChange}
+                            placeholder="e.g. 09:30 AM"
+                            className={getInputClass('startTime')}
                           />
                         </div>
                         <div className="space-y-2 sm:col-span-1 lg:col-span-3">
@@ -6199,31 +6574,16 @@ export function DataValidationModule() {
                           <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3.5">
                             <div className="flex items-center justify-between gap-2 flex-wrap">
                               <div className="text-xs font-bold text-slate-700">
-                                {isSelectingAuthoritySig ? 'Switch to Another Authority Signature' : 'Choose Authority Signature'}
+                                {isSelectingAuthoritySig ? 'Switch Authority Signature' : 'Choose Authority Signature'}
                               </div>
                               <div className="flex items-center gap-2">
                                 {isSelectingAuthoritySig && formData.complianceSignature && (
                                   <button
                                     type="button"
                                     onClick={() => setIsSelectingAuthoritySig(false)}
-                                    className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 font-semibold"
+                                    className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer"
                                   >
                                     Cancel
-                                  </button>
-                                )}
-                                {authoritySignatures.length > 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setIsReorderingSignatures(prev => !prev)}
-                                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
-                                      isReorderingSignatures
-                                        ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
-                                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                                    }`}
-                                    title="Reorder priority of authority signatures"
-                                  >
-                                    <ArrowUpDown className="w-3.5 h-3.5" />
-                                    <span>{isReorderingSignatures ? 'Done Reordering' : 'Reorder'}</span>
                                   </button>
                                 )}
                                 <button
@@ -6238,116 +6598,39 @@ export function DataValidationModule() {
                             </div>
 
                             {authoritySignatures.length > 0 ? (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
-                                {authoritySignatures.map((sig, index) => {
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1">
+                                {authoritySignatures.map((sig) => {
                                   const isSelected = formData.complianceSignature === sig.signature;
-                                  const isFirst = index === 0;
-                                  const isLast = index === authoritySignatures.length - 1;
                                   return (
                                     <div
                                       key={sig.id}
-                                      onClick={() => {
-                                        if (!isReorderingSignatures) {
-                                          handleSelectAuthoritySignature(sig);
-                                        }
-                                      }}
+                                      onClick={() => handleSelectAuthoritySignature(sig)}
                                       className={`p-2.5 rounded-xl border transition-all cursor-pointer relative group flex flex-col justify-between ${
                                         isSelected
                                           ? 'bg-blue-50/90 border-blue-500 ring-2 ring-blue-200 shadow-xs'
                                           : 'bg-white hover:bg-blue-50/30 border-slate-200 hover:border-blue-300 shadow-xs'
                                       }`}
                                     >
-                                      <div className="flex items-start justify-between gap-1 mb-1.5">
-                                        <div className="flex items-center gap-1.5 min-w-0 pr-1">
-                                          <span className="w-4 h-4 rounded-full bg-slate-100 border border-slate-200 text-slate-600 flex items-center justify-center text-[9px] font-black shrink-0">
-                                            #{index + 1}
-                                          </span>
-                                          <div className="min-w-0">
-                                            <div className="text-xs font-bold text-slate-800 truncate group-hover:text-blue-700">
-                                              {sig.name}
-                                            </div>
-                                            {sig.title && (
-                                              <div className="text-[10px] text-slate-500 truncate">
-                                                {sig.title}
-                                              </div>
-                                            )}
+                                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                                        <div className="min-w-0 flex-1">
+                                          <div className="text-xs font-bold text-slate-800 truncate group-hover:text-blue-700">
+                                            {sig.name}
                                           </div>
-                                        </div>
-                                        <div className="flex items-center gap-1 shrink-0">
-                                          {authoritySignatures.length > 1 && (
-                                            <div className="flex items-center bg-slate-100 rounded-lg p-0.5" onClick={e => e.stopPropagation()}>
-                                              <button
-                                                type="button"
-                                                disabled={isFirst}
-                                                onClick={(e) => handleMoveAuthoritySignature(sig.id, 'up', e)}
-                                                className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded transition-colors cursor-pointer disabled:opacity-25 disabled:cursor-not-allowed"
-                                                title={isFirst ? "First item" : "Move up"}
-                                              >
-                                                <ArrowUp className="w-3 h-3" />
-                                              </button>
-                                              <button
-                                                type="button"
-                                                disabled={isLast}
-                                                onClick={(e) => handleMoveAuthoritySignature(sig.id, 'down', e)}
-                                                className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded transition-colors cursor-pointer disabled:opacity-25 disabled:cursor-not-allowed"
-                                                title={isLast ? "Last item" : "Move down"}
-                                              >
-                                                <ArrowDown className="w-3 h-3" />
-                                              </button>
+                                          {sig.title && (
+                                            <div className="text-[10px] text-slate-500 truncate">
+                                              {sig.title}
                                             </div>
                                           )}
-                                          {isSelected && !isReorderingSignatures && (
-                                            <span className="p-0.5 bg-blue-600 text-white rounded-full">
-                                              <Check className="w-3 h-3" />
-                                            </span>
-                                          )}
-                                          <button
-                                            type="button"
-                                            onClick={(e) => handleDeleteAuthoritySignature(sig.id, e)}
-                                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                            title="Delete this signature from saved authority signatures"
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                          </button>
                                         </div>
+                                        {isSelected && (
+                                          <span className="p-0.5 bg-blue-600 text-white rounded-full shrink-0">
+                                            <Check className="w-3 h-3" />
+                                          </span>
+                                        )}
                                       </div>
 
                                       <div className="h-12 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-center p-1 overflow-hidden">
                                         <img src={sig.signature} alt={sig.name} className="max-h-full max-w-full object-contain" />
-                                      </div>
-
-                                      <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px]">
-                                        {isReorderingSignatures ? (
-                                          <>
-                                            <span className="text-slate-500 font-medium">Position #{index + 1}</span>
-                                            <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                                              <button
-                                                type="button"
-                                                disabled={isFirst}
-                                                onClick={(e) => handleMoveAuthoritySignature(sig.id, 'up', e)}
-                                                className="text-blue-600 hover:underline font-bold disabled:opacity-30 disabled:no-underline cursor-pointer"
-                                              >
-                                                Up
-                                              </button>
-                                              <span className="text-slate-300">•</span>
-                                              <button
-                                                type="button"
-                                                disabled={isLast}
-                                                onClick={(e) => handleMoveAuthoritySignature(sig.id, 'down', e)}
-                                                className="text-blue-600 hover:underline font-bold disabled:opacity-30 disabled:no-underline cursor-pointer"
-                                              >
-                                                Down
-                                              </button>
-                                            </div>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <span className="text-slate-400 font-medium">Click to select</span>
-                                            <span className="font-bold text-blue-600 group-hover:underline">
-                                              {isSelected ? 'Selected' : 'Use this'}
-                                            </span>
-                                          </>
-                                        )}
                                       </div>
                                     </div>
                                   );
@@ -6386,6 +6669,93 @@ export function DataValidationModule() {
                     </div>
 
                     <div className="space-y-4">
+                      {/* DBO Remote Signing Status / Action Banner */}
+                      {formData.dboSignature ? (
+                        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700">
+                              <CheckCircle2 className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-emerald-900">
+                                {dboSignedNotification ? 'Signed Remotely by DBO' : 'DBO Signature Recorded'}
+                              </div>
+                              <div className="text-[11px] text-emerald-700">
+                                {formData.confirmationName ? `${formData.confirmationName}` : 'Signature on file'} 
+                                {formData.designation ? ` (${formData.designation})` : ''}
+                                {dboSignedNotification?.signedAt ? ` • ${new Date(dboSignedNotification.signedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateDboSigningLink()}
+                            className="text-xs font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1 cursor-pointer"
+                            title="Generate a fresh 5-minute link if re-signing is required"
+                          >
+                            <Smartphone className="w-3.5 h-3.5" /> Re-send Link
+                          </button>
+                        </div>
+                      ) : signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-700">
+                              <Clock className="w-4 h-4 animate-spin" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                                <span>5-Min Remote Signing Link Active</span>
+                                <span className="font-mono text-[11px] px-1.5 py-0.5 bg-amber-200/90 text-amber-900 rounded-md font-extrabold">
+                                  {formatSecondsToMMSS(signingRemainingSeconds)}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-amber-700">
+                                Waiting for DBO to sign on phone/tablet... Updates automatically.
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setIsDboLinkModalOpen(true)}
+                              className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs"
+                            >
+                              <Share2 className="w-3.5 h-3.5" /> View / Share Link
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCheckDboStatus}
+                              disabled={isCheckingDboStatus}
+                              className="px-2 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-800 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-all"
+                              title="Check status right now"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${isCheckingDboStatus ? 'animate-spin' : ''}`} />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
+                              <Smartphone className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-blue-950">Remote DBO Signing</div>
+                              <div className="text-[11px] text-blue-700">Send a 5-minute link to DBO's phone for remote review & signature</div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleGenerateDboSigningLink()}
+                            disabled={isGeneratingLink}
+                            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50"
+                          >
+                            {isGeneratingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Smartphone className="w-3.5 h-3.5" />}
+                            <span>Send 5-Min Link</span>
+                          </button>
+                        </div>
+                      )}
+
                       <div className="space-y-2">
                         <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name</label>
                         <input
@@ -6407,7 +6777,10 @@ export function DataValidationModule() {
                         />
                       </div>
                       <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">DBO Signature</label>
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">DBO Signature</label>
+                          <span className="text-[10px] text-gray-400 font-semibold">Sign on pad, upload, or use 5-min link</span>
+                        </div>
                         <div className="flex flex-col gap-2">
                           {!formData.dboSignature ? (
                             <div className="space-y-3">
@@ -6521,14 +6894,14 @@ export function DataValidationModule() {
                       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full sm:w-auto">
                         <button
                           type="button"
-                          onClick={() => handleSubmitDraftToSupabase(formData, step, false)}
+                          onClick={() => handleSubmitDraftToSupabase(formData, step, false, true)}
                           disabled={isSubmittingDraft || isSubmitting}
                           className={`w-full sm:w-auto flex justify-center items-center gap-2 px-5 sm:px-7 py-3 sm:py-3.5 rounded-xl sm:rounded-2xl font-bold transition-all shadow-md text-xs sm:text-sm cursor-pointer ${
                             isSubmittingDraft || isSubmitting
                               ? 'bg-amber-100 text-amber-400 cursor-not-allowed'
                               : 'bg-amber-600 hover:bg-amber-700 active:scale-95 text-white'
                           }`}
-                          title="Save all form entries to Supabase draft only (without syncing to Google Sheets)"
+                          title="Save all form entries to draft only (without syncing to Google Sheets) and start new validation"
                           id="submit-draft-btn"
                         >
                           {isSubmittingDraft ? (
@@ -6642,7 +7015,7 @@ export function DataValidationModule() {
                       <FolderOpen className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-gray-900">Saved Validation Drafts (Supabase)</h3>
+                      <h3 className="text-lg font-bold text-gray-900">Saved Validation Drafts</h3>
                       <p className="text-xs text-gray-500">
                         Select any draft to modify and resume. Once submitted & synced, it becomes a final validation.
                       </p>
@@ -6673,7 +7046,7 @@ export function DataValidationModule() {
                     type="button"
                     onClick={() => refreshDraftsList()}
                     className="px-3 py-2 text-xs font-semibold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
-                    title="Refresh drafts from Supabase"
+                    title="Refresh saved drafts"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>Refresh</span>
@@ -6698,7 +7071,7 @@ export function DataValidationModule() {
                         <div className="text-center py-12 space-y-3">
                           <Database className="w-12 h-12 text-gray-300 mx-auto" />
                           <p className="text-sm font-semibold text-gray-700">
-                            {draftSearchQuery ? 'No matching drafts found.' : 'No saved drafts in Supabase.'}
+                            {draftSearchQuery ? 'No matching drafts found.' : 'No saved drafts.'}
                           </p>
                           <p className="text-xs text-gray-400 max-w-sm mx-auto">
                             You can save your progress anytime by clicking <strong className="text-gray-600">Submit Draft</strong> at the end of the form or <strong className="text-gray-600">Save Draft</strong> at the top.
@@ -6746,6 +7119,15 @@ export function DataValidationModule() {
                                   Currently Editing
                                 </span>
                               )}
+                              {(draft.status === 'signed_by_dbo' || raw.dboSignedAt || form.dboSignature) ? (
+                                <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Signed by DBO
+                                </span>
+                              ) : draft.status === 'pending_dbo_signature' ? (
+                                <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
+                                  <Clock className="w-3 h-3 text-amber-600" /> 5-Min Link Active
+                                </span>
+                              ) : null}
                               {period && (
                                 <span className="text-[10px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md">
                                   {period}
@@ -6804,6 +7186,15 @@ export function DataValidationModule() {
                           <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                             <button
                               type="button"
+                              onClick={() => handleGenerateDboSigningLink(draft)}
+                              className="px-3 py-2 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                              title="Generate or view 5-minute remote signing link for DBO"
+                            >
+                              <Smartphone className="w-3.5 h-3.5 text-blue-600" />
+                              <span>5-Min Link</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleRestoreDraft(draft)}
                               className="px-4 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
                             >
@@ -6842,6 +7233,229 @@ export function DataValidationModule() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Remote DBO Signing Link Modal (5-Minute Expiry) */}
+        {isDboLinkModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              {/* Header */}
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-50/70 via-indigo-50/30 to-white">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
+                    <Smartphone className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-lg text-gray-900 leading-snug">
+                      Remote DBO Signing Link
+                    </h3>
+                    <p className="text-xs text-gray-500 font-medium">
+                      5-minute secure regulatory window for on-device DBO signature
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsDboLinkModalOpen(false)}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-5">
+                {/* Premise & DBO Target Info */}
+                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between gap-4">
+                  <div className="space-y-1 min-w-0">
+                    <div className="text-xs text-slate-400 font-bold uppercase tracking-wider">
+                      Premise & DBO
+                    </div>
+                    <div className="text-sm font-bold text-slate-800 truncate">
+                      {signingDraftTarget?.premiseName || formData.premiseName || 'Inspection Premise'}
+                    </div>
+                    <div className="text-xs text-slate-500 flex items-center gap-2 flex-wrap">
+                      <span>DBO: <strong>{signingDraftTarget?.dboName || formData.dboName || 'Dairy Business Operator'}</strong></span>
+                      <span>•</span>
+                      <span>Permit: <strong className="font-mono">{signingDraftTarget?.permitNo || formData.permitNo || 'N/A'}</strong></span>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Status</div>
+                    {signingDraftTarget?.status === 'signed_by_dbo' || dboSignedNotification ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-200">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Signed
+                      </span>
+                    ) : signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full border border-amber-200">
+                        <Clock className="w-3.5 h-3.5" /> Awaiting Sign
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-rose-700 bg-rose-100 px-2.5 py-1 rounded-full border border-rose-200">
+                        <AlertCircle className="w-3.5 h-3.5" /> Expired
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expiry Countdown Timer */}
+                {signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
+                  <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-700 flex items-center justify-center font-bold">
+                        <Clock className="w-5 h-5 animate-pulse" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-amber-950">Security Expiry Countdown</div>
+                        <div className="text-[11px] text-amber-700">Link auto-invalidates when timer reaches 00:00</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono text-2xl font-black text-amber-800 tracking-wider">
+                        {formatSecondsToMMSS(signingRemainingSeconds)}
+                      </div>
+                      <div className="text-[10px] text-amber-600 font-bold uppercase tracking-wider">Remaining</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+                        <AlertCircle className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-rose-950">Signing Link Expired</div>
+                        <div className="text-[11px] text-rose-700">The 5-minute security window has elapsed. Click below to issue a new one.</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateDboSigningLink(signingDraftTarget || undefined)}
+                      disabled={isGeneratingLink}
+                      className="px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 shadow-xs"
+                    >
+                      Regenerate
+                    </button>
+                  </div>
+                )}
+
+                {/* Live Notification If Already Signed */}
+                {(signingDraftTarget?.status === 'signed_by_dbo' || dboSignedNotification) && (
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                      <CheckCircle2 className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold text-emerald-950">
+                        DBO Signature Successfully Recorded!
+                      </div>
+                      <div className="text-xs text-emerald-700">
+                        {dboSignedNotification?.name ? `Confirmed by ${dboSignedNotification.name} (${dboSignedNotification.designation || 'DBO'})` : 'The DBO has completed the form and signed statutory declarations.'}
+                        {dboSignedNotification?.signedAt && ` • ${new Date(dboSignedNotification.signedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Link Input Box */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center justify-between">
+                    <span>Shareable Portal URL</span>
+                    <span className="text-[11px] text-gray-400 font-normal">Opens statutory preview & signature pad</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={currentSigningLink}
+                      className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-mono select-all focus:outline-none focus:bg-white focus:border-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopySigningLink}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs ${
+                        linkCopied
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-blue-600 hover:bg-blue-700 text-white'
+                      }`}
+                    >
+                      {linkCopied ? (
+                        <>
+                          <CheckCheck className="w-4 h-4" />
+                          <span>Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Fast Action Buttons */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleShareWhatsApp}
+                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs"
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    <span>Send via WhatsApp</span>
+                  </button>
+
+                  <a
+                    href={currentSigningLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs text-center"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    <span>Open Link in New Tab</span>
+                  </a>
+                </div>
+
+                {/* Polling Activity Status Indicator */}
+                <div className="pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span className="text-[11px]">Auto-listening for DBO remote signature...</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCheckDboStatus}
+                    disabled={isCheckingDboStatus}
+                    className="text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isCheckingDboStatus ? 'animate-spin' : ''}`} />
+                    <span>Check Now</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => handleGenerateDboSigningLink(signingDraftTarget || undefined)}
+                  disabled={isGeneratingLink}
+                  className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isGeneratingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  <span>Generate New 5-Min Link</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsDboLinkModalOpen(false)}
+                  className="px-5 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 7-Point Split-Screen Reconciliation Overlay */}
         <AnimatePresence>

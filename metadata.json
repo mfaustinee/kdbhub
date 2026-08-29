@@ -1,6 +1,6 @@
 {
   "name": "KDB Hub",
-  "description": "",
+  "description": "Kenya Dairy Board compliance and validation hub with 5-minute remote DBO preview and signing portal",
   "requestFramePermissions": [
     "camera"
   ],
