@@ -456,7 +456,95 @@ export interface DataValidation {
   pdfPath?: string;
   rawData?: any;
   fieldChecklist?: Record<string, FieldChecklistEntry>;
+  transactionReconciliation?: TransactionReconciliationItem[];
+  exceptionRegister?: ExceptionRegisterItem[];
+  recommendedActions?: string;
+  actionDueDate?: string;
+  actionOwner?: string;
 }
+
+export interface TransactionReconciliationItem {
+  id: string;
+  period: string; // Date / Period
+  source1: string; // Source 1
+  source2: string; // Source 2
+  source3: string; // Source 3
+  unit: string; // Unit (e.g. L, Kg, KES)
+  recalculatedAmount: string; // Recalculated Amount
+  variance: string; // Variance
+  explanation: string; // Explanation / Action
+}
+
+export type ExceptionStatus = 'Open' | 'In Progress' | 'Resolved' | 'Closed' | 'Waived';
+
+export interface ExceptionRegisterItem {
+  id: string;
+  type: string; // Exception Type
+  definition: string; // Definition
+  example: string; // Example
+  source: string; // Source document / record
+  owner: string; // Owner responsible
+  dueDate: string; // Due Date
+  resolutionEvidence: string; // Resolution Evidence
+  status: ExceptionStatus; // Status
+}
+
+export const STANDARD_EXCEPTION_TYPES: Array<{
+  type: string;
+  definition: string;
+  example: string;
+}> = [
+  {
+    type: 'Missing record',
+    definition: 'Expected record cannot be located',
+    example: 'Permit scan missing'
+  },
+  {
+    type: 'Incomplete record',
+    definition: 'Record exists but required data is missing',
+    example: 'Permit has no quantity/day'
+  },
+  {
+    type: 'Data conflict',
+    definition: 'Sources contain different values',
+    example: 'Register = 6,000 kg; permit = 8,000 kg'
+  },
+  {
+    type: 'Duplicate',
+    definition: 'Same entity/permit appears more than once',
+    example: 'Two records for same permit'
+  },
+  {
+    type: 'Timing/cut-off',
+    definition: 'Transaction recorded in wrong period',
+    example: 'Levy posted to next month'
+  },
+  {
+    type: 'Calculation error',
+    definition: 'Recorded figure does not recalculate',
+    example: 'Levy amount differs'
+  },
+  {
+    type: 'Classification error',
+    definition: 'Category does not agree with source activity',
+    example: 'Cottage industry repeatedly >500 kg/day'
+  },
+  {
+    type: 'Linkage error',
+    definition: 'Related records cannot be matched',
+    example: 'County licence cannot be linked'
+  },
+  {
+    type: 'Unusable evidence',
+    definition: 'Record exists but cannot be relied upon',
+    example: 'Illegible document'
+  },
+  {
+    type: 'Unconfirmed',
+    definition: 'Evidence exists but requires further confirmation',
+    example: 'Conflicting location'
+  }
+];
 
 export type FieldChecklistResultStatus =
   | 'Available & Reconciled'

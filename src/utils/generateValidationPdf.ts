@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { FIELD_CHECKLIST_SECTIONS } from '../../components/fieldChecklistData';
 
 const KDB_LOGO_URL = "https://odolazcniphinupgyaqo.supabase.co/storage/v1/object/sign/Pdf%20logo/KDB-LOGOx100h.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV8zNDNkNjNiOC1jY2RlLTQwYTgtOGVmMS1lN2UyY2NjNzQ0NjUiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJQZGYgbG9nby9LREItTE9HT3gxMDBoLnBuZyIsImlhdCI6MTc3NDQwODY3MywiZXhwIjoyMDg5NzY4NjczfQ.r_8Gre72kWfCNdIGpiNEePogU0ieuPOJYqAyvqJ7YsQ";
 
@@ -189,7 +190,7 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
     startY: currentY + 5,
     head: [['Detail', 'Value']],
     body: [
-      ['Are Traceability & Records Available', data.traceability || 'No'],
+      ['Traceability & Records', data.traceability || 'No'],
       ['Nature of Produce?', Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : (data.natureOfProduce || 'Raw Milk')],
       ['Source', data.source || 'Direct from Farmers'],
     ],
@@ -197,18 +198,146 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
   });
   currentY = (doc as any).lastAutoTable.finalY + 10;
 
-  // Compliance Section
+  // Optional Field Records Checklist (rendered when checklist items are evaluated)
+  if (data.fieldChecklist && Object.keys(data.fieldChecklist).length > 0) {
+    FIELD_CHECKLIST_SECTIONS.forEach(sec => {
+      const secEvaluatedItems: Array<[string, string, string, string, string]> = [];
+      sec.items.forEach(item => {
+        const entry = data.fieldChecklist?.[item.ref];
+        if (entry && (entry.status || (entry.notes && entry.notes.trim() !== ''))) {
+          secEvaluatedItems.push([
+            item.ref,
+            `${item.dataItem || item.title}\n${item.validationTest || item.description}`,
+            `${item.primarySource || '-'}\n[Evidence: ${item.evidenceDetail || '-'}]`,
+            entry.status || 'Evaluated',
+            entry.notes || '-'
+          ]);
+        }
+      });
+
+      if (secEvaluatedItems.length > 0) {
+        checkPageBreak(40);
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        const rangeLabel = sec.items.length > 0 ? ` (${sec.items[0]?.ref} – ${sec.items[sec.items.length - 1]?.ref})` : '';
+        doc.text(`${sec.title} Records Checklist & Reconciliation${rangeLabel}:`, 20, currentY);
+        doc.setFont("helvetica", "normal");
+
+        autoTable(doc, {
+          startY: currentY + 4,
+          head: [['Ref', 'Data Item & Validation Test', 'Primary Source & Evidence', 'Status', 'Variance / Action']],
+          body: secEvaluatedItems,
+          styles: { fontSize: 7, cellPadding: 2 },
+          headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
+          columnStyles: {
+            0: { cellWidth: 14, fontStyle: 'bold' },
+            1: { cellWidth: 62 },
+            2: { cellWidth: 42 },
+            3: { cellWidth: 30 },
+            4: { cellWidth: 27 }
+          }
+        });
+        currentY = (doc as any).lastAutoTable.finalY + 10;
+      }
+    });
+  }
+
+  // EXCEPTION REGISTER Table (Directly following Checklist Findings)
+  if (Array.isArray(data.exceptionRegister) && data.exceptionRegister.length > 0) {
+    checkPageBreak(40);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("Exception Register (Discrepancies & Mismatches Tracked):", 20, currentY);
+    doc.setFont("helvetica", "normal");
+
+    autoTable(doc, {
+      startY: currentY + 4,
+      head: [['Type', 'Definition', 'Example', 'Source', 'Owner', 'Due Date', 'Resolution Evidence', 'Status']],
+      body: data.exceptionRegister.map((exc: any) => [
+        exc.type || '-',
+        exc.definition || '-',
+        exc.example || '-',
+        exc.source || '-',
+        exc.owner || '-',
+        exc.dueDate || '-',
+        exc.resolutionEvidence || '-',
+        exc.status || 'Open'
+      ]),
+      styles: { fontSize: 7, cellPadding: 2 },
+      headStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold' },
+      columnStyles: {
+        0: { cellWidth: 22, fontStyle: 'bold' },
+        1: { cellWidth: 32 },
+        2: { cellWidth: 25 },
+        3: { cellWidth: 22 },
+        4: { cellWidth: 20 },
+        5: { cellWidth: 18 },
+        6: { cellWidth: 24 },
+        7: { cellWidth: 12, fontStyle: 'bold' }
+      }
+    });
+    currentY = (doc as any).lastAutoTable.finalY + 10;
+  }
+
+  // Compliance Commitment, Transaction Reconciliation & Under-Declaration (Merged Section)
+  const hasReconciliation = Array.isArray(data.transactionReconciliation) && data.transactionReconciliation.length > 0;
   const nonCompliance = Array.isArray(data.nonCompliance) ? data.nonCompliance : [];
-  checkPageBreak(25);
+  
+  checkPageBreak(35);
   doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
-  doc.text("Compliance Commitment:", 20, currentY);
+  doc.text("Compliance Commitment, Transaction Reconciliation & Under-Declaration:", 20, currentY);
+  doc.setFont("helvetica", "normal");
+  currentY += 4;
+
+  // Part A: Transaction / Balances Reconciliation Table (Merged under Compliance)
+  if (hasReconciliation) {
+    checkPageBreak(35);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("Part A: Transaction / Balances Reconciliation", 20, currentY + 2);
+    doc.setFont("helvetica", "normal");
+
+    autoTable(doc, {
+      startY: currentY + 5,
+      head: [['Date / Period', 'Source 1', 'Source 2', 'Source 3', 'Unit', 'Recalculated Amt', 'Variance', 'Explanation / Action']],
+      body: data.transactionReconciliation.map((tr: any) => [
+        tr.period || '-',
+        tr.source1 || '-',
+        tr.source2 || '-',
+        tr.source3 || '-',
+        tr.unit || globalUnit,
+        tr.recalculatedAmount || '-',
+        tr.variance || '0.00',
+        tr.explanation || '-'
+      ]),
+      styles: { fontSize: 7, cellPadding: 2 },
+      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
+      columnStyles: {
+        0: { cellWidth: 22 },
+        1: { cellWidth: 22 },
+        2: { cellWidth: 22 },
+        3: { cellWidth: 22 },
+        4: { cellWidth: 12 },
+        5: { cellWidth: 24, fontStyle: 'bold' },
+        6: { cellWidth: 18 },
+        7: { cellWidth: 33 }
+      }
+    });
+    currentY = (doc as any).lastAutoTable.finalY + 8;
+  }
+
+  // Part B: Under-Declaration & Statutory CSL Arrears Schedule
+  checkPageBreak(25);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text(hasReconciliation ? "Part B: Under-Declaration & Statutory CSL Arrears Schedule" : "Under-Declaration & Statutory CSL Arrears Schedule", 20, currentY + 2);
   doc.setFont("helvetica", "normal");
 
   if (nonCompliance.length === 0) {
     doc.setFontSize(10);
     doc.setTextColor(0, 128, 0);
-    doc.text("No under-declaration was witnessed.", 20, currentY + 7);
+    doc.text("No under-declaration was witnessed.", 20, currentY + 8);
     doc.setTextColor(0, 0, 0);
     currentY += 15;
   } else {
@@ -220,19 +349,51 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
         ...nonCompliance.map((nc: any) => [nc.month || '', nc.litres || '', nc.amount || '', nc.paymentMonthYear || '', nc.mpesaRef || '']),
         [{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, '', { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, '', '']
       ],
-      styles: { fontSize: 8 }
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
     });
     currentY = (doc as any).lastAutoTable.finalY + 10;
   }
 
-  if (data.comments) {
-    checkPageBreak(25);
+  // Comments & Recommended Corrective Actions (Merged Section)
+  if (data.comments || data.recommendedActions) {
+    checkPageBreak(30);
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
-    doc.text("Comments:", 20, currentY);
+    doc.text("Comments & Recommended Corrective Actions:", 20, currentY);
     doc.setFont("helvetica", "normal");
-    doc.text(data.comments, 20, currentY + 5, { maxWidth: 170 });
-    currentY += 20;
+    currentY += 6;
+
+    if (data.comments) {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("Inspector Observations & Comments:", 20, currentY);
+      doc.setFont("helvetica", "normal");
+      const splitComments = doc.splitTextToSize(data.comments, 170);
+      doc.text(splitComments, 20, currentY + 4);
+      currentY += Math.max(splitComments.length * 4.5, 6) + 4;
+    }
+
+    if (data.recommendedActions) {
+      checkPageBreak(25);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.text("Recommended Corrective Actions & Directives:", 20, currentY);
+      doc.setFont("helvetica", "normal");
+      const splitActions = doc.splitTextToSize(data.recommendedActions, 170);
+      doc.text(splitActions, 20, currentY + 4);
+      currentY += Math.max(splitActions.length * 4.5, 6) + 4;
+
+      if (data.actionDueDate || data.actionOwner) {
+        doc.setFontSize(8);
+        doc.setFont("helvetica", "italic");
+        const metaText = `Remediation Due Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
+        doc.text(metaText, 20, currentY);
+        doc.setFont("helvetica", "normal");
+        currentY += 6;
+      }
+    }
+    currentY += 4;
   }
 
   // Declarations

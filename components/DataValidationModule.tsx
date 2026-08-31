@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -6,9 +6,12 @@ import SignatureCanvas from 'react-signature-canvas';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
-import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, FieldChecklistResultStatus } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem } from '../types';
 import { FieldChecklistComponent } from './FieldChecklistComponent';
-import { FIELD_CHECKLIST_SECTIONS } from './fieldChecklistData';
+import { FIELD_CHECKLIST_SECTIONS, hasAnyChecklistValue } from './fieldChecklistData';
+import { TransactionReconciliationComponent } from './TransactionReconciliationComponent';
+import { ExceptionRegisterComponent } from './ExceptionRegisterComponent';
+import { CommentsAndCorrectiveActionsComponent } from './CommentsAndCorrectiveActionsComponent';
 import { 
   ClipboardCheck, 
   Database, 
@@ -48,7 +51,10 @@ import {
   ExternalLink,
   Copy,
   MessageSquare,
-  CheckCheck
+  CheckCheck,
+  Scale,
+  ShieldAlert,
+  Sparkles
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -177,6 +183,11 @@ interface FormData {
   distPrice: string;
   distributors: DistributorEntry[];
   fieldChecklist?: Record<string, { status: FieldChecklistResultStatus; notes: string }>;
+  transactionReconciliation?: TransactionReconciliationItem[];
+  exceptionRegister?: ExceptionRegisterItem[];
+  recommendedActions?: string;
+  actionDueDate?: string;
+  actionOwner?: string;
 }
 
 const parseSellingPrices = (sellingPriceStr: string): Record<string, string> => {
@@ -698,7 +709,12 @@ const initialData: FormData = {
     natureOfProduce: [],
     prices: {}
   }],
-  fieldChecklist: {}
+  fieldChecklist: {},
+  transactionReconciliation: [],
+  exceptionRegister: [],
+  recommendedActions: '',
+  actionDueDate: '',
+  actionOwner: ''
 };
 
 const getMirroredSellingPrice = (product: string, sales: SalesEntry[]): string => {
@@ -747,6 +763,7 @@ export function DataValidationModule() {
   const [showReconciliation, setShowReconciliation] = useState(false);
   const [reconciliationResolved, setReconciliationResolved] = useState(true);
   const [returnsData, setReturnsData] = useState<ClientReturn[]>([]);
+  const [activeAuditTool, setActiveAuditTool] = useState<'checklist' | 'exceptions' | 'all'>('all');
 
   const [isConnected, setIsConnected] = useState(true); // Default to true for Service Account mode
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2086,10 +2103,22 @@ export function DataValidationModule() {
       }
 
       if (parsed && parsed.formData) {
+        const restoredChecklist = parsed.formData.fieldChecklist || {};
+        const hasChecklist = hasAnyChecklistValue(restoredChecklist);
+        const hasReconciliation = Array.isArray(parsed.formData.transactionReconciliation) && parsed.formData.transactionReconciliation.length > 0;
+        const hasExceptions = Array.isArray(parsed.formData.exceptionRegister) && parsed.formData.exceptionRegister.length > 0;
+        const hasFindings = hasChecklist || hasReconciliation || hasExceptions;
+        const restoredTraceability = (parsed.formData.traceability === 'See DBO checklist' ? 'See Records Validation & Reconciliation Findings' : parsed.formData.traceability) || (hasFindings ? 'See Records Validation & Reconciliation Findings' : 'Yes');
         setFormData({
           ...initialData,
           ...parsed.formData,
-          fieldChecklist: parsed.formData.fieldChecklist || {}
+          fieldChecklist: restoredChecklist,
+          transactionReconciliation: parsed.formData.transactionReconciliation || [],
+          exceptionRegister: parsed.formData.exceptionRegister || [],
+          recommendedActions: parsed.formData.recommendedActions || '',
+          actionDueDate: parsed.formData.actionDueDate || '',
+          actionOwner: parsed.formData.actionOwner || '',
+          traceability: restoredTraceability
         });
         if (parsed.declarations) setDeclarations(parsed.declarations);
         if (parsed.selectedClient) setSelectedClient(parsed.selectedClient);
@@ -2361,9 +2390,22 @@ export function DataValidationModule() {
 
   const handleRecallSubmission = (rawData: any) => {
     if (rawData) {
+      const recalledChecklist = rawData.fieldChecklist || {};
+      const hasChecklist = hasAnyChecklistValue(recalledChecklist);
+      const hasReconciliation = Array.isArray(rawData.transactionReconciliation) && rawData.transactionReconciliation.length > 0;
+      const hasExceptions = Array.isArray(rawData.exceptionRegister) && rawData.exceptionRegister.length > 0;
+      const hasFindings = hasChecklist || hasReconciliation || hasExceptions;
+      const recalledTraceability = (rawData.traceability === 'See DBO checklist' ? 'See Records Validation & Reconciliation Findings' : rawData.traceability) || (hasFindings ? 'See Records Validation & Reconciliation Findings' : 'Yes');
       setFormData({
         ...initialData,
         ...rawData,
+        fieldChecklist: recalledChecklist,
+        transactionReconciliation: rawData.transactionReconciliation || [],
+        exceptionRegister: rawData.exceptionRegister || [],
+        recommendedActions: rawData.recommendedActions || '',
+        actionDueDate: rawData.actionDueDate || '',
+        actionOwner: rawData.actionOwner || '',
+        traceability: recalledTraceability,
         distOutlets: rawData.distOutlets || [{ location: '', volPerDay: '', permitStatus: 'None', levyInfo: '' }],
         distNatureOfProduce: rawData.distNatureOfProduce || []
       });
@@ -3226,7 +3268,7 @@ export function DataValidationModule() {
       startY: currentY + 5,
       head: [['Detail', 'Value']],
       body: [
-        ['Are Traceability & Records Available', data.traceability],
+        ['Traceability & Records', data.traceability],
         ['Nature of Produce?', data.natureOfProduce.join(', ')],
         ['Source', data.source],
       ],
@@ -3237,58 +3279,143 @@ export function DataValidationModule() {
 
     // Optional Field Records Checklist (rendered when checklist items are evaluated)
     if (data.fieldChecklist && Object.keys(data.fieldChecklist).length > 0) {
-      const evaluatedItems: Array<[string, string, string, string]> = [];
-
       FIELD_CHECKLIST_SECTIONS.forEach(sec => {
+        const secEvaluatedItems: Array<[string, string, string, string, string]> = [];
         sec.items.forEach(item => {
           const entry = data.fieldChecklist?.[item.ref];
           if (entry && (entry.status || (entry.notes && entry.notes.trim() !== ''))) {
-            evaluatedItems.push([
+            secEvaluatedItems.push([
               item.ref,
-              `${item.title} (${sec.shortName})`,
+              `${item.dataItem || item.title}\n${item.validationTest || item.description}`,
+              `${item.primarySource || '-'}\n[Evidence: ${item.evidenceDetail || '-'}]`,
               entry.status || 'Evaluated',
               entry.notes || '-'
             ]);
           }
         });
-      });
 
-      if (evaluatedItems.length > 0) {
-        checkPageBreak(40);
-        doc.setFontSize(11);
+        if (secEvaluatedItems.length > 0) {
+          checkPageBreak(40);
+          doc.setFontSize(11);
+          doc.setFont("helvetica", "bold");
+          const rangeLabel = sec.items.length > 0 ? ` (${sec.items[0]?.ref} – ${sec.items[sec.items.length - 1]?.ref})` : '';
+          doc.text(`${sec.title} Records Checklist & Reconciliation${rangeLabel}:`, 20, currentY);
+          doc.setFont("helvetica", "normal");
+
+          autoTable(doc, {
+            startY: currentY + 4,
+            head: [['Ref', 'Data Item & Validation Test', 'Primary Source & Evidence', 'Status', 'Variance / Action']],
+            body: secEvaluatedItems,
+            styles: { fontSize: 7, cellPadding: 2 },
+            headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
+            columnStyles: {
+              0: { cellWidth: 14, fontStyle: 'bold' },
+              1: { cellWidth: 62 },
+              2: { cellWidth: 42 },
+              3: { cellWidth: 30 },
+              4: { cellWidth: 27 }
+            }
+          });
+          currentY = (doc as any).lastAutoTable.finalY + 10;
+        }
+      });
+    }
+
+    // EXCEPTION REGISTER Table (Flows directly after Checklist Findings)
+    if (Array.isArray(data.exceptionRegister) && data.exceptionRegister.length > 0) {
+      checkPageBreak(40);
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text("Exception Register (Discrepancies & Mismatches Tracked):", 20, currentY);
+      doc.setFont("helvetica", "normal");
+
+      autoTable(doc, {
+        startY: currentY + 4,
+        head: [['Type', 'Definition', 'Example', 'Source', 'Owner', 'Due Date', 'Resolution Evidence', 'Status']],
+        body: data.exceptionRegister.map((exc: any) => [
+          exc.type || '-',
+          exc.definition || '-',
+          exc.example || '-',
+          exc.source || '-',
+          exc.owner || '-',
+          exc.dueDate || '-',
+          exc.resolutionEvidence || '-',
+          exc.status || 'Open'
+        ]),
+        styles: { fontSize: 7, cellPadding: 2 },
+        headStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold' },
+        columnStyles: {
+          0: { cellWidth: 22, fontStyle: 'bold' },
+          1: { cellWidth: 32 },
+          2: { cellWidth: 25 },
+          3: { cellWidth: 22 },
+          4: { cellWidth: 20 },
+          5: { cellWidth: 18 },
+          6: { cellWidth: 24 },
+          7: { cellWidth: 12, fontStyle: 'bold' }
+        }
+      });
+      currentY = (doc as any).lastAutoTable.finalY + 10;
+    }
+
+    // Compliance Section: Transaction Reconciliation & Under-Declaration (Only for main facility / standard validations)
+    if (!isBranchFacility) {
+      const hasReconciliation = Array.isArray(data.transactionReconciliation) && data.transactionReconciliation.length > 0;
+      checkPageBreak(35);
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text("Compliance Commitment, Transaction Reconciliation & Under-Declaration:", 20, currentY);
+      doc.setFont("helvetica", "normal");
+      currentY += 4;
+
+      // Part A: Transaction / Balances Reconciliation Table (Merged under Compliance)
+      if (hasReconciliation) {
+        checkPageBreak(35);
+        doc.setFontSize(10);
         doc.setFont("helvetica", "bold");
-        doc.text("Field Records Checklist & Reconciliation:", 20, currentY);
+        doc.text("Part A: Transaction / Balances Reconciliation", 20, currentY + 2);
         doc.setFont("helvetica", "normal");
 
         autoTable(doc, {
-          startY: currentY + 4,
-          head: [['Ref', 'Item for Data Validation & Reconciliation', 'Result Status', 'Observations & Notes']],
-          body: evaluatedItems,
-          styles: { fontSize: 7, cellPadding: 2.5 },
+          startY: currentY + 5,
+          head: [['Date / Period', 'Source 1', 'Source 2', 'Source 3', 'Unit', 'Recalculated Amt', 'Variance', 'Explanation / Action']],
+          body: data.transactionReconciliation.map((tr: any) => [
+            tr.period || '-',
+            tr.source1 || '-',
+            tr.source2 || '-',
+            tr.source3 || '-',
+            tr.unit || globalUnit,
+            tr.recalculatedAmount || '-',
+            tr.variance || '0.00',
+            tr.explanation || '-'
+          ]),
+          styles: { fontSize: 7, cellPadding: 2 },
           headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
           columnStyles: {
-            0: { cellWidth: 14, fontStyle: 'bold' },
-            1: { cellWidth: 68 },
-            2: { cellWidth: 40 },
-            3: { cellWidth: 53 }
+            0: { cellWidth: 22 },
+            1: { cellWidth: 22 },
+            2: { cellWidth: 22 },
+            3: { cellWidth: 22 },
+            4: { cellWidth: 12 },
+            5: { cellWidth: 24, fontStyle: 'bold' },
+            6: { cellWidth: 18 },
+            7: { cellWidth: 33 }
           }
         });
-        currentY = (doc as any).lastAutoTable.finalY + 10;
+        currentY = (doc as any).lastAutoTable.finalY + 8;
       }
-    }
 
-    // Compliance Section (Only for main facility / standard validations)
-    if (!isBranchFacility) {
+      // Part B: Under-Declaration Schedule
       checkPageBreak(25);
-      doc.setFontSize(12);
+      doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
-      doc.text("Compliance Commitment:", 20, currentY);
+      doc.text(hasReconciliation ? "Part B: Under-Declaration & Statutory CSL Arrears Schedule" : "Under-Declaration & Statutory CSL Arrears Schedule", 20, currentY + 2);
       doc.setFont("helvetica", "normal");
       
       if (data.nonCompliance.length === 0) {
         doc.setFontSize(10);
         doc.setTextColor(0, 128, 0); // Green
-        doc.text("No under-declaration was witnessed.", 20, currentY + 7);
+        doc.text("No under-declaration was witnessed.", 20, currentY + 8);
         doc.setTextColor(0, 0, 0); // Reset to black
         currentY += 15;
       } else {
@@ -3299,21 +3426,53 @@ export function DataValidationModule() {
             ...data.nonCompliance.map(nc => [nc.month, nc.litres, nc.amount, nc.paymentMonthYear, nc.mpesaRef]),
             [{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, '', { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, '', '']
           ],
-          styles: { fontSize: 8 }
+          styles: { fontSize: 8 },
+          headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
         });
         currentY = (doc as any).lastAutoTable.finalY;
         currentY += 10;
       }
     }
 
-    if (data.comments) {
-      checkPageBreak(25);
+    // Comments & Recommended Corrective Actions (Merged Section)
+    if (data.comments || data.recommendedActions) {
+      checkPageBreak(30);
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
-      doc.text("Comments:", 20, currentY);
+      doc.text("Comments & Recommended Corrective Actions:", 20, currentY);
       doc.setFont("helvetica", "normal");
-      doc.text(data.comments, 20, currentY + 5, { maxWidth: 170 });
-      currentY += 20;
+      currentY += 6;
+
+      if (data.comments) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9);
+        doc.text("Inspector Observations & Comments:", 20, currentY);
+        doc.setFont("helvetica", "normal");
+        const splitComments = doc.splitTextToSize(data.comments, 170);
+        doc.text(splitComments, 20, currentY + 4);
+        currentY += Math.max(splitComments.length * 4.5, 6) + 4;
+      }
+
+      if (data.recommendedActions) {
+        checkPageBreak(25);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9);
+        doc.text("Recommended Corrective Actions & Directives:", 20, currentY);
+        doc.setFont("helvetica", "normal");
+        const splitActions = doc.splitTextToSize(data.recommendedActions, 170);
+        doc.text(splitActions, 20, currentY + 4);
+        currentY += Math.max(splitActions.length * 4.5, 6) + 4;
+
+        if (data.actionDueDate || data.actionOwner) {
+          doc.setFontSize(8);
+          doc.setFont("helvetica", "italic");
+          const metaText = `Remediation Due Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
+          doc.text(metaText, 20, currentY);
+          doc.setFont("helvetica", "normal");
+          currentY += 6;
+        }
+      }
+      currentY += 4;
     }
 
     // Declarations (1st and 3rd always, 2nd if under-declaration exists)
@@ -3810,7 +3969,12 @@ export function DataValidationModule() {
         monthsCount: Array.isArray(updatedData.sales) && updatedData.sales.length > 0 ? updatedData.sales.length : 1,
         pdfPath: pdfPath || pdf,
         rawData: payloadRawData,
-        fieldChecklist: updatedData.fieldChecklist || {}
+        fieldChecklist: updatedData.fieldChecklist || {},
+        transactionReconciliation: updatedData.transactionReconciliation || [],
+        exceptionRegister: updatedData.exceptionRegister || [],
+        recommendedActions: updatedData.recommendedActions || '',
+        actionDueDate: updatedData.actionDueDate || '',
+        actionOwner: updatedData.actionOwner || ''
       };
 
       // 4. Concurrent execution of DBService save, Google Sheets submission, and Supabase sync
@@ -4172,6 +4336,184 @@ export function DataValidationModule() {
         try { dboSigPad.current.clear(); } catch (_) {}
       }
     }
+  };
+
+  // Audit findings counts & periods helper calculations
+  const availableReconciliationPeriods = Array.from(
+    new Set([
+      formData.validationPeriod,
+      ...formData.sales.map(s => `${s.month} ${s.year}`.trim()),
+      ...formData.intakes.map(i => `${i.month} ${i.year}`.trim())
+    ].filter(Boolean))
+  );
+
+  const checklistEvaluatedCount = Object.keys(formData.fieldChecklist || {}).filter(k => {
+    const item = formData.fieldChecklist?.[k];
+    return item && (item.status || (item.notes && item.notes.trim() !== ''));
+  }).length;
+
+  const reconciledRowsCount = (formData.transactionReconciliation || []).length;
+  const reconciliationVarianceCount = (formData.transactionReconciliation || []).filter(e => {
+    const val = parseFloat((e.variance || '').replace('+', ''));
+    return !isNaN(val) && Math.abs(val) > 0.001;
+  }).length;
+
+  const exceptionsCount = (formData.exceptionRegister || []).length;
+  const openExceptionsCount = (formData.exceptionRegister || []).filter(e => e.status?.toLowerCase() === 'open').length;
+
+  // Interdependent checklist discrepancies and registered exceptions
+  const registeredExceptionRefs = useMemo(() => {
+    const refs: string[] = [];
+    FIELD_CHECKLIST_SECTIONS.forEach(sec => {
+      sec.items.forEach(item => {
+        if ((formData.exceptionRegister || []).some(e => 
+          (e.source && e.source.includes(item.ref)) || 
+          (e.example && e.example.includes(item.ref)) ||
+          (e.definition && e.definition.includes(item.dataItem))
+        )) {
+          refs.push(item.ref);
+        }
+      });
+    });
+    return refs;
+  }, [formData.exceptionRegister]);
+
+  const checklistDiscrepancies = useMemo(() => {
+    const checklist = formData.fieldChecklist || {};
+    const list: { ref: string; title: string; source: string; status: string; notes: string }[] = [];
+    FIELD_CHECKLIST_SECTIONS.forEach(sec => {
+      sec.items.forEach(item => {
+        const val = checklist[item.ref];
+        if (val && val.status) {
+          const s = val.status.toLowerCase();
+          const isDiscrepancy = s.includes('discrepanc');
+          const isMissing = s.includes('missing') || s.includes('not available');
+          if (isDiscrepancy || isMissing) {
+            list.push({
+              ref: item.ref,
+              title: item.dataItem || item.title || item.ref,
+              source: item.primarySource || sec.title,
+              status: val.status,
+              notes: val.notes || ''
+            });
+          }
+        }
+      });
+    });
+    return list;
+  }, [formData.fieldChecklist]);
+
+  const unregisteredDiscrepanciesCount = useMemo(() => {
+    const regSet = new Set(registeredExceptionRefs);
+    return checklistDiscrepancies.filter(d => !regSet.has(d.ref)).length;
+  }, [checklistDiscrepancies, registeredExceptionRefs]);
+
+  const handleLogChecklistException = (item: { ref: string; title: string; source: string; status: string; notes: string }) => {
+    const isMissingStatus = item.status && (item.status.toLowerCase().includes('missing') || item.status.toLowerCase().includes('not available'));
+    const newException: ExceptionRegisterItem = {
+      id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `exc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      type: isMissingStatus ? 'Missing Source Records' : 'Documentation Discrepancy',
+      definition: `Discrepancy identified in ${item.title} during checklist verification.`,
+      example: item.notes || `Discrepancy in ${item.ref}: ${item.title} does not reconcile against field records.`,
+      source: `${item.source || 'Checklist'} (${item.ref})`,
+      owner: formData.dboName || 'Client / Officer',
+      dueDate: '',
+      resolutionEvidence: item.notes || '',
+      status: 'Open'
+    };
+    setFormData(prev => {
+      const existing = prev.exceptionRegister || [];
+      if (existing.some(e => e.source?.includes(item.ref) || e.example?.includes(item.ref))) {
+        return prev;
+      }
+      return {
+        ...prev,
+        exceptionRegister: [...existing, newException],
+        traceability: 'See Records Validation & Reconciliation Findings'
+      };
+    });
+  };
+
+  const handleSyncAllChecklistExceptions = () => {
+    const regSet = new Set(registeredExceptionRefs);
+    const unrecorded = checklistDiscrepancies.filter(d => !regSet.has(d.ref));
+    if (unrecorded.length === 0) return;
+
+    const newItems: ExceptionRegisterItem[] = unrecorded.map(d => {
+      const isMissingStatus = d.status && (d.status.toLowerCase().includes('missing') || d.status.toLowerCase().includes('not available'));
+      return {
+        id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `exc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        type: isMissingStatus ? 'Missing Source Records' : 'Documentation Discrepancy',
+        definition: `Discrepancy identified in ${d.title} during checklist verification.`,
+        example: d.notes || `Discrepancy in ${d.ref}: ${d.title} does not reconcile against field records.`,
+        source: `${d.source} (${d.ref})`,
+        owner: formData.dboName || 'Client / Officer',
+        dueDate: '',
+        resolutionEvidence: d.notes || '',
+        status: 'Open'
+      };
+    });
+
+    setFormData(prev => ({
+      ...prev,
+      exceptionRegister: [...(prev.exceptionRegister || []), ...newItems],
+      traceability: 'See Records Validation & Reconciliation Findings'
+    }));
+  };
+
+  const handleLogReconciliationException = (item: { period: string; variance: string; explanation: string; source: string }) => {
+    const refCode = `REC-${(item.period || 'PERIOD').replace(/[^a-zA-Z0-9]/g, '')}`;
+    const newException: ExceptionRegisterItem = {
+      id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `exc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      type: 'Reconciliation Variance',
+      definition: `Volume variance identified for ${item.period} during transaction & balance reconciliation.`,
+      example: `Variance: ${item.variance} ${globalUnit}. ${item.explanation ? `Notes: ${item.explanation}` : ''}`,
+      source: item.source || `Transaction Reconciliation (${refCode})`,
+      owner: formData.dboName || 'Client / Officer',
+      dueDate: '',
+      resolutionEvidence: item.explanation || '',
+      status: 'Open'
+    };
+    setFormData(prev => {
+      const existing = prev.exceptionRegister || [];
+      if (existing.some(e => e.source?.includes(refCode) || (e.example?.includes(item.period) && e.type === 'Reconciliation Variance'))) {
+        return prev;
+      }
+      return {
+        ...prev,
+        exceptionRegister: [...existing, newException],
+        traceability: 'See Records Validation & Reconciliation Findings'
+      };
+    });
+  };
+
+  const handleTransferToUnderDeclaration = (variances: { month: string; volume: string; amount: string }[]) => {
+    setFormData(prev => {
+      const currentNC = [...(prev.nonCompliance || [])];
+      variances.forEach(v => {
+        const vMonthClean = (v.month || '').trim().toLowerCase();
+        const existingIdx = currentNC.findIndex(nc => (nc.month || '').trim().toLowerCase() === vMonthClean);
+        if (existingIdx >= 0) {
+          currentNC[existingIdx] = {
+            ...currentNC[existingIdx],
+            litres: v.volume || currentNC[existingIdx].litres,
+            amount: v.amount || currentNC[existingIdx].amount
+          };
+        } else {
+          currentNC.push({
+            month: v.month,
+            litres: v.volume,
+            amount: v.amount || '',
+            paymentMonthYear: '',
+            mpesaRef: ''
+          });
+        }
+      });
+      return {
+        ...prev,
+        nonCompliance: currentNC
+      };
+    });
   };
 
   return (
@@ -5216,36 +5558,315 @@ export function DataValidationModule() {
                   exit={{ opacity: 0, x: -20 }}
                   className="space-y-8"
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">2</div>
-                      <h2 className="text-lg font-bold">Volume & Sales Data</h2>
+                  {/* Independent Section: Traceability & Records */}
+                  <div className="space-y-4" id="traceability-and-records-section">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-gray-100">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                          <ClipboardCheck className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-gray-900 text-base">Traceability & Records</h3>
+                          <p className="text-[11px] text-gray-500 font-medium">Record verification, traceability status, and premise reconciliation tests</p>
+                        </div>
+                      </div>
+                      {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200 w-fit">
+                          <ClipboardCheck className="w-3.5 h-3.5" />
+                          Findings Attached {checklistEvaluatedCount + reconciledRowsCount + exceptionsCount > 0 ? `(${checklistEvaluatedCount + reconciledRowsCount + exceptionsCount})` : ''}
+                        </span>
+                      )}
                     </div>
-                    {/* General Unit Toggle */}
-                    <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl border border-gray-200 w-fit">
-                      <span className="text-[10px] font-bold text-gray-500 uppercase px-2">Active Unit:</span>
-                      <button
-                        type="button"
-                        onClick={() => handleGlobalUnitChange('L')}
-                        className={`px-3 py-1 text-xs font-bold rounded-lg cursor-pointer transition-all ${
-                          globalUnit === 'L'
-                            ? 'bg-blue-600 text-white shadow-xs'
-                            : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                      >
-                        Litres (L)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleGlobalUnitChange('Kg')}
-                        className={`px-3 py-1 text-xs font-bold rounded-lg cursor-pointer transition-all ${
-                          globalUnit === 'Kg'
-                            ? 'bg-blue-600 text-white shadow-xs'
-                            : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                      >
-                        Kilograms (Kg)
-                      </button>
+
+                    <div className="p-5 bg-gray-50/60 rounded-3xl border border-gray-100 space-y-5">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                            Traceability & Records Status
+                          </label>
+                          {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                              <ClipboardCheck className="w-3 h-3" />
+                              Findings Linked
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {['Yes', 'No'].map(opt => {
+                            const isSelected = formData.traceability === opt;
+                            return (
+                              <button
+                                key={opt}
+                                type="button"
+                                onClick={() => setFormData(prev => ({ ...prev, traceability: opt }))}
+                                className={`px-4 py-1.5 rounded-xl border text-xs transition-all flex items-center justify-center font-bold cursor-pointer min-w-[64px] ${
+                                  isSelected 
+                                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs' 
+                                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                                }`}
+                              >
+                                {opt}
+                              </button>
+                            );
+                          })}
+                          {(() => {
+                            const opt = 'See Records Validation & Reconciliation Findings';
+                            const isSelected = formData.traceability === opt || formData.traceability === 'See DBO checklist';
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => setFormData(prev => ({ ...prev, traceability: opt }))}
+                                className={`px-3.5 py-1.5 rounded-xl border text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer font-semibold ${
+                                  isSelected 
+                                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs font-bold' 
+                                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                                }`}
+                              >
+                                <ClipboardCheck className="w-3.5 h-3.5 shrink-0" />
+                                <span className="italic">{opt}</span>
+                              </button>
+                            );
+                          })()}
+                        </div>
+                        {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
+                          <p className="text-[11px] text-blue-600 font-medium">
+                            Evaluation attached: Verification referenced to <em className="italic font-semibold">Records Validation & Reconciliation Findings</em> below.
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Audit & Exception Tracking Instruments */}
+                      <div className="pt-2 border-t border-gray-200/80">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-4">
+                          <div>
+                            <div className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                              <span>Field Audit & Exception Instruments</span>
+                              <span className="text-[10px] font-normal text-gray-500">(Field Records Checklist & Interdependent Exception Register)</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => setActiveAuditTool('all')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                                activeAuditTool === 'all'
+                                  ? 'bg-blue-600 text-white shadow-xs'
+                                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
+                              }`}
+                            >
+                              <ClipboardCheck className="w-3.5 h-3.5" />
+                              <span>Sequential Flow</span>
+                              <span className="text-[10px] opacity-80">(Checklist &rarr; Register)</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setActiveAuditTool('checklist')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                                activeAuditTool === 'checklist'
+                                  ? 'bg-blue-600 text-white shadow-xs'
+                                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
+                              }`}
+                            >
+                              <ClipboardCheck className="w-3.5 h-3.5" />
+                              <span>Checklist Only</span>
+                              {checklistEvaluatedCount > 0 && (
+                                <span className={`px-1.5 py-0.2 text-[10px] rounded-full font-extrabold ${
+                                  activeAuditTool === 'checklist' ? 'bg-blue-800 text-white' : 'bg-blue-100 text-blue-800'
+                                }`} title="Evaluated items">
+                                  {checklistEvaluatedCount}
+                                </span>
+                              )}
+                              {unregisteredDiscrepanciesCount > 0 && (
+                                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Unregistered discrepancies" />
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setActiveAuditTool('exceptions')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                                activeAuditTool === 'exceptions'
+                                  ? 'bg-amber-600 text-white shadow-xs'
+                                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
+                              }`}
+                            >
+                              <ShieldAlert className="w-3.5 h-3.5" />
+                              <span>Exception Register Only</span>
+                              {exceptionsCount > 0 && (
+                                <span className={`px-1.5 py-0.2 text-[10px] rounded-full font-extrabold ${
+                                  activeAuditTool === 'exceptions' ? 'bg-amber-800 text-white' : 'bg-amber-100 text-amber-800'
+                                }`}>
+                                  {exceptionsCount}
+                                </span>
+                              )}
+                              {openExceptionsCount > 0 && (
+                                <span className={`px-1.5 py-0.2 text-[10px] rounded-full font-extrabold ${
+                                  activeAuditTool === 'exceptions' ? 'bg-rose-900 text-white' : 'bg-rose-100 text-rose-800'
+                                }`}>
+                                  {openExceptionsCount} Open
+                                </span>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Sub-Instrument 1: Field Records Checklist */}
+                        {(activeAuditTool === 'checklist' || activeAuditTool === 'all') && (
+                          <div className="pt-1">
+                            <FieldChecklistComponent
+                              value={formData.fieldChecklist || {}}
+                              onChange={(updated) => {
+                                const hasAny = hasAnyChecklistValue(updated);
+                                const hasOtherFindings = (formData.transactionReconciliation?.length || 0) > 0 || (formData.exceptionRegister?.length || 0) > 0;
+                                setFormData(prev => ({
+                                  ...prev,
+                                  fieldChecklist: updated,
+                                  traceability: (hasAny || hasOtherFindings)
+                                    ? 'See Records Validation & Reconciliation Findings' 
+                                    : (prev.traceability === 'See Records Validation & Reconciliation Findings' || prev.traceability === 'See DBO checklist' ? 'Yes' : prev.traceability)
+                                }));
+                              }}
+                              clientCategory={formData.category}
+                              onLogException={handleLogChecklistException}
+                              registeredExceptionRefs={registeredExceptionRefs}
+                            />
+                          </div>
+                        )}
+
+                        {/* Sub-Instrument 2: EXCEPTION REGISTER (Flows directly after Checklist) */}
+                        {(activeAuditTool === 'exceptions' || activeAuditTool === 'all') && (
+                          <div className={activeAuditTool === 'all' ? "pt-6 border-t border-gray-200/80 mt-6" : "pt-3"}>
+                            {activeAuditTool === 'all' && (
+                              <div className="mb-3 flex items-center justify-between">
+                                <div className="flex items-center gap-2 text-xs font-bold text-gray-800">
+                                  <ShieldAlert className="w-4 h-4 text-amber-600" />
+                                  <span>Exception Register</span>
+                                  <span className="text-[11px] font-normal text-gray-500">(Interdependent: Records and handles any discrepancy or mismatch from checklist or reconciliation)</span>
+                                </div>
+                                {exceptionsCount > 0 && (
+                                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                                    {exceptionsCount} Exception{exceptionsCount === 1 ? '' : 's'} Logged ({openExceptionsCount} Open)
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            <ExceptionRegisterComponent
+                              exceptions={formData.exceptionRegister || []}
+                              onChange={(updated) => {
+                                const hasAny = hasAnyChecklistValue(formData.fieldChecklist || {});
+                                const hasOtherFindings = updated.length > 0 || (formData.transactionReconciliation?.length || 0) > 0 || hasAny;
+                                setFormData(prev => ({
+                                  ...prev,
+                                  exceptionRegister: updated,
+                                  traceability: hasOtherFindings 
+                                    ? 'See Records Validation & Reconciliation Findings' 
+                                    : prev.traceability
+                                }));
+                              }}
+                              onSyncFromChecklist={handleSyncAllChecklistExceptions}
+                              unregisteredDiscrepanciesCount={unregisteredDiscrepanciesCount}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Volume & Sales Data Section */}
+                  <div className="space-y-6 pt-4 border-t border-gray-100" id="volume-and-sales-data-section">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">2</div>
+                        <h2 className="text-lg font-bold text-gray-900">Volume & Sales Data</h2>
+                      </div>
+                      {/* General Unit Toggle */}
+                      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl border border-gray-200 w-fit">
+                        <span className="text-[10px] font-bold text-gray-500 uppercase px-2">Active Unit:</span>
+                        <button
+                          type="button"
+                          onClick={() => handleGlobalUnitChange('L')}
+                          className={`px-3 py-1 text-xs font-bold rounded-lg cursor-pointer transition-all ${
+                            globalUnit === 'L'
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'text-gray-600 hover:text-gray-900'
+                          }`}
+                        >
+                          Litres (L)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleGlobalUnitChange('Kg')}
+                          className={`px-3 py-1 text-xs font-bold rounded-lg cursor-pointer transition-all ${
+                            globalUnit === 'Kg'
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'text-gray-600 hover:text-gray-900'
+                          }`}
+                        >
+                          Kilograms (Kg)
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Produce Metadata Section (Nature of Produce & Source) */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-gray-50/50 rounded-3xl border border-gray-100">
+                      <div className={`space-y-2 p-2.5 rounded-2xl transition-all ${failedFields.includes('natureOfProduce') ? 'bg-red-50/50 border border-red-300 ring-2 ring-red-100' : 'border border-transparent'}`}>
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Nature of Produce?</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {['Pasteurized Milk', 'Raw Milk', 'Cultured Milk', 'Yoghurt', 'UHT', 'Ghee', 'Butter', 'Cheese', 'Milk Shake'].map(opt => (
+                            <label key={opt} className="flex items-center gap-2 cursor-pointer group">
+                              <input
+                                type="checkbox"
+                                checked={formData.natureOfProduce.includes(opt)}
+                                onChange={(e) => {
+                                  const isChecked = e.target.checked;
+                                  const newProduce = isChecked 
+                                    ? [...formData.natureOfProduce, opt]
+                                    : formData.natureOfProduce.filter(p => p !== opt);
+                                  
+                                  setFormData(prev => {
+                                    // Update selling prices in all sales rows when produce selection changes
+                                    const updatedSales = prev.sales.map(sale => {
+                                      const currentPrices = parseSellingPrices(sale.sellingPrice || '');
+                                      if (isChecked) {
+                                        if (defaultProductPrices.sellingPrices[opt]) {
+                                          currentPrices[opt] = defaultProductPrices.sellingPrices[opt];
+                                        }
+                                      } else {
+                                        delete currentPrices[opt];
+                                      }
+                                      return {
+                                        ...sale,
+                                        sellingPrice: formatSellingPrices(currentPrices)
+                                      };
+                                    });
+                                    return { ...prev, natureOfProduce: newProduce, sales: updatedSales };
+                                  });
+                                  setFailedFields(prev => prev.filter(f => f !== 'natureOfProduce'));
+                                }}
+                                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <span className="text-[11px] text-gray-600 group-hover:text-gray-900 transition-colors">{opt}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Source</label>
+                        <input
+                          type="text"
+                          name="source"
+                          value={formData.source}
+                          onChange={handleChange}
+                          placeholder="e.g. Direct from Farmers, Cooperative, Bulking Centre"
+                          className={`w-full px-4 py-2 rounded-xl border outline-none text-xs transition-all ${
+                            failedFields.includes('source')
+                              ? 'border-red-500 focus:border-red-500 focus:ring-red-200 ring-2 ring-red-100 bg-red-50/20'
+                              : 'border-gray-200 focus:border-blue-500'
+                          }`}
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -5413,92 +6034,7 @@ export function DataValidationModule() {
                     </motion.div>
                   )}
 
-                  {/* General Compliance / Produce Metadata Section */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-gray-50/50 rounded-3xl border border-gray-100">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Traceability & Records Available</label>
-                      <div className="flex gap-4">
-                        {['Yes', 'No'].map(opt => (
-                          <button
-                            key={opt}
-                            type="button"
-                            onClick={() => setFormData(prev => ({ ...prev, traceability: opt }))}
-                            className={`flex-1 py-2 rounded-xl border font-bold text-xs transition-all ${
-                              formData.traceability === opt 
-                                ? 'bg-blue-600 border-blue-600 text-white shadow-md' 
-                                : 'bg-white border-gray-200 text-gray-600'
-                            }`}
-                          >
-                            {opt}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className={`space-y-2 p-2.5 rounded-2xl transition-all ${failedFields.includes('natureOfProduce') ? 'bg-red-50/50 border border-red-300 ring-2 ring-red-100' : 'border border-transparent'}`}>
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Nature of Produce?</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {['Pasteurized Milk', 'Raw Milk', 'Cultured Milk', 'Yoghurt', 'UHT', 'Ghee', 'Butter', 'Cheese', 'Milk Shake'].map(opt => (
-                          <label key={opt} className="flex items-center gap-2 cursor-pointer group">
-                            <input
-                              type="checkbox"
-                              checked={formData.natureOfProduce.includes(opt)}
-                              onChange={(e) => {
-                                const isChecked = e.target.checked;
-                                const newProduce = isChecked 
-                                  ? [...formData.natureOfProduce, opt]
-                                  : formData.natureOfProduce.filter(p => p !== opt);
-                                
-                                setFormData(prev => {
-                                  // Update selling prices in all sales rows when produce selection changes
-                                  const updatedSales = prev.sales.map(sale => {
-                                    const currentPrices = parseSellingPrices(sale.sellingPrice || '');
-                                    if (isChecked) {
-                                      if (defaultProductPrices.sellingPrices[opt]) {
-                                        currentPrices[opt] = defaultProductPrices.sellingPrices[opt];
-                                      }
-                                    } else {
-                                      delete currentPrices[opt];
-                                    }
-                                    return {
-                                      ...sale,
-                                      sellingPrice: formatSellingPrices(currentPrices)
-                                    };
-                                  });
-                                  return { ...prev, natureOfProduce: newProduce, sales: updatedSales };
-                                });
-                                setFailedFields(prev => prev.filter(f => f !== 'natureOfProduce'));
-                              }}
-                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <span className="text-[11px] text-gray-600 group-hover:text-gray-900 transition-colors">{opt}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="space-y-2 md:col-span-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Source</label>
-                      <input
-                        type="text"
-                        name="source"
-                        value={formData.source}
-                        onChange={handleChange}
-                        className={`w-full px-4 py-2 rounded-xl border outline-none text-xs transition-all ${
-                          failedFields.includes('source')
-                            ? 'border-red-500 focus:border-red-500 focus:ring-red-200 ring-2 ring-red-100 bg-red-50/20'
-                            : 'border-gray-200 focus:border-blue-500'
-                        }`}
-                      />
-                    </div>
 
-                    {/* Optional Field Records Checklist Harboured in Traceability & Records */}
-                    <div className="md:col-span-2 pt-2">
-                      <FieldChecklistComponent
-                        value={formData.fieldChecklist || {}}
-                        onChange={(updated) => setFormData(prev => ({ ...prev, fieldChecklist: updated }))}
-                        clientCategory={formData.category}
-                      />
-                    </div>
-                  </div>
 
                   {/* Merged Local Sales Section */}
                   <div className="space-y-6">
@@ -6389,83 +6925,159 @@ export function DataValidationModule() {
                   </div>
 
                   {!isBranchFacility && (
-                    <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 space-y-4">
-                      <div className="overflow-x-auto rounded-xl border border-blue-100">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="bg-blue-100/50">
-                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
-                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
-                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Amount (Kshs)</th>
-                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Month/Year to Pay</th>
-                              <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-blue-50">
-                            {formData.nonCompliance.map((nc, idx) => (
-                              <tr key={idx}>
-                                <td className="p-3 text-xs font-bold text-blue-800">{nc.month}</td>
-                                <td className="p-3 text-xs text-blue-700">{nc.litres}</td>
-                                <td className="p-1">
-                                  <input
-                                    type="text"
-                                    placeholder="0.00"
-                                    value={nc.amount}
-                                    onChange={(e) => {
-                                      const newNC = [...formData.nonCompliance];
-                                      newNC[idx].amount = e.target.value;
-                                      setFormData(prev => ({ ...prev, nonCompliance: newNC }));
-                                    }}
-                                    className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono"
-                                  />
-                                </td>
-                                <td className="p-1">
-                                  <input
-                                    placeholder="MM/YYYY"
-                                    value={nc.paymentMonthYear}
-                                    onChange={(e) => {
-                                      const newNC = [...formData.nonCompliance];
-                                      newNC[idx].paymentMonthYear = e.target.value;
-                                      setFormData(prev => ({ ...prev, nonCompliance: newNC }));
-                                    }}
-                                    className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs"
-                                  />
-                                </td>
-                                <td className="p-1">
-                                  <input
-                                    placeholder="REF NO"
-                                    value={nc.mpesaRef}
-                                    onChange={(e) => {
-                                      const newNC = [...formData.nonCompliance];
-                                      newNC[idx].mpesaRef = e.target.value;
-                                      setFormData(prev => ({ ...prev, nonCompliance: newNC }));
-                                    }}
-                                    className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs"
-                                  />
-                                </td>
+                    <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100 space-y-6">
+                      {/* Sub-Section 1: Transaction & Balances Reconciliation */}
+                      <div className="bg-white p-5 rounded-2xl border border-blue-100/80 shadow-xs space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-gray-100">
+                          <div>
+                            <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                              <Scale className="w-4 h-4 text-blue-600" />
+                              <span>Transaction & Balances Reconciliation</span>
+                            </h3>
+                            <p className="text-[11px] text-gray-500">
+                              Verify primary delivery, intake and production records against declared figures. Any volume variance is an exception and can be transferred to statutory arrears.
+                            </p>
+                          </div>
+                          {reconciliationVarianceCount > 0 && (
+                            <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200 flex items-center gap-1.5 self-start sm:self-auto">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                              {reconciliationVarianceCount} Variance{reconciliationVarianceCount === 1 ? '' : 's'} Uncovered
+                            </span>
+                          )}
+                        </div>
+
+                        <TransactionReconciliationComponent
+                          entries={formData.transactionReconciliation || []}
+                          defaultUnit={globalUnit === 'L' ? 'L' : 'Kg'}
+                          availablePeriods={availableReconciliationPeriods}
+                          onChange={(updated) => {
+                            const hasAny = hasAnyChecklistValue(formData.fieldChecklist || {});
+                            const hasOtherFindings = updated.length > 0 || (formData.exceptionRegister?.length || 0) > 0 || hasAny;
+                            setFormData(prev => ({
+                              ...prev,
+                              transactionReconciliation: updated,
+                              traceability: hasOtherFindings 
+                                ? 'See Records Validation & Reconciliation Findings' 
+                                : prev.traceability
+                            }));
+                          }}
+                          onTransferToUnderDeclaration={handleTransferToUnderDeclaration}
+                          onLogException={handleLogReconciliationException}
+                        />
+                      </div>
+
+                      {/* Sub-Section 2: Under-Declaration & Statutory CSL Arrears Schedule */}
+                      <div className="bg-white p-5 rounded-2xl border border-blue-100/80 shadow-xs space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-gray-100">
+                          <div>
+                            <h3 className="text-sm font-bold text-blue-950 flex items-center gap-2">
+                              <AlertCircle className="w-4 h-4 text-blue-600" />
+                              <span>Under-Declaration & Statutory CSL Arrears Schedule</span>
+                            </h3>
+                            <p className="text-[11px] text-gray-500">
+                              Calculated under-declared volumes, agreed amounts and official MPESA / payment receipts.
+                            </p>
+                          </div>
+                          {formData.nonCompliance.length > 0 && (
+                            <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200 self-start sm:self-auto">
+                              Total Arrears: Kshs {totalPenalty.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="overflow-x-auto rounded-xl border border-blue-100 bg-blue-50/30">
+                          <table className="w-full text-left border-collapse">
+                            <thead>
+                              <tr className="bg-blue-100/50">
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Amount (Kshs)</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Month/Year to Pay</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
                               </tr>
-                            ))}
-                            {formData.nonCompliance.length > 0 && (
-                              <tr className="bg-blue-50/50">
-                                <td className="p-3 text-xs font-bold text-blue-900">TOTAL</td>
-                                <td className="p-3 text-xs text-blue-700"></td>
-                                <td className="p-3 text-xs font-bold text-blue-900">
-                                  {totalPenalty.toFixed(2)}
-                                </td>
-                                <td colSpan={2}></td>
-                              </tr>
-                            )}
-                            {formData.nonCompliance.length === 0 && (
-                              <tr>
-                                <td colSpan={5} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-blue-50">
+                              {formData.nonCompliance.map((nc, idx) => (
+                                <tr key={idx}>
+                                  <td className="p-3 text-xs font-bold text-blue-800">{nc.month}</td>
+                                  <td className="p-3 text-xs text-blue-700">{nc.litres}</td>
+                                  <td className="p-1">
+                                    <input
+                                      type="text"
+                                      placeholder="0.00"
+                                      value={nc.amount}
+                                      onChange={(e) => {
+                                        const newNC = [...formData.nonCompliance];
+                                        newNC[idx].amount = e.target.value;
+                                        setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                      }}
+                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono bg-white"
+                                    />
+                                  </td>
+                                  <td className="p-1">
+                                    <input
+                                      placeholder="MM/YYYY"
+                                      value={nc.paymentMonthYear}
+                                      onChange={(e) => {
+                                        const newNC = [...formData.nonCompliance];
+                                        newNC[idx].paymentMonthYear = e.target.value;
+                                        setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                      }}
+                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white"
+                                    />
+                                  </td>
+                                  <td className="p-1">
+                                    <input
+                                      placeholder="REF NO"
+                                      value={nc.mpesaRef}
+                                      onChange={(e) => {
+                                        const newNC = [...formData.nonCompliance];
+                                        newNC[idx].mpesaRef = e.target.value;
+                                        setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                      }}
+                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white"
+                                    />
+                                  </td>
+                                </tr>
+                              ))}
+                              {formData.nonCompliance.length > 0 && (
+                                <tr className="bg-blue-50/70">
+                                  <td className="p-3 text-xs font-bold text-blue-900">TOTAL</td>
+                                  <td className="p-3 text-xs text-blue-700"></td>
+                                  <td className="p-3 text-xs font-bold text-blue-900">
+                                    {totalPenalty.toFixed(2)}
+                                  </td>
+                                  <td colSpan={2}></td>
+                                </tr>
+                              )}
+                              {formData.nonCompliance.length === 0 && (
+                                <tr>
+                                  <td colSpan={5} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     </div>
                   )}
 
+                  {/* Merged Comments & Recommended Corrective Action Section */}
+                  <CommentsAndCorrectiveActionsComponent
+                    comments={formData.comments}
+                    recommendedActions={formData.recommendedActions || ''}
+                    actionDueDate={formData.actionDueDate || ''}
+                    actionOwner={formData.actionOwner || ''}
+                    exceptions={formData.exceptionRegister || []}
+                    onChange={(updatedFields) => {
+                      setFormData(prev => ({
+                        ...prev,
+                        ...updatedFields
+                      }));
+                    }}
+                  />
+
+                  {/* Declarations Section - Placed AFTER Comments */}
                   <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-4">
                     <h3 className="text-sm font-bold text-gray-900">Declarations</h3>
                     <div className="space-y-3">
@@ -6547,18 +7159,6 @@ export function DataValidationModule() {
                         </span>
                       </label>
                     </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Comments</label>
-                    <textarea
-                      name="comments"
-                      value={formData.comments}
-                      onChange={handleChange}
-                      rows={3}
-                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none text-sm"
-                      placeholder="Enter any additional comments here..."
-                    />
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
