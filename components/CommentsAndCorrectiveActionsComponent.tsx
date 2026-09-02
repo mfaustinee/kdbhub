@@ -60,12 +60,12 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
       {/* Header Banner */}
       <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-50 via-white to-blue-50/30 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-blue-600/10 text-blue-700 flex items-center justify-center shrink-0 border border-blue-200/50">
-            <ShieldCheck className="w-5 h-5" />
+          <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+            5
           </div>
           <div>
-            <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 uppercase tracking-wide">
-              Comments & Recommended Corrective Actions
+            <h4 className="text-sm sm:text-base font-bold text-slate-900">
+              5. Comments & Recommended Corrective Actions
             </h4>
             <p className="text-[11px] text-slate-500 mt-0.5">
               Record overall compliance observations, inspector remarks, and mandatory corrective directives issued to the DBO.

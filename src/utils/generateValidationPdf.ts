@@ -65,6 +65,16 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
     return `${d}/${m}/${y}`;
   };
 
+  const formatNum = (val: any) => {
+    if (val === undefined || val === null || val === '') return '-';
+    const str = String(val).replace(/,/g, '').trim();
+    const num = parseFloat(str);
+    if (isNaN(num)) return String(val);
+    const parts = str.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.');
+  };
+
   const writeField = (label: string, value: string, x: number, y: number) => {
     doc.setFont("helvetica", "bold");
     doc.text(label, x, y);
@@ -80,123 +90,49 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
   doc.line(45, 47, 165, 47);
   doc.setFont("helvetica", "normal");
 
-  doc.setFontSize(10);
-  writeField("Branch:", data.branch || data.county || 'Kericho', 20, 65);
-  writeField("Date:", formatDate(data.date), 20, 73);
-  writeField("Start Time:", data.startTime || '', 20, 81);
-  writeField("End Time:", data.endTime || '', 20, 89);
+  // SECTION 1: General Information
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("1. General Information:", 20, 58);
+  doc.setFont("helvetica", "normal");
 
-  writeField("Dairy Business Operator (DBO) Name:", data.dboName || '', 20, 101);
-  writeField("Premise Name:", data.premiseName || '', 20, 109);
-  writeField("Category:", data.category || '', 20, 117);
-  writeField("Permit No:", data.permitNo || '', 110, 117);
-  writeField("Contacts:", data.contacts || '', 20, 125);
-  writeField("Expiry Date:", formatDate(data.expiryDate), 110, 125);
-  writeField("Location:", data.location || '', 20, 133);
-  writeField("County:", data.county || '', 110, 133);
-  writeField("Validation Period:", data.validationPeriod || '', 20, 141);
+  doc.setFontSize(9);
+  writeField("Branch:", data.branch || data.county || 'Kericho', 20, 66);
+  writeField("Date:", formatDate(data.date), 110, 66);
+  writeField("Start Time:", data.startTime || '', 20, 74);
+  writeField("End Time:", data.endTime || '', 110, 74);
 
-  currentY = 150;
+  writeField("Dairy Business Operator (DBO) Name:", data.dboName || '', 20, 84);
+  writeField("Premise Name:", data.premiseName || '', 20, 92);
+  writeField("Category:", data.category || '', 20, 100);
+  writeField("Permit No:", data.permitNo || '', 110, 100);
+  writeField("Contacts:", data.contacts || '', 20, 108);
+  writeField("Expiry Date:", formatDate(data.expiryDate), 110, 108);
+  writeField("Location:", data.location || '', 20, 116);
+  writeField("County:", data.county || '', 110, 116);
+  writeField("Validation Period:", data.validationPeriod || '', 20, 124);
 
-  // Intakes Table
-  if ((data.category === 'CP>5,000 L/D' || data.category === 'CP<5,000 L/D' || data.category === 'Processor') && Array.isArray(data.intakes) && data.intakes.length > 0) {
-    checkPageBreak(25);
-    doc.setFontSize(12);
-    doc.text("Total Monthly Intakes", 20, currentY);
-    autoTable(doc, {
-      startY: currentY + 5,
-      head: [['Month/Year', `Qty (${globalUnit})`, 'Farmer Price', 'Processor', 'Proc. Price', `Avg Collection/Day (${globalUnit}/Day)`]],
-      body: data.intakes.map((i: any) => [`${i.month} ${i.year}`, i.quantity, i.farmerPrice, i.processor, i.processorPrice, i.avgVolPerDay]),
-      styles: { fontSize: 8 }
-    });
-    currentY = (doc as any).lastAutoTable.finalY + 10;
-  }
+  currentY = 134;
 
-  // Sales Table
-  const sales = Array.isArray(data.sales) ? data.sales : [];
-  if (data.hasLocalSales !== false && sales.length > 0) {
-    checkPageBreak(25);
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text("Local Sales Data", 20, currentY);
-    doc.setFont("helvetica", "normal");
-
-    autoTable(doc, {
-      startY: currentY + 5,
-      head: [['Month/Year', `Declared (${globalUnit})`, `Witnessed/Verified (${globalUnit})`, `Projected (${globalUnit})`, `Under Declared (${globalUnit})`, 'Buying Price', 'Selling Price', `Avg Vol/Day (${globalUnit}/Day)`]],
-      body: sales.map((s: any) => [`${s.month} ${s.year}`, s.qtyDeclared || '0', s.verifiedQty || '0', s.projectedQty || '0', s.underDeclared || '0', s.buyingPrice || '0', s.sellingPrice || '0', s.avgVolPerDay || '0']),
-      styles: { fontSize: 7 }
-    });
-    currentY = (doc as any).lastAutoTable.finalY + 10;
-  }
-
-  // Distribution Details Table
-  if ((data.category === 'Mini Dairy' || data.category === 'Cottage Industry') && (Array.isArray(data.distributors) || data.distName)) {
-    const distributors = Array.isArray(data.distributors) && data.distributors.length > 0
-      ? data.distributors
-      : [{
-          name: data.distName,
-          contacts: data.distContacts,
-          volPerDay: data.distVolPerDay,
-          permitNo: data.distPermitNo,
-          areaOfSale: data.distAreaOfSale,
-          outlets: data.distOutlets,
-          natureOfProduce: data.distNatureOfProduce,
-          prices: { [data.distNatureOfProduce?.[0] || 'Produce']: data.distPrice }
-        }];
-
-    distributors.forEach((dist: any, dIdx: number) => {
-      checkPageBreak(55);
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "bold");
-      doc.text(`Distributor Details #${dIdx + 1}: ${dist.name || 'Unnamed'}`, 20, currentY);
-      doc.setFont("helvetica", "normal");
-
-      const outletsText = Array.isArray(dist.outlets) && dist.outlets.length > 0
-        ? dist.outlets.map((o: any, index: number) => `#${index+1}: Loc: ${o.location || 'N/A'}, Vol: ${o.volPerDay || 'N/A'}, Permit: ${o.permitStatus || 'N/A'}, Levy: ${o.levyInfo || 'N/A'}`).join('\n')
-        : 'None';
-
-      const natureText = Array.isArray(dist.natureOfProduce) ? dist.natureOfProduce.join(', ') : 'N/A';
-      const pricesText = dist.prices && Object.keys(dist.prices).length > 0
-        ? Object.entries(dist.prices).map(([prod, price]) => `${prod}: ${price}`).join(', ')
-        : (data.distPrice || 'N/A');
-
-      autoTable(doc, {
-        startY: currentY + 4,
-        head: [['Field', 'Detail']],
-        body: [
-          ['Distributor Name', dist.name || 'N/A'],
-          ['Distributor Contacts', dist.contacts || 'N/A'],
-          ['Volume per Day', dist.volPerDay || 'N/A'],
-          ['Permit Number', dist.permitNo || 'N/A'],
-          ['Area of Sale', dist.areaOfSale || 'N/A'],
-          ['Nature of Produce', natureText],
-          ['Prices (Kshs)', pricesText],
-          ['List of Outlets', outletsText]
-        ],
-        styles: { fontSize: 8 },
-        columnStyles: {
-          0: { cellWidth: 50, fontStyle: 'bold' },
-          1: { cellWidth: 120 }
-        }
-      });
-      currentY = (doc as any).lastAutoTable.finalY + 10;
-    });
-  }
-
-  // Summary Data
+  // SECTION 2: Records & Traceability
   checkPageBreak(35);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("2. Records & Traceability:", 20, currentY);
+  doc.setFont("helvetica", "normal");
+
   autoTable(doc, {
-    startY: currentY + 5,
+    startY: currentY + 4,
     head: [['Detail', 'Value']],
     body: [
-      ['Traceability & Records', data.traceability || 'No'],
+      ['Records & Traceability Status', data.traceability || 'No'],
       ['Nature of Produce?', Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : (data.natureOfProduce || 'Raw Milk')],
       ['Source', data.source || 'Direct from Farmers'],
     ],
-    styles: { fontSize: 8 }
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
   });
-  currentY = (doc as any).lastAutoTable.finalY + 10;
+  currentY = (doc as any).lastAutoTable.finalY + 8;
 
   // Optional Field Records Checklist (rendered when checklist items are evaluated)
   if (data.fieldChecklist && Object.keys(data.fieldChecklist).length > 0) {
@@ -205,9 +141,10 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
       sec.items.forEach(item => {
         const entry = data.fieldChecklist?.[item.ref];
         if (entry && (entry.status || (entry.notes && entry.notes.trim() !== ''))) {
+          const subGroupLabel = item.subGroup ? `[${item.subGroup}]\n` : '';
           secEvaluatedItems.push([
             item.ref,
-            `${item.dataItem || item.title}\n${item.validationTest || item.description}`,
+            `${subGroupLabel}${item.dataItem || item.title}\n${item.validationTest || item.description}`,
             `${item.primarySource || '-'}\n[Evidence: ${item.evidenceDetail || '-'}]`,
             entry.status || 'Evaluated',
             entry.notes || '-'
@@ -217,15 +154,15 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
 
       if (secEvaluatedItems.length > 0) {
         checkPageBreak(40);
-        doc.setFontSize(11);
+        doc.setFontSize(10);
         doc.setFont("helvetica", "bold");
         const rangeLabel = sec.items.length > 0 ? ` (${sec.items[0]?.ref} – ${sec.items[sec.items.length - 1]?.ref})` : '';
-        doc.text(`${sec.title} Records Checklist & Reconciliation${rangeLabel}:`, 20, currentY);
+        doc.text(`Section ${sec.sectionNumber}: ${sec.title} Checklist & Reconciliation${rangeLabel}:`, 20, currentY);
         doc.setFont("helvetica", "normal");
 
         autoTable(doc, {
           startY: currentY + 4,
-          head: [['Ref', 'Data Item & Validation Test', 'Primary Source & Evidence', 'Status', 'Variance / Action']],
+          head: [['Ref', 'Data Item & Validation Test', 'Primary Source & Evidence', 'Record/Result Status', 'Observations & Notes']],
           body: secEvaluatedItems,
           styles: { fontSize: 7, cellPadding: 2 },
           headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
@@ -237,17 +174,17 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
             4: { cellWidth: 27 }
           }
         });
-        currentY = (doc as any).lastAutoTable.finalY + 10;
+        currentY = (doc as any).lastAutoTable.finalY + 8;
       }
     });
   }
 
-  // EXCEPTION REGISTER Table (Directly following Checklist Findings)
+  // SECTION 2(a): Exception Register Table
   if (Array.isArray(data.exceptionRegister) && data.exceptionRegister.length > 0) {
     checkPageBreak(40);
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
-    doc.text("Exception Register (Discrepancies & Mismatches Tracked):", 20, currentY);
+    doc.text("2(a). Exception Register (Discrepancies & Mismatches Tracked):", 20, currentY);
     doc.setFont("helvetica", "normal");
 
     autoTable(doc, {
@@ -276,135 +213,233 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
         7: { cellWidth: 12, fontStyle: 'bold' }
       }
     });
-    currentY = (doc as any).lastAutoTable.finalY + 10;
+    currentY = (doc as any).lastAutoTable.finalY + 8;
   }
 
-  // Compliance Commitment, Transaction Reconciliation & Under-Declaration (Merged Section)
-  const hasReconciliation = Array.isArray(data.transactionReconciliation) && data.transactionReconciliation.length > 0;
-  const nonCompliance = Array.isArray(data.nonCompliance) ? data.nonCompliance : [];
-  
+  // SECTION 2 (b): Volume & Sales Data
   checkPageBreak(35);
-  doc.setFontSize(12);
+  doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("Compliance Commitment, Transaction Reconciliation & Under-Declaration:", 20, currentY);
+  doc.text("2 (b). Volume & Sales Data:", 20, currentY);
   doc.setFont("helvetica", "normal");
-  currentY += 4;
+  currentY += 2;
 
-  // Part A: Transaction / Balances Reconciliation Table (Merged under Compliance)
-  if (hasReconciliation) {
-    checkPageBreak(35);
+  // Intakes Table
+  if ((data.category === 'CP>5,000 L/D' || data.category === 'CP<5,000 L/D' || data.category === 'Processor') && Array.isArray(data.intakes) && data.intakes.length > 0) {
+    checkPageBreak(25);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Part A: Transaction / Balances Reconciliation", 20, currentY + 2);
+    doc.text("Total Monthly Intakes", 20, currentY + 2);
     doc.setFont("helvetica", "normal");
-
     autoTable(doc, {
       startY: currentY + 5,
-      head: [['Date / Period', 'Source 1', 'Source 2', 'Source 3', 'Unit', 'Recalculated Amt', 'Variance', 'Explanation / Action']],
-      body: data.transactionReconciliation.map((tr: any) => [
-        tr.period || '-',
-        tr.source1 || '-',
-        tr.source2 || '-',
-        tr.source3 || '-',
-        tr.unit || globalUnit,
-        tr.recalculatedAmount || '-',
-        tr.variance || '0.00',
-        tr.explanation || '-'
+      head: [['Month/Year', `Qty (${globalUnit})`, 'Farmer Price (Kshs)', 'Processor', 'Proc. Price (Kshs)', `Avg Collection/Day (${globalUnit}/Day)`]],
+      body: data.intakes.map((i: any) => [
+        `${i.month} ${i.year}`, 
+        formatNum(i.quantity), 
+        formatNum(i.farmerPrice), 
+        i.processor || '-', 
+        formatNum(i.processorPrice), 
+        formatNum(i.avgVolPerDay)
       ]),
-      styles: { fontSize: 7, cellPadding: 2 },
-      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
-      columnStyles: {
-        0: { cellWidth: 22 },
-        1: { cellWidth: 22 },
-        2: { cellWidth: 22 },
-        3: { cellWidth: 22 },
-        4: { cellWidth: 12 },
-        5: { cellWidth: 24, fontStyle: 'bold' },
-        6: { cellWidth: 18 },
-        7: { cellWidth: 33 }
-      }
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
     });
     currentY = (doc as any).lastAutoTable.finalY + 8;
   }
 
-  // Part B: Under-Declaration & Statutory CSL Arrears Schedule
+  // Sales Table
+  const sales = Array.isArray(data.sales) ? data.sales : [];
+  if (data.hasLocalSales !== false && sales.length > 0) {
+    checkPageBreak(25);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("Local Sales Data", 20, currentY + 2);
+    doc.setFont("helvetica", "normal");
+
+    autoTable(doc, {
+      startY: currentY + 5,
+      head: [['Month/Year', `Declared (${globalUnit})`, `Witnessed (${globalUnit})`, `Projected (${globalUnit})`, `Under Declared (${globalUnit})`, 'Buying Price (Kshs)', 'Selling Price (Kshs)', `Avg Vol/Day (${globalUnit}/Day)`]],
+      body: sales.map((s: any) => [
+        `${s.month} ${s.year}`, 
+        formatNum(s.qtyDeclared || '0'), 
+        formatNum(s.verifiedQty || '0'), 
+        formatNum(s.projectedQty || '0'), 
+        formatNum(s.underDeclared || '0'), 
+        formatNum(s.buyingPrice || '0'), 
+        formatNum(s.sellingPrice || '0'), 
+        formatNum(s.avgVolPerDay || '0')
+      ]),
+      styles: { fontSize: 7 },
+      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
+    });
+    currentY = (doc as any).lastAutoTable.finalY + 8;
+  }
+
+  // Distribution Details Table
+  if ((data.category === 'Mini Dairy' || data.category === 'Cottage Industry') && (Array.isArray(data.distributors) || data.distName)) {
+    const distributors = Array.isArray(data.distributors) && data.distributors.length > 0
+      ? data.distributors
+      : [{
+          name: data.distName,
+          contacts: data.distContacts,
+          volPerDay: data.distVolPerDay,
+          permitNo: data.distPermitNo,
+          areaOfSale: data.distAreaOfSale,
+          outlets: data.distOutlets,
+          natureOfProduce: data.distNatureOfProduce,
+          prices: { [data.distNatureOfProduce?.[0] || 'Produce']: data.distPrice }
+        }];
+
+    distributors.forEach((dist: any, dIdx: number) => {
+      checkPageBreak(55);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.text(`Distributor Details #${dIdx + 1}: ${dist.name || 'Unnamed'}`, 20, currentY + 2);
+      doc.setFont("helvetica", "normal");
+
+      const outletsText = Array.isArray(dist.outlets) && dist.outlets.length > 0
+        ? dist.outlets.map((o: any, index: number) => `#${index+1}: Loc: ${o.location || 'N/A'}, Vol: ${o.volPerDay || 'N/A'}, Permit: ${o.permitStatus || 'N/A'}, Levy: ${o.levyInfo || 'N/A'}`).join('\n')
+        : 'None';
+
+      const natureText = Array.isArray(dist.natureOfProduce) ? dist.natureOfProduce.join(', ') : 'N/A';
+      const pricesText = dist.prices && Object.keys(dist.prices).length > 0
+        ? Object.entries(dist.prices).map(([prod, price]) => `${prod}: ${formatNum(price)}`).join(', ')
+        : (formatNum(data.distPrice) || 'N/A');
+
+      autoTable(doc, {
+        startY: currentY + 4,
+        head: [['Field', 'Detail']],
+        body: [
+          ['Distributor Name', dist.name || 'N/A'],
+          ['Distributor Contacts', dist.contacts || 'N/A'],
+          ['Volume per Day', formatNum(dist.volPerDay) || 'N/A'],
+          ['Permit Number', dist.permitNo || 'N/A'],
+          ['Area of Sale', dist.areaOfSale || 'N/A'],
+          ['Nature of Produce', natureText],
+          ['Prices (Kshs)', pricesText],
+          ['List of Outlets', outletsText]
+        ],
+        styles: { fontSize: 8 },
+        columnStyles: {
+          0: { cellWidth: 50, fontStyle: 'bold' },
+          1: { cellWidth: 120 }
+        }
+      });
+      currentY = (doc as any).lastAutoTable.finalY + 8;
+    });
+  }
+
+  // SECTION 3: Compliance & Confirmation -> Under-Declaration & Statutory CSL Arrears Schedule
+  const nonCompliance = Array.isArray(data.nonCompliance) ? data.nonCompliance : [];
+  
+  checkPageBreak(35);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("3. Compliance & Confirmation:", 20, currentY);
+  doc.setFont("helvetica", "normal");
+  currentY += 2;
+
   checkPageBreak(25);
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
-  doc.text(hasReconciliation ? "Part B: Under-Declaration & Statutory CSL Arrears Schedule" : "Under-Declaration & Statutory CSL Arrears Schedule", 20, currentY + 2);
+  doc.text("Under-Declaration & Statutory CSL Arrears Schedule", 20, currentY + 2);
   doc.setFont("helvetica", "normal");
 
   if (nonCompliance.length === 0) {
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setTextColor(0, 128, 0);
     doc.text("No under-declaration was witnessed.", 20, currentY + 8);
     doc.setTextColor(0, 0, 0);
     currentY += 15;
   } else {
-    const totalPenalty = nonCompliance.reduce((sum: number, nc: any) => sum + (parseFloat(nc.amount) || 0), 0);
+    const totalPenalty = nonCompliance.reduce((sum: number, nc: any) => {
+      const amt = parseFloat(String(nc.amount || '0').replace(/,/g, '')) || 0;
+      return sum + amt;
+    }, 0);
+
     autoTable(doc, {
       startY: currentY + 5,
-      head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Amount (Kshs)', 'Month/Year to Pay', 'MPESA REF']],
+      head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Recalculated Amount (Kshs)', 'Month/Year to Pay', 'MPESA REF']],
       body: [
-        ...nonCompliance.map((nc: any) => [nc.month || '', nc.litres || '', nc.amount || '', nc.paymentMonthYear || '', nc.mpesaRef || '']),
-        [{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, '', { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, '', '']
+        ...nonCompliance.map((nc: any) => [
+          nc.month || '', 
+          formatNum(nc.litres) || '', 
+          formatNum(nc.amount) || '0.00', 
+          nc.paymentMonthYear || '', 
+          nc.mpesaRef || ''
+        ]),
+        [
+          { content: 'TOTAL', styles: { fontStyle: 'bold' } }, 
+          '', 
+          { content: totalPenalty.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
+          '', 
+          ''
+        ]
       ],
       styles: { fontSize: 8 },
       headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
     });
-    currentY = (doc as any).lastAutoTable.finalY + 10;
+    currentY = (doc as any).lastAutoTable.finalY + 8;
   }
 
-  // Comments & Recommended Corrective Actions (Merged Section)
-  if (data.comments || data.recommendedActions) {
-    checkPageBreak(30);
-    doc.setFontSize(11);
+  // SECTION 4: Comments & Recommended Corrective Actions
+  checkPageBreak(30);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("4. Comments & Recommended Corrective Actions:", 20, currentY);
+  doc.setFont("helvetica", "normal");
+  currentY += 6;
+
+  if (data.comments) {
     doc.setFont("helvetica", "bold");
-    doc.text("Comments & Recommended Corrective Actions:", 20, currentY);
+    doc.setFontSize(9);
+    doc.text("Inspector Observations & Comments:", 20, currentY);
+    doc.setFont("helvetica", "normal");
+    const splitComments = doc.splitTextToSize(data.comments, 170);
+    doc.text(splitComments, 20, currentY + 4);
+    currentY += Math.max(splitComments.length * 4.5, 6) + 4;
+  }
+
+  if (data.recommendedActions) {
+    checkPageBreak(25);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text("Recommended Corrective Actions & Directives:", 20, currentY);
+    doc.setFont("helvetica", "normal");
+    const splitActions = doc.splitTextToSize(data.recommendedActions, 170);
+    doc.text(splitActions, 20, currentY + 4);
+    currentY += Math.max(splitActions.length * 4.5, 6) + 4;
+
+    if (data.actionDueDate || data.actionOwner) {
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "italic");
+      const metaText = `Remediation Due Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
+      doc.text(metaText, 20, currentY);
+      doc.setFont("helvetica", "normal");
+      currentY += 6;
+    }
+  }
+
+  if (!data.comments && !data.recommendedActions) {
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "italic");
+    doc.text("No specific corrective directives or remarks noted.", 20, currentY);
     doc.setFont("helvetica", "normal");
     currentY += 6;
-
-    if (data.comments) {
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.text("Inspector Observations & Comments:", 20, currentY);
-      doc.setFont("helvetica", "normal");
-      const splitComments = doc.splitTextToSize(data.comments, 170);
-      doc.text(splitComments, 20, currentY + 4);
-      currentY += Math.max(splitComments.length * 4.5, 6) + 4;
-    }
-
-    if (data.recommendedActions) {
-      checkPageBreak(25);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.text("Recommended Corrective Actions & Directives:", 20, currentY);
-      doc.setFont("helvetica", "normal");
-      const splitActions = doc.splitTextToSize(data.recommendedActions, 170);
-      doc.text(splitActions, 20, currentY + 4);
-      currentY += Math.max(splitActions.length * 4.5, 6) + 4;
-
-      if (data.actionDueDate || data.actionOwner) {
-        doc.setFontSize(8);
-        doc.setFont("helvetica", "italic");
-        const metaText = `Remediation Due Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
-        doc.text(metaText, 20, currentY);
-        doc.setFont("helvetica", "normal");
-        currentY += 6;
-      }
-    }
-    currentY += 4;
   }
 
-  // Declarations
+  currentY += 4;
+
+  // SECTION 5: Declarations
   checkPageBreak(45);
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("Declarations:", 20, currentY);
+  doc.text("5. Declarations:", 20, currentY);
   doc.setFont("helvetica", "normal");
   currentY += 7;
 
-  const hasUnderDeclaration = sales.some((sale: any) => (parseFloat(sale.underDeclared) || 0) > 0);
+  const hasUnderDeclaration = sales.some((sale: any) => (parseFloat(String(sale.underDeclared || '0').replace(/,/g, '')) || 0) > 0);
   const declarationTexts = [
     "I/We confirm that the information provided is true and accurate to the best of my/our knowledge.",
     ...(hasUnderDeclaration ? ["I/We understand that under-declaration of milk volumes is an offense under the Dairy Industry Act and agree to pay the calculated under declared volumes and monies within the specified periods."] : []),
@@ -426,7 +461,12 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
 
   // Signatures
   checkPageBreak(45);
-  doc.setFontSize(11);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.text("Signatures & Authorization:", 20, currentY);
+  doc.setFont("helvetica", "normal");
+  currentY += 6;
+
   doc.text(`Compliance Officer: ${data.complianceOfficer || ''}`, 20, currentY);
   if (data.complianceSignature && typeof data.complianceSignature === 'string' && data.complianceSignature.startsWith('data:image')) {
     try {

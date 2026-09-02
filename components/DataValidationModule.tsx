@@ -3,15 +3,17 @@ import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import SignatureCanvas from 'react-signature-canvas';
+import { QRCodeSVG } from 'qrcode.react';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
 import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem } from '../types';
 import { FieldChecklistComponent } from './FieldChecklistComponent';
-import { FIELD_CHECKLIST_SECTIONS, hasAnyChecklistValue } from './fieldChecklistData';
+import { FIELD_CHECKLIST_SECTIONS, hasAnyChecklistValue, getActiveChecklistItems } from './fieldChecklistData';
 import { TransactionReconciliationComponent } from './TransactionReconciliationComponent';
 import { ExceptionRegisterComponent } from './ExceptionRegisterComponent';
 import { CommentsAndCorrectiveActionsComponent } from './CommentsAndCorrectiveActionsComponent';
+import { CalculatorApp, formatPaymentMonthYear } from './CalculatorApp';
 import { 
   ClipboardCheck, 
   Database, 
@@ -37,6 +39,7 @@ import {
   RotateCcw,
   ShieldCheck,
   ArrowDown,
+  ArrowUp,
   Store,
   GitBranch,
   FolderOpen,
@@ -222,6 +225,112 @@ const formatSellingPrices = (prices: Record<string, string>): string => {
     .filter(([_, val]) => val !== undefined && val !== '')
     .map(([prod, val]) => `${prod}: ${val}`)
     .join(' | ');
+};
+
+export const parsePaymentMonthYearToDDMMYYYY = (paymentMonthYearStr?: string): string => {
+  if (!paymentMonthYearStr || !paymentMonthYearStr.trim()) {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const d = String(lastDay.getDate()).padStart(2, '0');
+    const m = String(lastDay.getMonth() + 1).padStart(2, '0');
+    const y = lastDay.getFullYear();
+    return `${d}/${m}/${y}`;
+  }
+  const trimmed = paymentMonthYearStr.trim();
+  // If already in DD/MM/YYYY
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) {
+    const parts = trimmed.split('/');
+    return `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
+  }
+  // If in ISO format YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [y, m, d] = trimmed.split('-');
+    return `${d}/${m}/${y}`;
+  }
+  // If in format "Sept- 2026", "Sep 2026", "September 2026"
+  const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const monthMatch = trimmed.match(/([a-zA-Z]+)[^0-9]*(\d{4})/);
+  if (monthMatch) {
+    const mStr = monthMatch[1].toLowerCase().slice(0, 3);
+    const yStr = monthMatch[2];
+    const mIdx = monthNames.findIndex(mn => mStr.startsWith(mn.slice(0, 3)));
+    if (mIdx !== -1) {
+      const lastDay = new Date(parseInt(yStr, 10), mIdx + 1, 0).getDate();
+      return `${String(lastDay).padStart(2, '0')}/${String(mIdx + 1).padStart(2, '0')}/${yStr}`;
+    }
+  }
+  // If in format MM/YYYY
+  const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const m = parseInt(slashMatch[1], 10);
+    const y = parseInt(slashMatch[2], 10);
+    const lastDay = new Date(y, m, 0).getDate();
+    return `${String(lastDay).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}`;
+  }
+  const now = new Date();
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const d = String(lastDay.getDate()).padStart(2, '0');
+  const m = String(lastDay.getMonth() + 1).padStart(2, '0');
+  const y = lastDay.getFullYear();
+  return `${d}/${m}/${y}`;
+};
+
+export const syncArrearsExceptions = (
+  currentExceptions: ExceptionRegisterItem[] = [],
+  nonComplianceList: Array<{ month: string; litres: string; amount: string; paymentMonthYear: string; mpesaRef?: string }>,
+  dboName: string = '',
+  unit: string = 'L'
+): ExceptionRegisterItem[] => {
+  let next = [...currentExceptions];
+  const activeNC = nonComplianceList.filter(nc => nc.month && nc.month.trim() !== '');
+
+  activeNC.forEach(nc => {
+    const cleanMonth = nc.month.trim();
+    const cleanMonthNorm = cleanMonth.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Find existing Arrears exception for this month
+    const existingIdx = next.findIndex(e => 
+      e.type.toLowerCase() === 'arrears' && 
+      (
+        (e.source && e.source.toLowerCase().replace(/[^a-z0-9]/g, '').includes(cleanMonthNorm.slice(0, 4))) ||
+        (e.example && e.example.toLowerCase().replace(/[^a-z0-9]/g, '').includes(cleanMonthNorm.slice(0, 4))) ||
+        (next.filter(x => x.type.toLowerCase() === 'arrears').length === 1 && activeNC.length === 1)
+      )
+    );
+
+    const exampleText = `${cleanMonth} under-declaration: ${nc.litres || '0'} ${unit}${nc.amount ? `, Kshs ${nc.amount}` : ''}`;
+    const sourceText = `Under-Declaration Schedule (${cleanMonth})`;
+    const dueDateVal = parsePaymentMonthYearToDDMMYYYY(nc.paymentMonthYear);
+
+    if (existingIdx >= 0) {
+      next[existingIdx] = {
+        ...next[existingIdx],
+        dueDate: dueDateVal,
+        example: exampleText,
+        source: sourceText,
+        status: nc.mpesaRef ? 'Resolved' : (next[existingIdx].status || 'Open'),
+        resolutionEvidence: nc.mpesaRef ? `Payment Ref: ${nc.mpesaRef}` : next[existingIdx].resolutionEvidence
+      };
+    } else {
+      const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' 
+        ? crypto.randomUUID() 
+        : `exc-arr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+      next.push({
+        id,
+        type: 'Arrears',
+        definition: 'Outstanding statutory CSL levy arrears and compounding penalties identified from under-declaration or reconciliation',
+        example: exampleText,
+        source: sourceText,
+        owner: dboName || 'Client / DBO',
+        dueDate: dueDateVal,
+        resolutionEvidence: nc.mpesaRef ? `Payment Ref: ${nc.mpesaRef}` : '',
+        status: nc.mpesaRef ? 'Resolved' : 'Open'
+      });
+    }
+  });
+
+  return next;
 };
 
 const getLocalDate = () => {
@@ -1068,6 +1177,9 @@ export function DataValidationModule() {
       };
     });
 
+    // Current Month- Year default for payment Month/Year (e.g. Sept- 2026)
+    const defaultPaymentMonthYear = formatPaymentMonthYear();
+
     // Auto populate non-compliance based on under-declaration (never for branch facilities)
     const newNonCompliance = (!isBranchFacility && formData.hasLocalSales)
       ? updatedSales
@@ -1081,7 +1193,7 @@ export function DataValidationModule() {
             month: displayMonth,
             litres: sale.underDeclared,
             amount: existing?.amount || '', // Manual entry now
-            paymentMonthYear: existing?.paymentMonthYear || '',
+            paymentMonthYear: existing?.paymentMonthYear || defaultPaymentMonthYear,
             mpesaRef: existing?.mpesaRef || ''
           };
         })
@@ -1091,15 +1203,26 @@ export function DataValidationModule() {
     const ncChanged = JSON.stringify(newNonCompliance) !== JSON.stringify(formData.nonCompliance);
 
     if (salesChanged || ncChanged) {
+      const updatedExceptions = newNonCompliance.length > 0
+        ? syncArrearsExceptions(formData.exceptionRegister || [], newNonCompliance, formData.dboName || selectedClient?.clientName || '', globalUnit)
+        : (formData.exceptionRegister || []);
+      const excChanged = JSON.stringify(updatedExceptions) !== JSON.stringify(formData.exceptionRegister || []);
+
       setFormData(prev => ({ 
         ...prev, 
         sales: updatedSales,
-        nonCompliance: newNonCompliance 
+        nonCompliance: newNonCompliance,
+        ...(excChanged ? { exceptionRegister: updatedExceptions } : {})
       }));
     }
-  }, [formData.sales, formData.intakes, formData.category, isBranchFacility, formData.hasLocalSales]);
+  }, [formData.sales, formData.intakes, formData.category, isBranchFacility, formData.hasLocalSales, formData.dboName, selectedClient, globalUnit]);
 
   const totalPenalty = formData.nonCompliance.reduce((sum, nc) => sum + (parseFloat(nc.amount) || 0), 0);
+  const validTillDate = useMemo(() => {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return lastDay.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  }, []);
 
   useEffect(() => {
     const verifyApi = async () => {
@@ -1761,7 +1884,7 @@ export function DataValidationModule() {
   const handleShareWhatsApp = () => {
     if (!currentSigningLink) return;
     const premise = signingDraftTarget?.premiseName || formData.premiseName || 'your premise';
-    const text = `Kenya Dairy Board: Please review and sign the validation inspection document for ${premise} within the next 5 minutes: ${currentSigningLink}`;
+    const text = `Kenya Dairy Board: Please review and sign the validation inspection document for ${premise} within the next 10 minutes: ${currentSigningLink}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
   };
 
@@ -1876,8 +1999,8 @@ export function DataValidationModule() {
         };
       }
 
-      // Generate 5-min expiry timestamp
-      const expiryMs = Date.now() + 5 * 60 * 1000;
+      // Generate 10-min expiry timestamp
+      const expiryMs = Date.now() + 10 * 60 * 1000;
       const signingExpiresAt = new Date(expiryMs).toISOString();
       const signingToken = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
         ? crypto.randomUUID()
@@ -1916,14 +2039,14 @@ export function DataValidationModule() {
 
       setCurrentSigningLink(url);
       setSigningExpiresAtTimestamp(expiryMs);
-      setSigningRemainingSeconds(300);
+      setSigningRemainingSeconds(600);
       setLinkCopied(false);
       setIsDboLinkModalOpen(true);
       await refreshDraftsList();
 
       setStatus({
         type: 'success',
-        message: '5-Minute DBO signing link generated successfully!'
+        message: '10-Minute DBO signing link generated successfully!'
       });
     } catch (err: any) {
       console.error('Failed to generate DBO signing link:', err);
@@ -2969,6 +3092,32 @@ export function DataValidationModule() {
         return false;
       }
     } else if (s === 2) {
+      // Step 2: Traceability & Records
+      if (!formData.traceability || formData.traceability.trim() === '') {
+        missing.push('traceability');
+        setStatus({ type: 'error', message: 'Please select a Compliance Status for Records & Traceability (Yes, No, or See Records Validation & Reconciliation Findings).' });
+        return false;
+      }
+
+      // Checklist Mandatory Enforcement: When checklist findings are selected, all active checks are mandatory
+      const isChecklistFindings = formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist';
+      if (isChecklistFindings) {
+        const activeChecklistItems = getActiveChecklistItems(formData.category);
+        const uncompletedChecks = activeChecklistItems.filter(item => {
+          const itemVal = formData.fieldChecklist?.[item.ref];
+          return !itemVal || !itemVal.status || itemVal.status.trim() === '';
+        });
+        if (uncompletedChecks.length > 0) {
+          missing.push('fieldChecklistMandatory');
+          setStatus({
+            type: 'error',
+            message: `Checklist is activated: All ${activeChecklistItems.length} checks are mandatory (${uncompletedChecks.length} pending: ${uncompletedChecks.slice(0, 3).map(c => c.ref).join(', ')}${uncompletedChecks.length > 3 ? '...' : ''}). Please complete all checklist items or mark as N/A.`
+          });
+          return false;
+        }
+      }
+    } else if (s === 3) {
+      // Step 3: Volume & Sales Data
       if (formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor') {
         formData.intakes.forEach((intake, idx) => {
           if (!intake.month) missing.push(`intake-${idx}-month`);
@@ -3064,6 +3213,40 @@ export function DataValidationModule() {
         }
         return false;
       }
+    } else if (s === 4) {
+      // Step 4: Compliance & Confirmation / Exception Register (non-blocking)
+      return true;
+    } else if (s === 5) {
+      // Step 5: Comments & Recommended Corrective Actions (non-blocking)
+      return true;
+    } else if (s === 6) {
+      // Step 6: Declarations & Signatures
+      const hasUnderDeclaration = formData.sales.some(sale => (parseFloat(sale.underDeclared) || 0) > 0);
+      const isOffenseRequired = hasUnderDeclaration;
+      if (!declarations.accurate || (isOffenseRequired && !declarations.offense) || !declarations.awareness) {
+        setStatus({ type: 'error', message: 'Please check all required declaration boxes before proceeding.' });
+        return false;
+      }
+      if (!formData.complianceOfficer || formData.complianceOfficer.trim() === '') {
+        setStatus({ type: 'error', message: 'Please provide the Compliance Officer name.' });
+        return false;
+      }
+      if (!formData.complianceSignature || formData.complianceSignature.trim() === '') {
+        setStatus({ type: 'error', message: 'Please provide or select the Compliance Officer signature.' });
+        return false;
+      }
+      if (!formData.confirmationName || formData.confirmationName.trim() === '') {
+        setStatus({ type: 'error', message: 'Please provide the DBO representative name.' });
+        return false;
+      }
+      if (!formData.designation || formData.designation.trim() === '') {
+        setStatus({ type: 'error', message: 'Please provide the DBO designation.' });
+        return false;
+      }
+      if (!formData.dboSignature || formData.dboSignature.trim() === '') {
+        setStatus({ type: 'error', message: 'Please record the DBO signature (draw, upload, or remote link).' });
+        return false;
+      }
     }
 
     setFailedFields(prev => prev.filter(f => {
@@ -3071,7 +3254,7 @@ export function DataValidationModule() {
         const required = ['branch', 'date', 'permitNo', 'expiryDate', 'dboName', 'premiseName', 'category', 'contacts', 'validationPeriod', 'county', 'location'];
         return !required.includes(f);
       }
-      if (s === 2) {
+      if (s === 3) {
         return f.startsWith('intake-') || f.startsWith('sale-') || f === 'natureOfProduce' || f === 'source' || f.startsWith('dist');
       }
       return true;
@@ -3268,7 +3451,7 @@ export function DataValidationModule() {
       startY: currentY + 5,
       head: [['Detail', 'Value']],
       body: [
-        ['Traceability & Records', data.traceability],
+        ['Records & Traceability', data.traceability],
         ['Nature of Produce?', data.natureOfProduce.join(', ')],
         ['Source', data.source],
       ],
@@ -3419,12 +3602,23 @@ export function DataValidationModule() {
         doc.setTextColor(0, 0, 0); // Reset to black
         currentY += 15;
       } else {
+        const validTillDateStr = (() => {
+          const now = new Date();
+          const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+          return lastDay.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+        })();
+
         autoTable(doc, {
           startY: currentY + 5,
           head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Amount (Kshs)', 'Month/Year to Pay', 'MPESA REF']],
           body: [
             ...data.nonCompliance.map(nc => [nc.month, nc.litres, nc.amount, nc.paymentMonthYear, nc.mpesaRef]),
-            [{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, '', { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, '', '']
+            [
+              { content: 'TOTAL', styles: { fontStyle: 'bold' } }, 
+              '', 
+              { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, 
+              { content: `Arrears estimate valid through ${validTillDateStr}; figures subject to recalculation thereafter`, colSpan: 2, styles: { fontStyle: 'bold', fontSize: 7, halign: 'right' } }
+            ]
           ],
           styles: { fontSize: 8 },
           headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
@@ -4549,9 +4743,7 @@ export function DataValidationModule() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (step === 1) setStep(0);
-                    else if (step === 2) setStep(1);
-                    else if (step === 3) setStep(2);
+                    if (step > 0) setStep(step - 1);
                   }}
                   className="flex items-center gap-1 px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
                   title="Go back to previous step"
@@ -4564,19 +4756,17 @@ export function DataValidationModule() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (step === 1) {
-                      validateStep(1) && setStep(2);
-                    } else if (step === 2) {
-                      validateStep(2) && setStep(3);
-                    } else if (step === 3) {
+                    if (step < 6) {
+                      validateStep(step) && setStep(step + 1);
+                    } else if (step === 6) {
                       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
                     }
                   }}
                   className="flex items-center gap-1 px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
-                  title={step === 3 ? "Scroll to Submit section" : "Go to next step"}
+                  title={step === 6 ? "Scroll to Submit section" : "Go to next step"}
                   id="top-banner-next-btn"
                 >
-                  <span>{step === 3 ? "To Submit" : "Next"}</span>
+                  <span>{step === 6 ? "To Submit" : "Next"}</span>
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
 
@@ -4818,7 +5008,7 @@ export function DataValidationModule() {
             <motion.div 
               className="h-full bg-blue-600"
               initial={{ width: '0%' }}
-              animate={{ width: `${(step / 3) * 100}%` }}
+              animate={{ width: `${(step / 6) * 100}%` }}
             />
           </div>
 
@@ -4943,8 +5133,8 @@ export function DataValidationModule() {
                 >
                   <div className="flex items-center justify-between gap-3 mb-6 pb-3 border-b border-gray-100">
                     <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">1</div>
-                      <h2 className="text-lg font-bold">General Information</h2>
+                      <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">1</div>
+                      <h2 className="text-lg font-bold text-gray-900">General Information</h2>
                     </div>
                     <button
                       type="button"
@@ -5538,14 +5728,25 @@ export function DataValidationModule() {
                       <Save className="w-4 h-4 text-blue-600" />
                       Save Draft
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => validateStep(1) && setStep(2)}
-                      className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
-                    >
-                      Next Step
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                        className="flex items-center gap-1 px-3 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                        title="Scroll to top of page"
+                      >
+                        <ArrowUp className="w-4 h-4" />
+                        <span>Top</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => validateStep(1) && setStep(2)}
+                        className="w-full sm:w-auto flex justify-center items-center gap-2 px-6 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
+                      >
+                        Next Step
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </motion.div>
               )}
@@ -5556,18 +5757,17 @@ export function DataValidationModule() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
-                  className="space-y-8"
+                  className="space-y-6"
                 >
-                  {/* Independent Section: Traceability & Records */}
                   <div className="space-y-4" id="traceability-and-records-section">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-gray-100">
                       <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-                          <ClipboardCheck className="w-4 h-4" />
+                        <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
+                          2
                         </div>
                         <div>
                           <h3 className="font-bold text-gray-900 text-base">Traceability & Records</h3>
-                          <p className="text-[11px] text-gray-500 font-medium">Record verification, traceability status, and premise reconciliation tests</p>
+                          <p className="text-[11px] text-gray-500 font-medium">Record verification, traceability status, and premise checklist</p>
                         </div>
                       </div>
                       {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
@@ -5578,11 +5778,12 @@ export function DataValidationModule() {
                       )}
                     </div>
 
-                    <div className="p-5 bg-gray-50/60 rounded-3xl border border-gray-100 space-y-5">
+                    <div className="p-5 bg-gray-50/60 rounded-3xl border border-gray-100 space-y-4">
+                      {/* Status Determination */}
                       <div className="space-y-2">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
                           <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-                            Traceability & Records Status
+                            Compliance Status
                           </label>
                           {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
@@ -5598,7 +5799,11 @@ export function DataValidationModule() {
                               <button
                                 key={opt}
                                 type="button"
-                                onClick={() => setFormData(prev => ({ ...prev, traceability: opt }))}
+                                onClick={() => setFormData(prev => ({ 
+                                  ...prev, 
+                                  traceability: opt,
+                                  fieldChecklist: {} 
+                                }))}
                                 className={`px-4 py-1.5 rounded-xl border text-xs transition-all flex items-center justify-center font-bold cursor-pointer min-w-[64px] ${
                                   isSelected 
                                     ? 'bg-blue-600 border-blue-600 text-white shadow-xs' 
@@ -5628,157 +5833,91 @@ export function DataValidationModule() {
                             );
                           })()}
                         </div>
-                        {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
-                          <p className="text-[11px] text-blue-600 font-medium">
-                            Evaluation attached: Verification referenced to <em className="italic font-semibold">Records Validation & Reconciliation Findings</em> below.
-                          </p>
-                        )}
                       </div>
 
-                      {/* Audit & Exception Tracking Instruments */}
+                      {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
+                        <p className="text-[11px] text-blue-600 font-medium pt-1">
+                          Evaluation attached: Verification referenced to <em className="italic font-semibold">Records Validation & Reconciliation Findings</em> below.
+                        </p>
+                      )}
+
+                      {/* Records & Traceability Checklist */}
                       <div className="pt-2 border-t border-gray-200/80">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-4">
-                          <div>
-                            <div className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
-                              <span>Field Audit & Exception Instruments</span>
-                              <span className="text-[10px] font-normal text-gray-500">(Field Records Checklist & Interdependent Exception Register)</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => setActiveAuditTool('all')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                                activeAuditTool === 'all'
-                                  ? 'bg-blue-600 text-white shadow-xs'
-                                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
-                              }`}
-                            >
-                              <ClipboardCheck className="w-3.5 h-3.5" />
-                              <span>Sequential Flow</span>
-                              <span className="text-[10px] opacity-80">(Checklist &rarr; Register)</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setActiveAuditTool('checklist')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                                activeAuditTool === 'checklist'
-                                  ? 'bg-blue-600 text-white shadow-xs'
-                                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
-                              }`}
-                            >
-                              <ClipboardCheck className="w-3.5 h-3.5" />
-                              <span>Checklist Only</span>
-                              {checklistEvaluatedCount > 0 && (
-                                <span className={`px-1.5 py-0.2 text-[10px] rounded-full font-extrabold ${
-                                  activeAuditTool === 'checklist' ? 'bg-blue-800 text-white' : 'bg-blue-100 text-blue-800'
-                                }`} title="Evaluated items">
-                                  {checklistEvaluatedCount}
-                                </span>
-                              )}
-                              {unregisteredDiscrepanciesCount > 0 && (
-                                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Unregistered discrepancies" />
-                              )}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setActiveAuditTool('exceptions')}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                                activeAuditTool === 'exceptions'
-                                  ? 'bg-amber-600 text-white shadow-xs'
-                                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'
-                              }`}
-                            >
-                              <ShieldAlert className="w-3.5 h-3.5" />
-                              <span>Exception Register Only</span>
-                              {exceptionsCount > 0 && (
-                                <span className={`px-1.5 py-0.2 text-[10px] rounded-full font-extrabold ${
-                                  activeAuditTool === 'exceptions' ? 'bg-amber-800 text-white' : 'bg-amber-100 text-amber-800'
-                                }`}>
-                                  {exceptionsCount}
-                                </span>
-                              )}
-                              {openExceptionsCount > 0 && (
-                                <span className={`px-1.5 py-0.2 text-[10px] rounded-full font-extrabold ${
-                                  activeAuditTool === 'exceptions' ? 'bg-rose-900 text-white' : 'bg-rose-100 text-rose-800'
-                                }`}>
-                                  {openExceptionsCount} Open
-                                </span>
-                              )}
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Sub-Instrument 1: Field Records Checklist */}
-                        {(activeAuditTool === 'checklist' || activeAuditTool === 'all') && (
-                          <div className="pt-1">
-                            <FieldChecklistComponent
-                              value={formData.fieldChecklist || {}}
-                              onChange={(updated) => {
-                                const hasAny = hasAnyChecklistValue(updated);
-                                const hasOtherFindings = (formData.transactionReconciliation?.length || 0) > 0 || (formData.exceptionRegister?.length || 0) > 0;
-                                setFormData(prev => ({
-                                  ...prev,
-                                  fieldChecklist: updated,
-                                  traceability: (hasAny || hasOtherFindings)
-                                    ? 'See Records Validation & Reconciliation Findings' 
-                                    : (prev.traceability === 'See Records Validation & Reconciliation Findings' || prev.traceability === 'See DBO checklist' ? 'Yes' : prev.traceability)
-                                }));
-                              }}
-                              clientCategory={formData.category}
-                              onLogException={handleLogChecklistException}
-                              registeredExceptionRefs={registeredExceptionRefs}
-                            />
-                          </div>
-                        )}
-
-                        {/* Sub-Instrument 2: EXCEPTION REGISTER (Flows directly after Checklist) */}
-                        {(activeAuditTool === 'exceptions' || activeAuditTool === 'all') && (
-                          <div className={activeAuditTool === 'all' ? "pt-6 border-t border-gray-200/80 mt-6" : "pt-3"}>
-                            {activeAuditTool === 'all' && (
-                              <div className="mb-3 flex items-center justify-between">
-                                <div className="flex items-center gap-2 text-xs font-bold text-gray-800">
-                                  <ShieldAlert className="w-4 h-4 text-amber-600" />
-                                  <span>Exception Register</span>
-                                  <span className="text-[11px] font-normal text-gray-500">(Interdependent: Records and handles any discrepancy or mismatch from checklist or reconciliation)</span>
-                                </div>
-                                {exceptionsCount > 0 && (
-                                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                                    {exceptionsCount} Exception{exceptionsCount === 1 ? '' : 's'} Logged ({openExceptionsCount} Open)
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                            <ExceptionRegisterComponent
-                              exceptions={formData.exceptionRegister || []}
-                              onChange={(updated) => {
-                                const hasAny = hasAnyChecklistValue(formData.fieldChecklist || {});
-                                const hasOtherFindings = updated.length > 0 || (formData.transactionReconciliation?.length || 0) > 0 || hasAny;
-                                setFormData(prev => ({
-                                  ...prev,
-                                  exceptionRegister: updated,
-                                  traceability: hasOtherFindings 
-                                    ? 'See Records Validation & Reconciliation Findings' 
-                                    : prev.traceability
-                                }));
-                              }}
-                              onSyncFromChecklist={handleSyncAllChecklistExceptions}
-                              unregisteredDiscrepanciesCount={unregisteredDiscrepanciesCount}
-                            />
-                          </div>
-                        )}
+                        <FieldChecklistComponent
+                          value={formData.fieldChecklist || {}}
+                          onChange={(updated) => {
+                            const hasAny = hasAnyChecklistValue(updated);
+                            const hasOtherFindings = (formData.transactionReconciliation?.length || 0) > 0 || (formData.exceptionRegister?.length || 0) > 0;
+                            setFormData(prev => ({
+                              ...prev,
+                              fieldChecklist: updated,
+                              traceability: (hasAny || hasOtherFindings)
+                                ? 'See Records Validation & Reconciliation Findings' 
+                                : (prev.traceability === 'See Records Validation & Reconciliation Findings' || prev.traceability === 'See DBO checklist' ? 'Yes' : prev.traceability)
+                            }));
+                          }}
+                          clientCategory={formData.category}
+                          onLogException={handleLogChecklistException}
+                          registeredExceptionRefs={registeredExceptionRefs}
+                        />
                       </div>
                     </div>
                   </div>
 
+                  <div className="flex justify-between items-center pt-6 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setStep(1)}
+                      className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Back
+                    </button>
+                    <div className="flex items-center gap-2 sm:gap-3">
+                      <button
+                        type="button"
+                        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                        className="flex items-center gap-1 px-3 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                        title="Scroll to top of page"
+                      >
+                        <ArrowUp className="w-4 h-4" />
+                        <span>Top</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleManualSaveDraft}
+                        className="flex items-center gap-1.5 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-blue-50 text-blue-700 rounded-xl font-bold hover:bg-blue-100 transition-all text-xs sm:text-sm border border-blue-200 cursor-pointer"
+                        title="Save progress to draft"
+                      >
+                        <Save className="w-4 h-4 text-blue-600" />
+                        Save Draft
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => validateStep(2) && setStep(3)}
+                        className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
+                      >
+                        Next Step
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {step === 3 && (
+                <motion.div
+                  key="step3"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="space-y-8"
+                >
                   {/* Volume & Sales Data Section */}
-                  <div className="space-y-6 pt-4 border-t border-gray-100" id="volume-and-sales-data-section">
+                  <div className="space-y-6" id="volume-and-sales-data-section">
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-2">
                       <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">2</div>
+                        <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">3</div>
                         <h2 className="text-lg font-bold text-gray-900">Volume & Sales Data</h2>
                       </div>
                       {/* General Unit Toggle */}
@@ -6881,13 +7020,23 @@ export function DataValidationModule() {
                   <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 pt-4">
                     <button
                       type="button"
-                      onClick={() => setStep(1)}
+                      onClick={() => setStep(2)}
                       className="flex items-center gap-1.5 sm:gap-2 px-4 sm:px-8 py-2.5 sm:py-3 text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all text-xs sm:text-sm cursor-pointer"
                     >
                       <ChevronLeft className="w-4 h-4" />
                       Back
                     </button>
                     <div className="flex items-center gap-2 sm:gap-3 flex-wrap justify-end">
+                      <button
+                        type="button"
+                        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                        className="flex items-center gap-1 px-3 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                        title="Scroll to top of page"
+                      >
+                        <ArrowUp className="w-4 h-4" />
+                        <span>Top</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={handleManualSaveDraft}
@@ -6900,7 +7049,7 @@ export function DataValidationModule() {
 
                       <button
                         type="button"
-                        onClick={() => validateStep(2) && setStep(3)}
+                        onClick={() => validateStep(3) && setStep(4)}
                         className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
                       >
                         Next Step
@@ -6911,62 +7060,26 @@ export function DataValidationModule() {
                 </motion.div>
               )}
 
-              {step === 3 && (
+              {step === 4 && (
                 <motion.div
-                  key="step3"
+                  key="step4"
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
                   className="space-y-6"
+                  id="step4-compliance-and-confirmation-section"
                 >
-                  <div className="flex items-center gap-2 mb-6">
-                    <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">3</div>
-                    <h2 className="text-lg font-bold">{isBranchFacility ? "Declarations & Signatures" : "Compliance & Confirmation"}</h2>
+                  <div className="flex items-center gap-2 mb-6 pb-3 border-b border-gray-100">
+                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">4</div>
+                    <div>
+                      <h2 className="text-lg font-bold text-gray-900">{isBranchFacility ? "Compliance & Exceptions" : "Compliance & Confirmation"}</h2>
+                      <p className="text-[11px] text-gray-500 font-medium">Under-declaration arrears schedule and recorded audit exceptions</p>
+                    </div>
                   </div>
 
                   {!isBranchFacility && (
                     <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100 space-y-6">
-                      {/* Sub-Section 1: Transaction & Balances Reconciliation */}
-                      <div className="bg-white p-5 rounded-2xl border border-blue-100/80 shadow-xs space-y-3">
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-gray-100">
-                          <div>
-                            <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                              <Scale className="w-4 h-4 text-blue-600" />
-                              <span>Transaction & Balances Reconciliation</span>
-                            </h3>
-                            <p className="text-[11px] text-gray-500">
-                              Verify primary delivery, intake and production records against declared figures. Any volume variance is an exception and can be transferred to statutory arrears.
-                            </p>
-                          </div>
-                          {reconciliationVarianceCount > 0 && (
-                            <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200 flex items-center gap-1.5 self-start sm:self-auto">
-                              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                              {reconciliationVarianceCount} Variance{reconciliationVarianceCount === 1 ? '' : 's'} Uncovered
-                            </span>
-                          )}
-                        </div>
-
-                        <TransactionReconciliationComponent
-                          entries={formData.transactionReconciliation || []}
-                          defaultUnit={globalUnit === 'L' ? 'L' : 'Kg'}
-                          availablePeriods={availableReconciliationPeriods}
-                          onChange={(updated) => {
-                            const hasAny = hasAnyChecklistValue(formData.fieldChecklist || {});
-                            const hasOtherFindings = updated.length > 0 || (formData.exceptionRegister?.length || 0) > 0 || hasAny;
-                            setFormData(prev => ({
-                              ...prev,
-                              transactionReconciliation: updated,
-                              traceability: hasOtherFindings 
-                                ? 'See Records Validation & Reconciliation Findings' 
-                                : prev.traceability
-                            }));
-                          }}
-                          onTransferToUnderDeclaration={handleTransferToUnderDeclaration}
-                          onLogException={handleLogReconciliationException}
-                        />
-                      </div>
-
-                      {/* Sub-Section 2: Under-Declaration & Statutory CSL Arrears Schedule */}
+                      {/* Under-Declaration & Statutory CSL Arrears Schedule */}
                       <div className="bg-white p-5 rounded-2xl border border-blue-100/80 shadow-xs space-y-3">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-gray-100">
                           <div>
@@ -6991,7 +7104,7 @@ export function DataValidationModule() {
                               <tr className="bg-blue-100/50">
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
-                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Amount (Kshs)</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Recalculated Amount (Kshs)</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Month/Year to Pay</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
                               </tr>
@@ -7004,7 +7117,7 @@ export function DataValidationModule() {
                                   <td className="p-1">
                                     <input
                                       type="text"
-                                      placeholder="0.00"
+                                      placeholder="0.00 (e.g. 1,000)"
                                       value={nc.amount}
                                       onChange={(e) => {
                                         const newNC = [...formData.nonCompliance];
@@ -7016,14 +7129,28 @@ export function DataValidationModule() {
                                   </td>
                                   <td className="p-1">
                                     <input
-                                      placeholder="MM/YYYY"
+                                      placeholder="Sept- 2026"
                                       value={nc.paymentMonthYear}
                                       onChange={(e) => {
+                                        const val = e.target.value;
                                         const newNC = [...formData.nonCompliance];
-                                        newNC[idx].paymentMonthYear = e.target.value;
-                                        setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                        newNC[idx].paymentMonthYear = val;
+                                        
+                                        // Move Month/Year to Pay value to the corresponding Arrears exception row due date
+                                        const updatedExceptions = syncArrearsExceptions(
+                                          formData.exceptionRegister || [],
+                                          newNC,
+                                          formData.dboName || selectedClient?.clientName || '',
+                                          globalUnit
+                                        );
+
+                                        setFormData(prev => ({ 
+                                          ...prev, 
+                                          nonCompliance: newNC,
+                                          exceptionRegister: updatedExceptions
+                                        }));
                                       }}
-                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white"
+                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white font-mono"
                                     />
                                   </td>
                                   <td className="p-1">
@@ -7041,13 +7168,19 @@ export function DataValidationModule() {
                                 </tr>
                               ))}
                               {formData.nonCompliance.length > 0 && (
-                                <tr className="bg-blue-50/70">
+                                <tr className="bg-blue-50/70 border-t border-blue-200">
                                   <td className="p-3 text-xs font-bold text-blue-900">TOTAL</td>
-                                  <td className="p-3 text-xs text-blue-700"></td>
-                                  <td className="p-3 text-xs font-bold text-blue-900">
-                                    {totalPenalty.toFixed(2)}
+                                  <td className="p-3 text-xs font-bold text-blue-800">
+                                    {formData.nonCompliance.reduce((acc, nc) => acc + (parseFloat(nc.litres.replace(/,/g, '')) || 0), 0).toLocaleString()} {globalUnit}
                                   </td>
-                                  <td colSpan={2}></td>
+                                  <td className="p-3 text-xs font-bold text-blue-900 font-mono">
+                                    {totalPenalty.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td colSpan={2} className="p-3 text-xs font-semibold text-blue-800 text-right">
+                                    <span className="bg-blue-100/80 text-blue-900 px-2.5 py-1 rounded-md border border-blue-200 inline-block">
+                                      Arrears estimate valid through {validTillDate}; figures subject to recalculation thereafter
+                                    </span>
+                                  </td>
                                 </tr>
                               )}
                               {formData.nonCompliance.length === 0 && (
@@ -7058,11 +7191,133 @@ export function DataValidationModule() {
                             </tbody>
                           </table>
                         </div>
+
+                        {/* Embedded Optional Statutory Compounding Arrears Calculator */}
+                        <div className="pt-2">
+                          <CalculatorApp 
+                            initialDboName={formData.dboName || selectedClient?.clientName || (selectedClient as any)?.clientname || ''}
+                            initialOfficerName={formData.complianceOfficer || ''}
+                            localSales={formData.sales}
+                            validationDate={formData.date}
+                            defaultExpanded={false}
+                            onApplyToSchedule={(appliedRows) => {
+                              setFormData(prev => {
+                                const existing = [...prev.nonCompliance];
+                                appliedRows.forEach(row => {
+                                  const rNorm = row.month.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                  const idx = existing.findIndex(e => {
+                                    const eNorm = e.month.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                    return eNorm === rNorm || (rNorm.length >= 3 && eNorm.includes(rNorm.slice(0, 3)));
+                                  });
+
+                                  // Find full month-year display name from sales if available
+                                  const matchingSale = prev.sales.find(s => {
+                                    const sNorm = `${s.month} ${s.year}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                    return sNorm.includes(rNorm.slice(0, 3));
+                                  });
+                                  const targetDisplayMonth = matchingSale ? `${matchingSale.month} ${matchingSale.year}` : row.month;
+
+                                  if (idx >= 0) {
+                                    existing[idx] = {
+                                      ...existing[idx],
+                                      litres: row.litres,
+                                      amount: row.amount,
+                                      paymentMonthYear: row.paymentMonthYear || existing[idx].paymentMonthYear
+                                    };
+                                  } else {
+                                    existing.push({
+                                      month: targetDisplayMonth,
+                                      litres: row.litres,
+                                      amount: row.amount,
+                                      paymentMonthYear: row.paymentMonthYear,
+                                      mpesaRef: ''
+                                    });
+                                  }
+                                });
+
+                                // Move month/year to pay values into corresponding Arrears exception due dates
+                                const updatedExceptions = syncArrearsExceptions(
+                                  prev.exceptionRegister || [],
+                                  existing,
+                                  prev.dboName || selectedClient?.clientName || '',
+                                  globalUnit
+                                );
+
+                                return { 
+                                  ...prev, 
+                                  nonCompliance: existing,
+                                  exceptionRegister: updatedExceptions 
+                                };
+                              });
+                            }}
+                          />
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {/* Merged Comments & Recommended Corrective Action Section */}
+                  {/* (within step 4) Exception Register - Single unified header within component */}
+                  <ExceptionRegisterComponent
+                    exceptions={formData.exceptionRegister || []}
+                    onChange={(updated) => {
+                      setFormData(prev => ({
+                        ...prev,
+                        exceptionRegister: updated
+                      }));
+                    }}
+                  />
+
+                  <div className="flex justify-between items-center pt-6 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setStep(3)}
+                      className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Back
+                    </button>
+                    <div className="flex items-center gap-2 sm:gap-3">
+                      <button
+                        type="button"
+                        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                        className="flex items-center gap-1 px-3 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                        title="Scroll to top of page"
+                      >
+                        <ArrowUp className="w-4 h-4" />
+                        <span>Top</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleManualSaveDraft}
+                        className="flex items-center gap-1.5 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-blue-50 text-blue-700 rounded-xl font-bold hover:bg-blue-100 transition-all text-xs sm:text-sm border border-blue-200 cursor-pointer"
+                        title="Save progress to draft"
+                      >
+                        <Save className="w-4 h-4 text-blue-600" />
+                        Save Draft
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => validateStep(4) && setStep(5)}
+                        className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
+                      >
+                        Next Step
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {step === 5 && (
+                <motion.div
+                  key="step5"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="space-y-6"
+                  id="step5-comments-and-corrective-actions-section"
+                >
+                  {/* Step 5: Comments & Recommended Corrective Actions */}
                   <CommentsAndCorrectiveActionsComponent
                     comments={formData.comments}
                     recommendedActions={formData.recommendedActions || ''}
@@ -7077,9 +7332,66 @@ export function DataValidationModule() {
                     }}
                   />
 
-                  {/* Declarations Section - Placed AFTER Comments */}
+                  <div className="flex justify-between items-center pt-6 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setStep(4)}
+                      className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Back
+                    </button>
+                    <div className="flex items-center gap-2 sm:gap-3">
+                      <button
+                        type="button"
+                        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                        className="flex items-center gap-1 px-3 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
+                        title="Scroll to top of page"
+                      >
+                        <ArrowUp className="w-4 h-4" />
+                        <span>Top</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleManualSaveDraft}
+                        className="flex items-center gap-1.5 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-blue-50 text-blue-700 rounded-xl font-bold hover:bg-blue-100 transition-all text-xs sm:text-sm border border-blue-200 cursor-pointer"
+                        title="Save progress to draft"
+                      >
+                        <Save className="w-4 h-4 text-blue-600" />
+                        Save Draft
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => validateStep(5) && setStep(6)}
+                        className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
+                      >
+                        Next Step
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {step === 6 && (
+                <motion.div
+                  key="step6"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="space-y-6"
+                  id="step6-declarations-and-signatures-section"
+                >
+                  <div className="flex items-center gap-2 mb-6 pb-3 border-b border-gray-100">
+                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">6</div>
+                    <div>
+                      <h2 className="text-lg font-bold text-gray-900">Declarations</h2>
+                      <p className="text-[11px] text-gray-500 font-medium">Statutory affirmations and official sign-offs</p>
+                    </div>
+                  </div>
+
+                  {/* Declarations Box */}
                   <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-4">
-                    <h3 className="text-sm font-bold text-gray-900">Declarations</h3>
                     <div className="space-y-3">
                       {/* Accept All Declarations */}
                       <label className="flex items-center gap-3 cursor-pointer group pb-3 border-b border-gray-100">
@@ -7161,361 +7473,369 @@ export function DataValidationModule() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Compliance Officer Name</label>
-                        <input
-                          type="text"
-                          name="complianceOfficer"
-                          value={formData.complianceOfficer}
-                          onChange={handleChange}
-                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Compliance Officer Signature</label>
-                          {authoritySignatures.length > 0 && !formData.complianceSignature && (
-                            <span className="text-[10px] text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100">
-                              {authoritySignatures.length} saved {authoritySignatures.length === 1 ? 'signature' : 'signatures'} available
-                            </span>
-                          )}
-                        </div>
+                  {/* Signatures Section */}
+                  <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-6" id="signatures-section">
+                    <div className="flex items-center gap-2 pb-3 border-b border-gray-100">
+                      <PenTool className="w-4 h-4 text-blue-600" />
+                      <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Signatures & Statutory Sign-off</h3>
+                    </div>
 
-                        {/* Selected signature state */}
-                        {formData.complianceSignature && !isSelectingAuthoritySig ? (
-                          <div className="p-3.5 bg-gradient-to-r from-blue-50/70 to-indigo-50/40 border border-blue-200/80 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-                            <div className="flex items-center gap-3">
-                              <div className="h-16 w-28 bg-white rounded-xl border border-blue-100 p-1.5 flex items-center justify-center shadow-xs overflow-hidden shrink-0">
-                                <img
-                                  src={formData.complianceSignature}
-                                  alt="Compliance Signature"
-                                  className="max-h-full max-w-full object-contain"
-                                />
-                              </div>
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs font-bold text-slate-800">
-                                    {formData.complianceOfficer || 'Authority Signature'}
-                                  </span>
-                                  <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full flex items-center gap-0.5">
-                                    <Check className="w-2.5 h-2.5" /> Applied
-                                  </span>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Compliance Officer Name</label>
+                          <input
+                            type="text"
+                            name="complianceOfficer"
+                            value={formData.complianceOfficer}
+                            onChange={handleChange}
+                            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Compliance Officer Signature</label>
+                            {authoritySignatures.length > 0 && !formData.complianceSignature && (
+                              <span className="text-[10px] text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100">
+                                {authoritySignatures.length} saved {authoritySignatures.length === 1 ? 'signature' : 'signatures'} available
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Selected signature state */}
+                          {formData.complianceSignature && !isSelectingAuthoritySig ? (
+                            <div className="p-3.5 bg-gradient-to-r from-blue-50/70 to-indigo-50/40 border border-blue-200/80 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                              <div className="flex items-center gap-3">
+                                <div className="h-16 w-28 bg-white rounded-xl border border-blue-100 p-1.5 flex items-center justify-center shadow-xs overflow-hidden shrink-0">
+                                  <img
+                                    src={formData.complianceSignature}
+                                    alt="Compliance Signature"
+                                    className="max-h-full max-w-full object-contain"
+                                  />
                                 </div>
-                                <p className="text-[11px] text-slate-500 mt-0.5">
-                                  Applied to official validation PDF and Google Sheets sync
-                                </p>
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-slate-800">
+                                      {formData.complianceOfficer || 'Authority Signature'}
+                                    </span>
+                                    <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                                      <Check className="w-2.5 h-2.5" /> Applied
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-500 mt-0.5">
+                                    Applied to official validation PDF and Google Sheets sync
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => setIsSelectingAuthoritySig(true)}
+                                  className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                                  title="Change or select a different authority signature"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+                                  Change Signature
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleClearComplianceSignature}
+                                  className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition-all cursor-pointer border border-transparent hover:border-rose-200"
+                                  title="Remove signature from this form"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
                               </div>
                             </div>
+                          ) : (
+                            /* Selection / upload state */
+                            <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3.5">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <div className="text-xs font-bold text-slate-700">
+                                  {isSelectingAuthoritySig ? 'Switch Authority Signature' : 'Choose Authority Signature'}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {isSelectingAuthoritySig && formData.complianceSignature && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsSelectingAuthoritySig(false)}
+                                      className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowAddAuthorityModal(true)}
+                                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    Add Signature
+                                  </button>
+                                </div>
+                              </div>
 
-                            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                              {authoritySignatures.length > 0 ? (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1">
+                                  {authoritySignatures.map((sig) => {
+                                    const isSelected = formData.complianceSignature === sig.signature;
+                                    return (
+                                      <div
+                                        key={sig.id}
+                                        onClick={() => handleSelectAuthoritySignature(sig)}
+                                        className={`p-2.5 rounded-xl border transition-all cursor-pointer relative group flex flex-col justify-between ${
+                                          isSelected
+                                            ? 'bg-blue-50/90 border-blue-500 ring-2 ring-blue-200 shadow-xs'
+                                            : 'bg-white hover:bg-blue-50/30 border-slate-200 hover:border-blue-300 shadow-xs'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                                          <div className="min-w-0 flex-1">
+                                            <div className="text-xs font-bold text-slate-800 truncate group-hover:text-blue-700">
+                                              {sig.name}
+                                            </div>
+                                            {sig.title && (
+                                              <div className="text-[10px] text-slate-500 truncate">
+                                                {sig.title}
+                                              </div>
+                                            )}
+                                          </div>
+                                          {isSelected && (
+                                            <span className="p-0.5 bg-blue-600 text-white rounded-full shrink-0">
+                                              <Check className="w-3 h-3" />
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        <div className="h-12 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-center p-1 overflow-hidden">
+                                          <img src={sig.signature} alt={sig.name} className="max-h-full max-w-full object-contain" />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <div className="p-4 bg-white border border-dashed border-slate-200 rounded-xl text-center space-y-2">
+                                  <p className="text-xs text-slate-500">No authority signatures saved yet.</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowAddAuthorityModal(true)}
+                                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    Add First Authority Signature
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* One-off local file upload fallback */}
+                              <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-500">
+                                <span>Or upload a one-off signature file:</span>
+                                <label className="text-blue-600 hover:text-blue-800 font-bold hover:underline cursor-pointer flex items-center gap-1">
+                                  <Upload className="w-3 h-3" /> Browse File
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) => handleFileChange(e, 'complianceSignature')}
+                                    className="hidden"
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {/* DBO Remote Signing Status / Action Banner */}
+                        {formData.dboSignature ? (
+                          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700">
+                                <CheckCircle2 className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="text-xs font-bold text-emerald-900">
+                                  {dboSignedNotification ? 'Signed Remotely by DBO' : 'DBO Signature Recorded'}
+                                </div>
+                                <div className="text-[11px] text-emerald-700">
+                                  {formData.confirmationName ? `${formData.confirmationName}` : 'Signature on file'} 
+                                  {formData.designation ? ` (${formData.designation})` : ''}
+                                  {dboSignedNotification?.signedAt ? ` • ${new Date(dboSignedNotification.signedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleGenerateDboSigningLink()}
+                              className="text-xs font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1 cursor-pointer"
+                              title="Generate a fresh 5-minute link if re-signing is required"
+                            >
+                              <Smartphone className="w-3.5 h-3.5" /> Re-send Link
+                            </button>
+                          </div>
+                        ) : signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
+                          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-700">
+                                <Clock className="w-4 h-4 animate-spin" />
+                              </div>
+                              <div>
+                                <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                                  <span>5-Min Remote Signing Link Active</span>
+                                  <span className="font-mono text-[11px] px-1.5 py-0.5 bg-amber-200/90 text-amber-900 rounded-md font-extrabold">
+                                    {formatSecondsToMMSS(signingRemainingSeconds)}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-amber-700">
+                                  Waiting for DBO to sign on phone/tablet... Updates automatically.
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
                               <button
                                 type="button"
-                                onClick={() => setIsSelectingAuthoritySig(true)}
-                                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
-                                title="Change or select a different authority signature"
+                                onClick={() => setIsDboLinkModalOpen(true)}
+                                className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs"
                               >
-                                <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
-                                Change Signature
+                                <Share2 className="w-3.5 h-3.5" /> View / Share Link
                               </button>
                               <button
                                 type="button"
-                                onClick={handleClearComplianceSignature}
-                                className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition-all cursor-pointer border border-transparent hover:border-rose-200"
-                                title="Remove signature from this form"
+                                onClick={handleCheckDboStatus}
+                                disabled={isCheckingDboStatus}
+                                className="px-2 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-800 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-all"
+                                title="Check status right now"
                               >
-                                <Trash2 className="w-4 h-4" />
+                                <RefreshCw className={`w-3 h-3 ${isCheckingDboStatus ? 'animate-spin' : ''}`} />
                               </button>
                             </div>
                           </div>
                         ) : (
-                          /* Selection / upload state */
-                          <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3.5">
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <div className="text-xs font-bold text-slate-700">
-                                {isSelectingAuthoritySig ? 'Switch Authority Signature' : 'Choose Authority Signature'}
+                          <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
+                                <Smartphone className="w-4 h-4" />
                               </div>
-                              <div className="flex items-center gap-2">
-                                {isSelectingAuthoritySig && formData.complianceSignature && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setIsSelectingAuthoritySig(false)}
-                                    className="px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 font-semibold cursor-pointer"
-                                  >
-                                    Cancel
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => setShowAddAuthorityModal(true)}
-                                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                  Add Signature
-                                </button>
+                              <div>
+                                <div className="text-xs font-bold text-blue-950">Remote DBO Signing</div>
+                                <div className="text-[11px] text-blue-700">Send a 5-minute link to DBO's phone for remote review & signature</div>
                               </div>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => handleGenerateDboSigningLink()}
+                              disabled={isGeneratingLink}
+                              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50"
+                            >
+                              {isGeneratingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Smartphone className="w-3.5 h-3.5" />}
+                              <span>Send 5-Min Link</span>
+                            </button>
+                          </div>
+                        )}
 
-                            {authoritySignatures.length > 0 ? (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1">
-                                {authoritySignatures.map((sig) => {
-                                  const isSelected = formData.complianceSignature === sig.signature;
-                                  return (
-                                    <div
-                                      key={sig.id}
-                                      onClick={() => handleSelectAuthoritySignature(sig)}
-                                      className={`p-2.5 rounded-xl border transition-all cursor-pointer relative group flex flex-col justify-between ${
-                                        isSelected
-                                          ? 'bg-blue-50/90 border-blue-500 ring-2 ring-blue-200 shadow-xs'
-                                          : 'bg-white hover:bg-blue-50/30 border-slate-200 hover:border-blue-300 shadow-xs'
-                                      }`}
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name</label>
+                          <input
+                            type="text"
+                            name="confirmationName"
+                            value={formData.confirmationName}
+                            onChange={handleChange}
+                            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Designation</label>
+                          <input
+                            type="text"
+                            name="designation"
+                            value={formData.designation}
+                            onChange={handleChange}
+                            className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">DBO Signature</label>
+                            <span className="text-[10px] text-gray-400 font-semibold">Sign on pad, upload, or use 5-min link</span>
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            {!formData.dboSignature ? (
+                              <div className="space-y-3">
+                                <div className="border-2 border-dashed border-gray-200 rounded-xl p-2 bg-gray-50">
+                                  <SignatureCanvas
+                                    ref={dboSigPad}
+                                    penColor="black"
+                                    canvasProps={{
+                                      className: "w-full h-32 rounded-lg cursor-crosshair",
+                                      style: { background: 'white' }
+                                    }}
+                                  />
+                                  <div className="flex justify-between mt-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => dboSigPad.current?.clear()}
+                                      className="text-[10px] font-bold text-gray-500 hover:text-red-500 flex items-center gap-1"
                                     >
-                                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                                        <div className="min-w-0 flex-1">
-                                          <div className="text-xs font-bold text-slate-800 truncate group-hover:text-blue-700">
-                                            {sig.name}
-                                          </div>
-                                          {sig.title && (
-                                            <div className="text-[10px] text-slate-500 truncate">
-                                              {sig.title}
-                                            </div>
-                                          )}
-                                        </div>
-                                        {isSelected && (
-                                          <span className="p-0.5 bg-blue-600 text-white rounded-full shrink-0">
-                                            <Check className="w-3 h-3" />
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      <div className="h-12 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-center p-1 overflow-hidden">
-                                        <img src={sig.signature} alt={sig.name} className="max-h-full max-w-full object-contain" />
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ) : (
-                              <div className="p-4 bg-white border border-dashed border-slate-200 rounded-xl text-center space-y-2">
-                                <p className="text-xs text-slate-500">No authority signatures saved yet.</p>
-                                <button
-                                  type="button"
-                                  onClick={() => setShowAddAuthorityModal(true)}
-                                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                  Add First Authority Signature
-                                </button>
-                              </div>
-                            )}
-
-                            {/* One-off local file upload fallback */}
-                            <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-500">
-                              <span>Or upload a one-off signature file:</span>
-                              <label className="text-blue-600 hover:text-blue-800 font-bold hover:underline cursor-pointer flex items-center gap-1">
-                                <Upload className="w-3 h-3" /> Browse File
+                                      <Trash2 className="w-3 h-3" /> Clear Pad
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={saveDboSignature}
+                                      className="text-[10px] font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                                    >
+                                      <PenTool className="w-3 h-3" /> Save Signature
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="text-center">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">OR UPLOAD IMAGE</span>
+                                </div>
                                 <input
                                   type="file"
                                   accept="image/*"
-                                  onChange={(e) => handleFileChange(e, 'complianceSignature')}
-                                  className="hidden"
+                                  onChange={(e) => handleFileChange(e, 'dboSignature')}
+                                  className="text-xs"
                                 />
-                              </label>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      {/* DBO Remote Signing Status / Action Banner */}
-                      {formData.dboSignature ? (
-                        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700">
-                              <CheckCircle2 className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <div className="text-xs font-bold text-emerald-900">
-                                {dboSignedNotification ? 'Signed Remotely by DBO' : 'DBO Signature Recorded'}
                               </div>
-                              <div className="text-[11px] text-emerald-700">
-                                {formData.confirmationName ? `${formData.confirmationName}` : 'Signature on file'} 
-                                {formData.designation ? ` (${formData.designation})` : ''}
-                                {dboSignedNotification?.signedAt ? ` • ${new Date(dboSignedNotification.signedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                            ) : (
+                              <div className="relative group">
+                                <img src={formData.dboSignature} alt="DBO Signature" className="h-20 object-contain border rounded-lg bg-white" />
+                                <button
+                                  type="button"
+                                  onClick={() => clearField('dboSignature')}
+                                  className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
                               </div>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateDboSigningLink()}
-                            className="text-xs font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1 cursor-pointer"
-                            title="Generate a fresh 5-minute link if re-signing is required"
-                          >
-                            <Smartphone className="w-3.5 h-3.5" /> Re-send Link
-                          </button>
-                        </div>
-                      ) : signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
-                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-700">
-                              <Clock className="w-4 h-4 animate-spin" />
-                            </div>
-                            <div>
-                              <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                                <span>5-Min Remote Signing Link Active</span>
-                                <span className="font-mono text-[11px] px-1.5 py-0.5 bg-amber-200/90 text-amber-900 rounded-md font-extrabold">
-                                  {formatSecondsToMMSS(signingRemainingSeconds)}
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-amber-700">
-                                Waiting for DBO to sign on phone/tablet... Updates automatically.
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setIsDboLinkModalOpen(true)}
-                              className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shadow-xs"
-                            >
-                              <Share2 className="w-3.5 h-3.5" /> View / Share Link
-                            </button>
-                            <button
-                              type="button"
-                              onClick={handleCheckDboStatus}
-                              disabled={isCheckingDboStatus}
-                              className="px-2 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-800 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-all"
-                              title="Check status right now"
-                            >
-                              <RefreshCw className={`w-3 h-3 ${isCheckingDboStatus ? 'animate-spin' : ''}`} />
-                            </button>
+                            )}
                           </div>
                         </div>
-                      ) : (
-                        <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
-                              <Smartphone className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <div className="text-xs font-bold text-blue-950">Remote DBO Signing</div>
-                              <div className="text-[11px] text-blue-700">Send a 5-minute link to DBO's phone for remote review & signature</div>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleGenerateDboSigningLink()}
-                            disabled={isGeneratingLink}
-                            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50"
-                          >
-                            {isGeneratingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Smartphone className="w-3.5 h-3.5" />}
-                            <span>Send 5-Min Link</span>
-                          </button>
-                        </div>
-                      )}
-
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name</label>
-                        <input
-                          type="text"
-                          name="confirmationName"
-                          value={formData.confirmationName}
-                          onChange={handleChange}
-                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Designation</label>
-                        <input
-                          type="text"
-                          name="designation"
-                          value={formData.designation}
-                          onChange={handleChange}
-                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">DBO Signature</label>
-                          <span className="text-[10px] text-gray-400 font-semibold">Sign on pad, upload, or use 5-min link</span>
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          {!formData.dboSignature ? (
-                            <div className="space-y-3">
-                              <div className="border-2 border-dashed border-gray-200 rounded-xl p-2 bg-gray-50">
-                                <SignatureCanvas
-                                  ref={dboSigPad}
-                                  penColor="black"
-                                  canvasProps={{
-                                    className: "w-full h-32 rounded-lg cursor-crosshair",
-                                    style: { background: 'white' }
-                                  }}
-                                />
-                                <div className="flex justify-between mt-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => dboSigPad.current?.clear()}
-                                    className="text-[10px] font-bold text-gray-500 hover:text-red-500 flex items-center gap-1"
-                                  >
-                                    <Trash2 className="w-3 h-3" /> Clear Pad
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={saveDboSignature}
-                                    className="text-[10px] font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                                  >
-                                    <PenTool className="w-3 h-3" /> Save Signature
-                                  </button>
-                                </div>
-                              </div>
-                              <div className="text-center">
-                                <span className="text-[10px] text-gray-400 uppercase font-bold">OR UPLOAD IMAGE</span>
-                              </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">DBO Stamp</label>
+                          <div className="flex flex-col gap-2">
+                            {!formData.dboStamp ? (
                               <input
                                 type="file"
                                 accept="image/*"
-                                onChange={(e) => handleFileChange(e, 'dboSignature')}
+                                onChange={(e) => handleFileChange(e, 'dboStamp')}
                                 className="text-xs"
                               />
-                            </div>
-                          ) : (
-                            <div className="relative group">
-                              <img src={formData.dboSignature} alt="DBO Signature" className="h-20 object-contain border rounded-lg bg-white" />
-                              <button
-                                type="button"
-                                onClick={() => clearField('dboSignature')}
-                                className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors cursor-pointer"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">DBO Stamp</label>
-                        <div className="flex flex-col gap-2">
-                          {!formData.dboStamp ? (
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => handleFileChange(e, 'dboStamp')}
-                              className="text-xs"
-                            />
-                          ) : (
-                            <div className="relative group">
-                              <img src={formData.dboStamp} alt="DBO Stamp" className="h-20 object-contain border rounded-lg bg-white" />
-                              <button
-                                type="button"
-                                onClick={() => clearField('dboStamp')}
-                                className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors cursor-pointer"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          )}
+                            ) : (
+                              <div className="relative group">
+                                <img src={formData.dboStamp} alt="DBO Stamp" className="h-20 object-contain border rounded-lg bg-white" />
+                                <button
+                                  type="button"
+                                  onClick={() => clearField('dboStamp')}
+                                  className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -7526,11 +7846,20 @@ export function DataValidationModule() {
                       <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto flex-wrap">
                         <button
                           type="button"
-                          onClick={() => setStep(2)}
+                          onClick={() => setStep(5)}
                           className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all border border-gray-200 sm:border-transparent cursor-pointer"
                         >
                           <ChevronLeft className="w-4 h-4" />
                           Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                          className="flex-1 sm:flex-none flex justify-center items-center gap-1.5 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-500 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all border border-gray-200 sm:border-transparent cursor-pointer"
+                          title="Scroll to top of page"
+                        >
+                          <ArrowUp className="w-4 h-4" />
+                          <span>Top</span>
                         </button>
                         <button
                           type="button"
@@ -7894,22 +8223,22 @@ export function DataValidationModule() {
           )}
         </AnimatePresence>
 
-        {/* Remote DBO Signing Link Modal (5-Minute Expiry) */}
+        {/* Remote DBO Signing Link Modal (10-Minute Expiry) */}
         {isDboLinkModalOpen && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150 max-h-[95vh] flex flex-col">
               {/* Header */}
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-50/70 via-indigo-50/30 to-white">
+              <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-50/70 via-indigo-50/30 to-white">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
                     <Smartphone className="w-6 h-6" />
                   </div>
                   <div>
                     <h3 className="font-black text-lg text-gray-900 leading-snug">
-                      Remote DBO Signing Link
+                      Remote DBO Signing Link & QR Code
                     </h3>
                     <p className="text-xs text-gray-500 font-medium">
-                      5-minute secure regulatory window for on-device DBO signature
+                      10-minute secure regulatory window for on-device DBO signature
                     </p>
                   </div>
                 </div>
@@ -7923,7 +8252,7 @@ export function DataValidationModule() {
               </div>
 
               {/* Body */}
-              <div className="p-6 space-y-5">
+              <div className="p-5 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
                 {/* Premise & DBO Target Info */}
                 <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between gap-4">
                   <div className="space-y-1 min-w-0">
@@ -7984,7 +8313,7 @@ export function DataValidationModule() {
                       </div>
                       <div>
                         <div className="text-xs font-bold text-rose-950">Signing Link Expired</div>
-                        <div className="text-[11px] text-rose-700">The 5-minute security window has elapsed. Click below to issue a new one.</div>
+                        <div className="text-[11px] text-rose-700">The 10-minute security window has elapsed. Click below to issue a new one.</div>
                       </div>
                     </div>
                     <button
@@ -7995,6 +8324,23 @@ export function DataValidationModule() {
                     >
                       Regenerate
                     </button>
+                  </div>
+                )}
+
+                {/* Scannable QR Code */}
+                {currentSigningLink && (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row items-center justify-center gap-4 text-center sm:text-left">
+                    <div className="p-2.5 bg-white rounded-2xl border border-slate-200 shadow-xs shrink-0">
+                      <QRCodeSVG value={currentSigningLink} size={120} level="M" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5 justify-center sm:justify-start">
+                        <span>Scan with Phone / Tablet Camera</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        DBO can point their smartphone camera at this QR code to instantly open the full statutory validation document, review all findings, enter their name, and sign on-screen.
+                      </p>
+                    </div>
                   </div>
                 )}
 
@@ -8102,7 +8448,7 @@ export function DataValidationModule() {
                   className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   {isGeneratingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                  <span>Generate New 5-Min Link</span>
+                  <span>Generate New 10-Min Link</span>
                 </button>
 
                 <button

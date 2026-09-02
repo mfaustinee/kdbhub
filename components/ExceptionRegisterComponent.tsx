@@ -11,7 +11,8 @@ import {
   Calendar,
   User,
   FileCheck,
-  ChevronDown
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { 
   ExceptionRegisterItem, 
@@ -55,6 +56,29 @@ const STATUS_CONFIG: Record<ExceptionStatus, { label: string; badgeClass: string
   }
 };
 
+export const toDDMMYYYY = (val: string): string => {
+  if (!val) return '';
+  const trimmed = val.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [y, m, d] = trimmed.split('-');
+    return `${d}/${m}/${y}`;
+  }
+  return trimmed;
+};
+
+export const toISODate = (val: string): string => {
+  if (!val) return '';
+  const trimmed = val.trim();
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(trimmed)) {
+    const [d, m, y] = trimmed.split('/');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return '';
+};
+
 export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProps> = ({
   exceptions = [],
   onChange,
@@ -63,6 +87,7 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
   unregisteredDiscrepanciesCount = 0
 }) => {
   const [selectedTypeForAdd, setSelectedTypeForAdd] = useState<string>('');
+  const [isOpen, setIsOpen] = useState<boolean>(true);
 
   const createExceptionItem = (
     type: string = 'Missing record', 
@@ -140,17 +165,17 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
   const resolvedCount = exceptions.filter(e => e.status === 'Resolved' || e.status === 'Closed').length;
 
   return (
-    <div className="w-full bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
+    <div className="w-full bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden" id="exception-register-container">
       {/* Header Banner */}
       <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-50 via-white to-amber-50/30 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0 border border-amber-200/50">
-            <ShieldAlert className="w-5 h-5" />
+          <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-sm shrink-0 shadow-2xs border border-amber-200">
+            <ShieldAlert className="w-4 h-4 text-amber-700" />
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
-              <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 uppercase tracking-wide">
-                EXCEPTION REGISTER
+              <h4 className="text-sm sm:text-base font-bold text-slate-900">
+                Exception Register
               </h4>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
                 {exceptions.length} {exceptions.length === 1 ? 'Record' : 'Records'}
@@ -178,29 +203,17 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
           </div>
         </div>
 
-        {!readOnly && (
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Quick Add by Type Dropdown */}
-            <div className="relative flex items-center">
-              <select
-                value=""
-                onChange={(e) => {
-                  if (e.target.value) {
-                    handleAddException(e.target.value);
-                  }
-                }}
-                className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all appearance-none pr-7 cursor-pointer shadow-2xs"
-              >
-                <option value="">+ Add by Standard Type...</option>
-                {STANDARD_EXCEPTION_TYPES.map(t => (
-                  <option key={t.type} value={t.type}>
-                    {t.type}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 pointer-events-none" />
-            </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsOpen(prev => !prev)}
+            className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+          >
+            <span>{isOpen ? 'Hide Exception Register' : 'Open Exception Register'}</span>
+            {isOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
 
+          {!readOnly && isOpen && (
             <button
               type="button"
               onClick={() => handleAddException()}
@@ -209,22 +222,13 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
               <Plus className="w-3.5 h-3.5" />
               <span>Add Exception</span>
             </button>
-
-            {exceptions.length === 0 && (
-              <button
-                type="button"
-                onClick={handleLoadAllStandardTemplates}
-                className="px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50/70 hover:bg-amber-100 text-amber-800 text-xs font-semibold transition-all cursor-pointer"
-                title="Populate register with all 10 standard audit exception categories"
-              >
-                Load Standard Catalog (10)
-              </button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* Checklist Interdependence Alert Banner */}
+      {isOpen && (
+        <>
+          {/* Checklist Interdependence Alert Banner */}
       {Boolean(unregisteredDiscrepanciesCount && unregisteredDiscrepanciesCount > 0 && onSyncFromChecklist && !readOnly) && (
         <div className="mx-3 sm:mx-5 mt-3 p-3.5 bg-amber-50 rounded-2xl border border-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
           <div className="flex items-start sm:items-center gap-2.5">
@@ -272,13 +276,6 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
                   <Plus className="w-3.5 h-3.5" />
                   <span>Record First Exception</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={handleLoadAllStandardTemplates}
-                  className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <span>Pre-load All 10 Standard Types</span>
-                </button>
               </div>
             )}
           </div>
@@ -292,7 +289,7 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
                   <th className="p-3 w-48">Example</th>
                   <th className="p-3 w-40">Source</th>
                   <th className="p-3 w-36">Owner</th>
-                  <th className="p-3 w-32">Due Date</th>
+                  <th className="p-3 w-36">Due Date (DD/MM/YYYY)</th>
                   <th className="p-3 min-w-[180px]">Resolution Evidence</th>
                   <th className="p-3 w-32">Status</th>
                   {!readOnly && <th className="p-3 w-12 text-center">Action</th>}
@@ -371,15 +368,39 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
                         />
                       </td>
 
-                      {/* Due Date */}
+                      {/* Due Date (DD/MM/YYYY) */}
                       <td className="p-2.5 align-top">
-                        <input
-                          type="date"
-                          value={item.dueDate}
-                          onChange={(e) => handleFieldChange(item.id, 'dueDate', e.target.value)}
-                          disabled={readOnly}
-                          className="w-full px-2 py-1.5 rounded-lg border border-slate-200 bg-white focus:border-amber-500 outline-none text-xs text-slate-800 font-mono"
-                        />
+                        <div className="relative flex items-center">
+                          <input
+                            type="text"
+                            placeholder="DD/MM/YYYY"
+                            value={item.dueDate}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              handleFieldChange(item.id, 'dueDate', toDDMMYYYY(val));
+                            }}
+                            disabled={readOnly}
+                            className="w-full pl-2.5 pr-8 py-1.5 rounded-lg border border-slate-200 bg-white focus:border-amber-500 outline-none text-xs text-slate-800 font-mono tracking-tight"
+                            title="Format: DD/MM/YYYY"
+                          />
+                          {!readOnly && (
+                            <label className="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer p-1 text-slate-400 hover:text-amber-600 transition-colors" title="Pick date">
+                              <Calendar className="w-3.5 h-3.5" />
+                              <input
+                                type="date"
+                                tabIndex={-1}
+                                aria-label="Select date"
+                                value={toISODate(item.dueDate)}
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    handleFieldChange(item.id, 'dueDate', toDDMMYYYY(e.target.value));
+                                  }
+                                }}
+                                className="sr-only"
+                              />
+                            </label>
+                          )}
+                        </div>
                       </td>
 
                       {/* Resolution Evidence */}
@@ -431,6 +452,8 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 };

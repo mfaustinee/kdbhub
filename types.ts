@@ -495,6 +495,11 @@ export const STANDARD_EXCEPTION_TYPES: Array<{
   example: string;
 }> = [
   {
+    type: 'Arrears',
+    definition: 'Outstanding statutory CSL levy arrears and compounding penalties identified from under-declaration or reconciliation',
+    example: 'Statutory arrears identified for settlement (e.g. Under-declared volume)'
+  },
+  {
     type: 'Missing record',
     definition: 'Expected record cannot be located',
     example: 'Permit scan missing'
@@ -543,6 +548,11 @@ export const STANDARD_EXCEPTION_TYPES: Array<{
     type: 'Unconfirmed',
     definition: 'Evidence exists but requires further confirmation',
     example: 'Conflicting location'
+  },
+  {
+    type: 'Previous Exceptions',
+    definition: 'Prior audit exception or finding that remains unresolved or carried forward from previous validation period',
+    example: 'Opening exception from prior period unaddressed (CA13)'
   }
 ];
 
@@ -551,7 +561,7 @@ export type FieldChecklistResultStatus =
   | 'Available (Discrepancies)'
   | 'Not Available / Missing'
   | 'Not Applicable (N/A)'
-  | '';
+  | string;
 
 export interface FieldChecklistEntry {
   status: FieldChecklistResultStatus;
