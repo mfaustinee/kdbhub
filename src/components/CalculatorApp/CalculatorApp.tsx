@@ -152,7 +152,7 @@ export const CalculatorApp: React.FC<CalculatorAppProps> = ({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h4 className="text-sm font-bold text-gray-900">
-                Statutory CSL Arrears & Compounding Calculator
+                CSL Arrears & Compounding Calculator
               </h4>
               <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
                 Optional Utility
@@ -364,7 +364,7 @@ export const CalculatorApp: React.FC<CalculatorAppProps> = ({
             <div className="p-5 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-white to-blue-50/80 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Total Statutory Arrears:</span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-blue-900">Total Arrears:</span>
                   <span className="text-xl sm:text-2xl font-black text-blue-950 font-mono">
                     Ksh {totals.total.toLocaleString()}
                   </span>

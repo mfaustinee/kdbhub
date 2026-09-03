@@ -11,8 +11,8 @@ import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDa
 import { FieldChecklistComponent } from './FieldChecklistComponent';
 import { FIELD_CHECKLIST_SECTIONS, hasAnyChecklistValue, getActiveChecklistItems } from './fieldChecklistData';
 import { TransactionReconciliationComponent } from './TransactionReconciliationComponent';
-import { ExceptionRegisterComponent } from './ExceptionRegisterComponent';
 import { CommentsAndCorrectiveActionsComponent } from './CommentsAndCorrectiveActionsComponent';
+import { generateValidationPdfDataUri } from '../src/utils/generateValidationPdf';
 import { CalculatorApp, formatPaymentMonthYear } from './CalculatorApp';
 import { 
   ClipboardCheck, 
@@ -57,7 +57,10 @@ import {
   CheckCheck,
   Scale,
   ShieldAlert,
-  Sparkles
+  Sparkles,
+  Eye,
+  EyeOff,
+  Lock
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -319,7 +322,7 @@ export const syncArrearsExceptions = (
       next.push({
         id,
         type: 'Arrears',
-        definition: 'Outstanding statutory CSL levy arrears and compounding penalties identified from under-declaration or reconciliation',
+        definition: 'Outstanding CSL levy arrears and compounding penalties identified from under-declaration or reconciliation',
         example: exampleText,
         source: sourceText,
         owner: dboName || 'Client / DBO',
@@ -950,6 +953,7 @@ export function DataValidationModule() {
   // DBO Remote 5-Minute Signing Link State
   const [isDboLinkModalOpen, setIsDboLinkModalOpen] = useState(false);
   const [currentSigningLink, setCurrentSigningLink] = useState('');
+  const [isSigningUrlMasked, setIsSigningUrlMasked] = useState(true);
   const [signingDraftTarget, setSigningDraftTarget] = useState<ValidationDraft | null>(null);
   const [signingExpiresAtTimestamp, setSigningExpiresAtTimestamp] = useState<number | null>(null);
   const [signingRemainingSeconds, setSigningRemainingSeconds] = useState<number | null>(null);
@@ -1063,7 +1067,7 @@ export function DataValidationModule() {
 
             setStatus({
               type: 'success',
-              message: `DBO ${signedName} has completed remote signing! Signature & statutory declarations loaded.`
+              message: `DBO ${signedName} has completed remote signing! Signature & declarations loaded.`
             });
 
             setSigningDraftTarget(d);
@@ -1999,8 +2003,8 @@ export function DataValidationModule() {
         };
       }
 
-      // Generate 10-min expiry timestamp
-      const expiryMs = Date.now() + 10 * 60 * 1000;
+      // Generate 5-min expiry timestamp
+      const expiryMs = Date.now() + 5 * 60 * 1000;
       const signingExpiresAt = new Date(expiryMs).toISOString();
       const signingToken = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
         ? crypto.randomUUID()
@@ -2278,7 +2282,7 @@ export function DataValidationModule() {
             });
             setStatus({ 
               type: 'success', 
-              message: `Draft restored! DBO signature and statutory declarations are recorded. Review details, sign as Compliance Officer, and submit.` 
+              message: `Draft restored! DBO signature and declarations are recorded. Review details, sign as Compliance Officer, and submit.` 
             });
           } else {
             const exp = draftObj.signingExpiresAt || rawObj.signingExpiresAt;
@@ -3289,6 +3293,10 @@ export function DataValidationModule() {
   };
 
   const generatePDF = async (data: FormData = formData) => {
+    return generateValidationPdfDataUri(data, globalUnit);
+  };
+
+  const _deprecatedInlinePdf = async (data: FormData = formData) => {
     const doc = new jsPDF();
     let currentY = 130;
 
@@ -3592,7 +3600,7 @@ export function DataValidationModule() {
       checkPageBreak(25);
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
-      doc.text(hasReconciliation ? "Part B: Under-Declaration & Statutory CSL Arrears Schedule" : "Under-Declaration & Statutory CSL Arrears Schedule", 20, currentY + 2);
+      doc.text(hasReconciliation ? "Part B: Under-Declaration & Settlement Schedule" : "Under-Declaration & Settlement Schedule", 20, currentY + 2);
       doc.setFont("helvetica", "normal");
       
       if (data.nonCompliance.length === 0) {
@@ -3640,7 +3648,7 @@ export function DataValidationModule() {
       if (data.comments) {
         doc.setFont("helvetica", "bold");
         doc.setFontSize(9);
-        doc.text("Inspector Observations & Comments:", 20, currentY);
+        doc.text("Compliance Observations & Comments:", 20, currentY);
         doc.setFont("helvetica", "normal");
         const splitComments = doc.splitTextToSize(data.comments, 170);
         doc.text(splitComments, 20, currentY + 4);
@@ -3732,12 +3740,27 @@ export function DataValidationModule() {
   };
 
   const handlePreview = async () => {
-    const previewData: FormData = {
-      ...formData,
-      endTime: formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    const pdf = await generatePDF(previewData);
-    setPdfPreview(pdf);
+    try {
+      const previewData: FormData = {
+        ...formData,
+        endTime: formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      const pdf = await generatePDF(previewData);
+      if (pdf && pdf.startsWith('data:')) {
+        try {
+          const blob = dataURIToBlob(pdf);
+          const blobUrl = URL.createObjectURL(blob);
+          setPdfPreview(blobUrl);
+          return;
+        } catch (convErr) {
+          console.warn('Could not convert preview PDF dataURI to Blob:', convErr);
+        }
+      }
+      setPdfPreview(pdf);
+    } catch (e) {
+      console.error('Failed to generate PDF preview:', e);
+      setStatus({ type: 'error', message: 'Failed to generate PDF preview.' });
+    }
   };
 
   const viewPdf = async (path: string) => {
@@ -3747,6 +3770,16 @@ export function DataValidationModule() {
     try {
       // 1. Direct base64 data URI or HTTP link
       if (path.startsWith('data:') || path.startsWith('http://') || path.startsWith('https://')) {
+        if (path.startsWith('data:')) {
+          try {
+            const blob = dataURIToBlob(path);
+            const blobUrl = URL.createObjectURL(blob);
+            setPdfModalUrl(blobUrl);
+            return;
+          } catch (convErr) {
+            console.warn('Could not convert direct data URI to blob:', convErr);
+          }
+        }
         setPdfModalUrl(path);
         return;
       }
@@ -3791,6 +3824,16 @@ export function DataValidationModule() {
 
       const inline = match?.pdfPath || (match?.rawData as any)?.pdf || (match?.rawData as any)?.pdfData;
       if (inline) {
+        if (inline.startsWith('data:')) {
+          try {
+            const blob = dataURIToBlob(inline);
+            const blobUrl = URL.createObjectURL(blob);
+            setPdfModalUrl(blobUrl);
+            return;
+          } catch (convErr) {
+            console.warn('Could not convert inline data URI to blob:', convErr);
+          }
+        }
         setPdfModalUrl(inline);
         return;
       }
@@ -5815,8 +5858,8 @@ export function DataValidationModule() {
                             );
                           })}
                           {(() => {
-                            const opt = 'See Records Validation & Reconciliation Findings';
-                            const isSelected = formData.traceability === opt || formData.traceability === 'See DBO checklist';
+                            const opt = 'See records/result status below';
+                            const isSelected = formData.traceability === opt || formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist';
                             return (
                               <button
                                 type="button"
@@ -5835,9 +5878,9 @@ export function DataValidationModule() {
                         </div>
                       </div>
 
-                      {(formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
+                      {(formData.traceability === 'See records/result status below' || formData.traceability === 'See Records Validation & Reconciliation Findings' || formData.traceability === 'See DBO checklist') && (
                         <p className="text-[11px] text-blue-600 font-medium pt-1">
-                          Evaluation attached: Verification referenced to <em className="italic font-semibold">Records Validation & Reconciliation Findings</em> below.
+                          Evaluation attached: Verification referenced to <em className="italic font-semibold">See records/result status below</em>.
                         </p>
                       )}
 
@@ -5847,18 +5890,15 @@ export function DataValidationModule() {
                           value={formData.fieldChecklist || {}}
                           onChange={(updated) => {
                             const hasAny = hasAnyChecklistValue(updated);
-                            const hasOtherFindings = (formData.transactionReconciliation?.length || 0) > 0 || (formData.exceptionRegister?.length || 0) > 0;
                             setFormData(prev => ({
                               ...prev,
                               fieldChecklist: updated,
-                              traceability: (hasAny || hasOtherFindings)
-                                ? 'See Records Validation & Reconciliation Findings' 
-                                : (prev.traceability === 'See Records Validation & Reconciliation Findings' || prev.traceability === 'See DBO checklist' ? 'Yes' : prev.traceability)
+                              traceability: hasAny
+                                ? 'See records/result status below' 
+                                : (prev.traceability === 'See records/result status below' || prev.traceability === 'See Records Validation & Reconciliation Findings' || prev.traceability === 'See DBO checklist' ? 'Yes' : prev.traceability)
                             }));
                           }}
                           clientCategory={formData.category}
-                          onLogException={handleLogChecklistException}
-                          registeredExceptionRefs={registeredExceptionRefs}
                         />
                       </div>
                     </div>
@@ -7072,20 +7112,20 @@ export function DataValidationModule() {
                   <div className="flex items-center gap-2 mb-6 pb-3 border-b border-gray-100">
                     <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">4</div>
                     <div>
-                      <h2 className="text-lg font-bold text-gray-900">{isBranchFacility ? "Compliance & Exceptions" : "Compliance & Confirmation"}</h2>
-                      <p className="text-[11px] text-gray-500 font-medium">Under-declaration arrears schedule and recorded audit exceptions</p>
+                      <h2 className="text-lg font-bold text-gray-900">{isBranchFacility ? "Compliance & Settlement" : "Compliance & Confirmation"}</h2>
+                      <p className="text-[11px] text-gray-500 font-medium">Under-declaration arrears and settlement schedule</p>
                     </div>
                   </div>
 
                   {!isBranchFacility && (
                     <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100 space-y-6">
-                      {/* Under-Declaration & Statutory CSL Arrears Schedule */}
+                      {/* Under-Declaration & Settlement Schedule */}
                       <div className="bg-white p-5 rounded-2xl border border-blue-100/80 shadow-xs space-y-3">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-2 border-b border-gray-100">
                           <div>
                             <h3 className="text-sm font-bold text-blue-950 flex items-center gap-2">
                               <AlertCircle className="w-4 h-4 text-blue-600" />
-                              <span>Under-Declaration & Statutory CSL Arrears Schedule</span>
+                              <span>Under-Declaration & Settlement Schedule</span>
                             </h3>
                             <p className="text-[11px] text-gray-500">
                               Calculated under-declared volumes, agreed amounts and official MPESA / payment receipts.
@@ -7105,7 +7145,7 @@ export function DataValidationModule() {
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Recalculated Amount (Kshs)</th>
-                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Month/Year to Pay</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Agreed Due Date</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
                               </tr>
                             </thead>
@@ -7136,7 +7176,7 @@ export function DataValidationModule() {
                                         const newNC = [...formData.nonCompliance];
                                         newNC[idx].paymentMonthYear = val;
                                         
-                                        // Move Month/Year to Pay value to the corresponding Arrears exception row due date
+                                        // Move agreed due date value to the corresponding Arrears exception row due date
                                         const updatedExceptions = syncArrearsExceptions(
                                           formData.exceptionRegister || [],
                                           newNC,
@@ -7192,7 +7232,7 @@ export function DataValidationModule() {
                           </table>
                         </div>
 
-                        {/* Embedded Optional Statutory Compounding Arrears Calculator */}
+                        {/* Embedded Optional Compounding Arrears Calculator */}
                         <div className="pt-2">
                           <CalculatorApp 
                             initialDboName={formData.dboName || selectedClient?.clientName || (selectedClient as any)?.clientname || ''}
@@ -7235,7 +7275,7 @@ export function DataValidationModule() {
                                   }
                                 });
 
-                                // Move month/year to pay values into corresponding Arrears exception due dates
+                                // Move agreed due dates into corresponding Arrears exception due dates
                                 const updatedExceptions = syncArrearsExceptions(
                                   prev.exceptionRegister || [],
                                   existing,
@@ -7255,17 +7295,6 @@ export function DataValidationModule() {
                       </div>
                     </div>
                   )}
-
-                  {/* (within step 4) Exception Register - Single unified header within component */}
-                  <ExceptionRegisterComponent
-                    exceptions={formData.exceptionRegister || []}
-                    onChange={(updated) => {
-                      setFormData(prev => ({
-                        ...prev,
-                        exceptionRegister: updated
-                      }));
-                    }}
-                  />
 
                   <div className="flex justify-between items-center pt-6 border-t border-gray-100">
                     <button
@@ -7317,13 +7346,12 @@ export function DataValidationModule() {
                   className="space-y-6"
                   id="step5-comments-and-corrective-actions-section"
                 >
-                  {/* Step 5: Comments & Recommended Corrective Actions */}
+                  {/* Step 5: Comments & Recommendations */}
                   <CommentsAndCorrectiveActionsComponent
                     comments={formData.comments}
                     recommendedActions={formData.recommendedActions || ''}
                     actionDueDate={formData.actionDueDate || ''}
                     actionOwner={formData.actionOwner || ''}
-                    exceptions={formData.exceptionRegister || []}
                     onChange={(updatedFields) => {
                       setFormData(prev => ({
                         ...prev,
@@ -7386,7 +7414,7 @@ export function DataValidationModule() {
                     <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">6</div>
                     <div>
                       <h2 className="text-lg font-bold text-gray-900">Declarations</h2>
-                      <p className="text-[11px] text-gray-500 font-medium">Statutory affirmations and official sign-offs</p>
+                      <p className="text-[11px] text-gray-500 font-medium">Compliance affirmations and official sign-offs</p>
                     </div>
                   </div>
 
@@ -7477,7 +7505,7 @@ export function DataValidationModule() {
                   <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-6" id="signatures-section">
                     <div className="flex items-center gap-2 pb-3 border-b border-gray-100">
                       <PenTool className="w-4 h-4 text-blue-600" />
-                      <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Signatures & Statutory Sign-off</h3>
+                      <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Signatures</h3>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -8238,7 +8266,7 @@ export function DataValidationModule() {
                       Remote DBO Signing Link & QR Code
                     </h3>
                     <p className="text-xs text-gray-500 font-medium">
-                      10-minute secure regulatory window for on-device DBO signature
+                      5-minute secure regulatory window for on-device DBO signature
                     </p>
                   </div>
                 </div>
@@ -8313,7 +8341,7 @@ export function DataValidationModule() {
                       </div>
                       <div>
                         <div className="text-xs font-bold text-rose-950">Signing Link Expired</div>
-                        <div className="text-[11px] text-rose-700">The 10-minute security window has elapsed. Click below to issue a new one.</div>
+                        <div className="text-[11px] text-rose-700">The 5-minute security window has elapsed. Click below to issue a new one.</div>
                       </div>
                     </div>
                     <button
@@ -8338,7 +8366,7 @@ export function DataValidationModule() {
                         <span>Scan with Phone / Tablet Camera</span>
                       </div>
                       <p className="text-[11px] text-slate-500 leading-relaxed">
-                        DBO can point their smartphone camera at this QR code to instantly open the full statutory validation document, review all findings, enter their name, and sign on-screen.
+                        DBO can point their smartphone camera at this QR code to instantly open the full validation document, review all findings, enter their name, and sign on-screen.
                       </p>
                     </div>
                   </div>
@@ -8355,25 +8383,43 @@ export function DataValidationModule() {
                         DBO Signature Successfully Recorded!
                       </div>
                       <div className="text-xs text-emerald-700">
-                        {dboSignedNotification?.name ? `Confirmed by ${dboSignedNotification.name} (${dboSignedNotification.designation || 'DBO'})` : 'The DBO has completed the form and signed statutory declarations.'}
+                        {dboSignedNotification?.name ? `Confirmed by ${dboSignedNotification.name} (${dboSignedNotification.designation || 'DBO'})` : 'The DBO has completed the form and signed declarations.'}
                         {dboSignedNotification?.signedAt && ` • ${new Date(dboSignedNotification.signedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Link Input Box */}
+                {/* Link Input Box with Security Masking */}
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center justify-between">
-                    <span>Shareable Portal URL</span>
-                    <span className="text-[11px] text-gray-400 font-normal">Opens statutory preview & signature pad</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                      <Lock className="w-3 h-3 text-slate-400" />
+                      <span>Shareable Portal URL</span>
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-medium border border-emerald-200">
+                        {isSigningUrlMasked ? 'Masked for Security' : 'Visible'}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setIsSigningUrlMasked(!isSigningUrlMasked)}
+                      className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 cursor-pointer"
+                      title={isSigningUrlMasked ? "Show full URL" : "Mask URL for security"}
+                    >
+                      {isSigningUrlMasked ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      <span>{isSigningUrlMasked ? 'Reveal URL' : 'Mask URL'}</span>
+                    </button>
+                  </div>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
                       readOnly
-                      value={currentSigningLink}
-                      className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-mono select-all focus:outline-none focus:bg-white focus:border-blue-500"
+                      value={
+                        isSigningUrlMasked && currentSigningLink
+                          ? currentSigningLink.replace(/token=([^&]{4})[^&]+([^&]{3})/, 'token=$1••••••••$2')
+                          : currentSigningLink
+                      }
+                      className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-mono select-all focus:outline-none focus:bg-white focus:border-blue-500 tracking-tight"
                     />
                     <button
                       type="button"
@@ -8383,6 +8429,7 @@ export function DataValidationModule() {
                           ? 'bg-emerald-600 text-white'
                           : 'bg-blue-600 hover:bg-blue-700 text-white'
                       }`}
+                      title="Copy full active link to clipboard"
                     >
                       {linkCopied ? (
                         <>
@@ -8392,7 +8439,7 @@ export function DataValidationModule() {
                       ) : (
                         <>
                           <Copy className="w-4 h-4" />
-                          <span>Copy</span>
+                          <span>Copy Link</span>
                         </>
                       )}
                     </button>
@@ -8416,8 +8463,8 @@ export function DataValidationModule() {
                     rel="noopener noreferrer"
                     className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs text-center"
                   >
-                    <ExternalLink className="w-4 h-4" />
-                    <span>Open Link in New Tab</span>
+                    <FileText className="w-4 h-4 text-blue-300" />
+                    <span>View & Open Signing Portal</span>
                   </a>
                 </div>
 
@@ -8798,7 +8845,7 @@ export function DataValidationModule() {
                       type="text"
                       value={newOfficerTitle}
                       onChange={(e) => setNewOfficerTitle(e.target.value)}
-                      placeholder="e.g. Compliance Officer / Inspector"
+                      placeholder="e.g. Compliance Officer"
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-sm"
                     />
                   </div>

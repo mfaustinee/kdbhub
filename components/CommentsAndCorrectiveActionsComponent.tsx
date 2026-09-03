@@ -1,21 +1,17 @@
 import React from 'react';
 import { 
   FileCheck, 
-  AlertTriangle, 
   Calendar, 
   UserCheck, 
   Sparkles, 
-  MessageSquareQuote,
-  ShieldCheck
+  MessageSquareQuote
 } from 'lucide-react';
-import { ExceptionRegisterItem } from '../types';
 
 interface CommentsAndCorrectiveActionsComponentProps {
   comments: string;
   recommendedActions: string;
   actionDueDate?: string;
   actionOwner?: string;
-  exceptions?: ExceptionRegisterItem[];
   onChange: (fields: {
     comments?: string;
     recommendedActions?: string;
@@ -39,12 +35,9 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
   recommendedActions,
   actionDueDate = '',
   actionOwner = '',
-  exceptions = [],
   onChange,
   readOnly = false
 }) => {
-  const openExceptions = exceptions.filter(e => e.status === 'Open' || e.status === 'In Progress');
-
   const handleAppendDirective = (directiveText: string) => {
     if (readOnly) return;
     const trimmed = (recommendedActions || '').trim();
@@ -56,7 +49,7 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
   };
 
   return (
-    <div className="w-full bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden" id="comments-and-corrective-actions-section">
+    <div className="w-full bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden" id="comments-and-recommendations-section">
       {/* Header Banner */}
       <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-50 via-white to-blue-50/30 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -65,36 +58,16 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
           </div>
           <div>
             <h4 className="text-sm sm:text-base font-bold text-slate-900">
-              5. Comments & Recommended Corrective Actions
+              Comments & Recommendations
             </h4>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Record overall compliance observations, inspector remarks, and mandatory corrective directives issued to the DBO.
+              Record overall compliance observations, officer remarks, and corrective directives issued to the DBO.
             </p>
           </div>
         </div>
-
-        {openExceptions.length > 0 && (
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold shrink-0">
-            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-            <span>{openExceptions.length} Open Exception{openExceptions.length === 1 ? '' : 's'} Pending</span>
-          </div>
-        )}
       </div>
 
       <div className="p-4 sm:p-6 space-y-6">
-        {/* Open Exceptions Notice Banner */}
-        {openExceptions.length > 0 && (
-          <div className="p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-2xl flex items-start gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <div className="text-xs text-amber-900 space-y-1">
-              <span className="font-bold">Audit Exceptions Identified:</span>
-              <p className="text-[11px] text-amber-800 leading-relaxed">
-                There {openExceptions.length === 1 ? 'is' : 'are'} <strong>{openExceptions.length} unresolved exception{openExceptions.length === 1 ? '' : 's'}</strong> logged in the Exception Register ({openExceptions.map(e => e.type).slice(0, 3).join(', ')}{openExceptions.length > 3 ? '...' : ''}). Ensure the Recommended Corrective Actions below specify mandatory steps to resolve each item.
-              </p>
-            </div>
-          </div>
-        )}
-
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left Column: Comments & Observations */}
           <div className="space-y-2">
@@ -103,7 +76,7 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
                 <MessageSquareQuote className="w-3.5 h-3.5 text-slate-500" />
                 <span>General Comments & Compliance Observations</span>
               </label>
-              <span className="text-[10px] text-slate-400 font-medium">Inspector Notes</span>
+              <span className="text-[10px] text-slate-400 font-medium">Officer Notes</span>
             </div>
             <textarea
               name="comments"
@@ -116,12 +89,12 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
             />
           </div>
 
-          {/* Right Column: Recommended Corrective Actions */}
+          {/* Right Column: Corrective Actions & Directives */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                 <FileCheck className="w-3.5 h-3.5 text-blue-600" />
-                <span>Recommended Corrective Actions & Directives</span>
+                <span>Corrective Actions & Directives</span>
               </label>
               <span className="text-[10px] text-blue-600 font-bold">Mandatory Directives</span>
             </div>
@@ -164,7 +137,7 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
           <div className="space-y-1.5">
             <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5 text-slate-500" />
-              <span>Target Remediation Due Date</span>
+              <span>Resolution Date</span>
             </label>
             <input
               type="date"

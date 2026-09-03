@@ -35,17 +35,13 @@ interface FieldChecklistComponentProps {
   onChange: (updated: Record<string, { status: FieldChecklistResultStatus; notes: string }>) => void;
   clientCategory?: string;
   readOnly?: boolean;
-  onLogException?: (item: { ref: string; title: string; source: string; status: string; notes: string }) => void;
-  registeredExceptionRefs?: string[];
 }
 
 export const FieldChecklistComponent: React.FC<FieldChecklistComponentProps> = ({
   value = {},
   onChange,
   clientCategory,
-  readOnly = false,
-  onLogException,
-  registeredExceptionRefs = []
+  readOnly = false
 }) => {
   const suggestedSectionId = useMemo(() => findSuggestedSectionId(clientCategory), [clientCategory]);
 
@@ -596,35 +592,6 @@ export const FieldChecklistComponent: React.FC<FieldChecklistComponentProps> = (
                                         : 'border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
                                     }`}
                                   />
-
-                                  {/* Interdependent Exception Register Bridge */}
-                                  {isExceptionOrDiscrepancy && onLogException && (
-                                    <div className="pt-1">
-                                      {registeredExceptionRefs?.includes(item.ref) ? (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                          <Check className="w-3 h-3 text-emerald-700" />
-                                          Recorded in Exception Register
-                                        </span>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          disabled={readOnly}
-                                          onClick={() => onLogException({
-                                            ref: item.ref,
-                                            title: item.dataItem || item.title,
-                                            source: item.primarySource,
-                                            status: currentVal.status,
-                                            notes: currentVal.notes
-                                          })}
-                                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 transition-all cursor-pointer shadow-2xs"
-                                          title="Click to automatically record this finding into the Exception Register below"
-                                        >
-                                          <ShieldAlert className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                                          <span>Record in Exception Register</span>
-                                        </button>
-                                      )}
-                                    </div>
-                                  )}
                                 </div>
                               </div>
                             </React.Fragment>

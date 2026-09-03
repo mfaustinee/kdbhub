@@ -38,7 +38,7 @@ export interface EnabledModules {
 export interface AuthoritySignature {
   id: string;
   name: string; // Assigned name of the authority/officer (e.g., "Officer John Doe", "Enock Langat")
-  title?: string; // Optional designation (e.g., "Compliance Officer", "Regional Inspector")
+  title?: string; // Optional designation (e.g., "Compliance Officer", "Regional Compliance Lead")
   signature: string; // Base64 data URL
   createdAt?: string;
   isDefault?: boolean;
@@ -496,8 +496,8 @@ export const STANDARD_EXCEPTION_TYPES: Array<{
 }> = [
   {
     type: 'Arrears',
-    definition: 'Outstanding statutory CSL levy arrears and compounding penalties identified from under-declaration or reconciliation',
-    example: 'Statutory arrears identified for settlement (e.g. Under-declared volume)'
+    definition: 'Outstanding CSL levy arrears and compounding penalties identified from under-declaration or reconciliation',
+    example: 'Levy arrears identified for settlement (e.g. Under-declared volume)'
   },
   {
     type: 'Missing record',
@@ -561,6 +561,7 @@ export type FieldChecklistResultStatus =
   | 'Available (Discrepancies)'
   | 'Not Available / Missing'
   | 'Not Applicable (N/A)'
+  | 'Not Applicable'
   | string;
 
 export interface FieldChecklistEntry {

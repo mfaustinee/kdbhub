@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
-import { QRCodeSVG } from 'qrcode.react';
 import { 
   ShieldCheck, 
   Clock, 
@@ -15,15 +14,12 @@ import {
   Lock, 
   Loader2, 
   Check,
-  QrCode,
-  Copy,
-  CheckCheck,
   Maximize2,
   Download
 } from 'lucide-react';
 import { DBService } from '../services/db';
 import { ValidationDraft } from '../types';
-import { generateValidationPdfDataUri } from '../src/utils/generateValidationPdf';
+import { generateValidationPdfBlobUrl } from '../src/utils/generateValidationPdf';
 
 export const DboSigningPortal: React.FC = () => {
   const { draftId: paramDraftId } = useParams<{ draftId: string }>();
@@ -39,7 +35,7 @@ export const DboSigningPortal: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Expiration countdown (10 minutes = 600s)
+  // Expiration countdown (5 minutes = 300s)
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [isExpired, setIsExpired] = useState(false);
   const [isAlreadySigned, setIsAlreadySigned] = useState(false);
@@ -62,10 +58,6 @@ export const DboSigningPortal: React.FC = () => {
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [showPdfModal, setShowPdfModal] = useState(false);
-
-  // QR Code Modal & Link Copy
-  const [showQrModal, setShowQrModal] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
 
   // Submitting
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -110,7 +102,7 @@ export const DboSigningPortal: React.FC = () => {
           setIsAlreadySigned(true);
         }
 
-        // Calculate Expiry (10-minute countdown)
+        // Calculate Expiry (5-minute countdown)
         let expiryTimestamp: number | null = null;
         if (expParam) {
           const parsed = Number(expParam);
@@ -136,8 +128,8 @@ export const DboSigningPortal: React.FC = () => {
             setRemainingSeconds(diffSeconds);
           }
         } else {
-          // If no expiry parameter provided, default to 10 minutes (600s) from load
-          setRemainingSeconds(600);
+          // If no expiry parameter provided, default to 5 minutes (300s) from load
+          setRemainingSeconds(300);
         }
       } catch (err: any) {
         console.error("Error loading draft for signing:", err);
@@ -154,7 +146,7 @@ export const DboSigningPortal: React.FC = () => {
     };
   }, [draftId, expParam]);
 
-  // Interval timer for 10-minute countdown
+  // Interval timer for 5-minute countdown
   useEffect(() => {
     if (remainingSeconds === null || isExpired || isSuccess || isAlreadySigned) return;
 
@@ -220,13 +212,13 @@ export const DboSigningPortal: React.FC = () => {
       const form = raw.formData || {};
       const previewPayload = {
         ...form,
-        confirmationName: confirmationName || form.confirmationName || draft.dboName,
-        designation: designation || form.designation || 'Dairy Business Operator',
+        confirmationName: confirmationName.trim() || form.confirmationName || draft.dboName,
+        designation: designation.trim() || form.designation || 'Dairy Business Operator',
         dboSignature: dboSignature || form.dboSignature || ''
       };
 
-      const pdfDataUri = await generateValidationPdfDataUri(previewPayload, raw.globalUnit || 'L');
-      setPdfPreviewUrl(pdfDataUri);
+      const pdfBlobUrl = await generateValidationPdfBlobUrl(previewPayload, raw.globalUnit || 'L');
+      setPdfPreviewUrl(pdfBlobUrl);
     } catch (e) {
       console.error("Failed to generate draft PDF preview:", e);
     } finally {
@@ -238,17 +230,17 @@ export const DboSigningPortal: React.FC = () => {
     e.preventDefault();
 
     if (isExpired) {
-      alert("This signing link has expired (10-minute security limit). Please request the compliance officer to generate a new signing link.");
+      alert("Please contact KDB for a new signing link.");
       return;
     }
 
     if (!confirmationName.trim()) {
-      alert("Please enter your full official name as Dairy Business Operator / authorized representative.");
+      alert("Full Name is mandatory. Please enter your official name.");
       return;
     }
 
     if (!designation.trim()) {
-      alert("Please enter your designation (e.g., Director, Owner, Manager).");
+      alert("Designation / Capacity is mandatory. Please enter your title or capacity.");
       return;
     }
 
@@ -260,12 +252,22 @@ export const DboSigningPortal: React.FC = () => {
     }
 
     if (!finalSignature) {
-      alert("Please provide your signature on the pad or upload a signature image.");
+      alert("DBO Signature is mandatory. Please draw or upload your signature before submitting.");
       return;
     }
 
-    if (!declarations.accurate || !declarations.awareness) {
-      alert("Please confirm the mandatory statutory declarations by checking the boxes.");
+    if (!declarations.accurate) {
+      alert("Mandatory Declaration: Please confirm the Accuracy of Information checkbox.");
+      return;
+    }
+
+    if (hasUnderDeclaration && !declarations.offense) {
+      alert("Mandatory Declaration: Please confirm the Compliance Agreement checkbox.");
+      return;
+    }
+
+    if (!declarations.awareness) {
+      alert("Mandatory Declaration: Please confirm the Premise Inspection Scope Disclosure checkbox.");
       return;
     }
 
@@ -316,18 +318,9 @@ export const DboSigningPortal: React.FC = () => {
     }
   };
 
-  const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
-
-  const handleCopyLink = () => {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(currentUrl);
-      setLinkCopied(true);
-      setTimeout(() => setLinkCopied(false), 2500);
-    }
-  };
-
   const raw = draft?.rawData || draft?.raw_data || {};
   const form = raw.formData || {};
+  const activeUnit = raw.globalUnit || form.globalUnit || (draft as any)?.globalUnit || 'L';
   const sales = Array.isArray(form.sales) ? form.sales : [];
   const nonCompliance = Array.isArray(form.nonCompliance) ? form.nonCompliance : [];
   const hasUnderDeclaration = sales.some((s: any) => (parseFloat(s.underDeclared) || 0) > 0) || nonCompliance.length > 0;
@@ -362,6 +355,25 @@ export const DboSigningPortal: React.FC = () => {
           >
             Retry Loading
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // If the link is expired, only show the security timeout banner
+  if (isExpired && !isSuccess && !isAlreadySigned) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white p-8 sm:p-10 rounded-3xl border border-rose-200 shadow-xl max-w-md w-full text-center space-y-5 animate-in fade-in zoom-in-95 duration-150">
+          <div className="w-16 h-16 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center mx-auto border border-rose-100 shadow-xs">
+            <AlertTriangle className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-black text-rose-950">Security Timeout: Session has expired</h2>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Please contact KDB for a new signing link.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -414,7 +426,7 @@ export const DboSigningPortal: React.FC = () => {
             </span>
             <h2 className="text-2xl font-black text-slate-900">Successfully Signed & Submitted!</h2>
             <p className="text-xs text-slate-500 leading-relaxed max-w-md mx-auto">
-              Thank you, <strong>{confirmationName}</strong>. Your confirmation and signature have been securely logged. The Kenya Dairy Board compliance officer has been notified to complete the final review and cloud sync.
+              Thank you, <strong>{confirmationName}</strong>. Your confirmation and signature have been securely logged. Final review in progress.
             </p>
           </div>
 
@@ -476,24 +488,9 @@ export const DboSigningPortal: React.FC = () => {
             </div>
           </div>
 
-          {/* QR Code & 10-Minute Countdown Badge */}
+          {/* 10-Minute Countdown Badge */}
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowQrModal(true)}
-              className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl border border-slate-200 text-xs font-bold transition-all cursor-pointer"
-              title="Show Scannable QR Code"
-            >
-              <QrCode className="w-4 h-4 text-slate-700" />
-              <span className="hidden sm:inline">QR Code</span>
-            </button>
-
-            {isExpired ? (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-100 text-rose-700 rounded-xl border border-rose-200 text-xs font-black">
-                <AlertTriangle className="w-4 h-4" />
-                <span>Link Expired (10m)</span>
-              </div>
-            ) : remainingSeconds !== null ? (
+            {remainingSeconds !== null ? (
               <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-900 rounded-xl border border-amber-200 shadow-2xs">
                 <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
                 <div className="text-right">
@@ -508,39 +505,17 @@ export const DboSigningPortal: React.FC = () => {
 
       {/* Main Content Container */}
       <main className="max-w-4xl mx-auto px-4 pt-6 space-y-6">
-        {/* Expiration Notice if Expired */}
-        {isExpired && (
-          <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl flex items-start gap-3 text-rose-800">
-            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
-            <div className="space-y-1">
-              <h4 className="font-bold text-sm">Security Timeout: This 10-minute signing session has expired</h4>
-              <p className="text-xs text-rose-700 leading-relaxed">
-                For regulatory and data integrity compliance, remote DBO signing links remain active for exactly 10 minutes after issuance. 
-                Please contact the Kenya Dairy Board compliance officer to generate a refreshed 10-minute signing link.
-              </p>
-            </div>
-          </div>
-        )}
-
         {/* Premise & Audit Overview Card */}
         <section className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
             <div>
-              <span className="text-[10px] font-black tracking-widest text-slate-400 uppercase">Inspection Overview</span>
+              <span className="text-[10px] font-black tracking-widest text-slate-400 uppercase">Validation and Reconciliation Overview</span>
               <h2 className="text-xl font-black text-slate-900">{draft.premiseName || form.premiseName || 'Inspection Draft'}</h2>
               <p className="text-xs text-slate-500 font-medium">
                 Permit Number: <strong className="text-slate-800 font-mono">{draft.permitNo || form.permitNo || 'N/A'}</strong>
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setShowQrModal(true)}
-                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs"
-              >
-                <QrCode className="w-4 h-4" />
-                <span>QR Code</span>
-              </button>
               <button
                 type="button"
                 onClick={handleOpenPdfPreview}
@@ -554,7 +529,7 @@ export const DboSigningPortal: React.FC = () => {
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
-              <div className="text-[10px] font-bold text-slate-400 uppercase">DBO Client</div>
+              <div className="text-[10px] font-bold text-slate-400 uppercase">DBO Name</div>
               <div className="text-xs font-bold text-slate-800 truncate mt-0.5">{draft.dboName || form.dboName || 'N/A'}</div>
             </div>
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
@@ -580,9 +555,9 @@ export const DboSigningPortal: React.FC = () => {
                   <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
                     <tr>
                       <th className="p-2.5">Period</th>
-                      <th className="p-2.5">Declared Qty</th>
-                      <th className="p-2.5">Witnessed Qty</th>
-                      <th className="p-2.5">Under-Declared</th>
+                      <th className="p-2.5">Declared Qty ({activeUnit})</th>
+                      <th className="p-2.5">Witnessed Qty ({activeUnit})</th>
+                      <th className="p-2.5">Under-Declared ({activeUnit})</th>
                       <th className="p-2.5">Selling Price</th>
                     </tr>
                   </thead>
@@ -590,13 +565,13 @@ export const DboSigningPortal: React.FC = () => {
                     {sales.map((sale: any, idx: number) => (
                       <tr key={idx} className="hover:bg-slate-50/50">
                         <td className="p-2.5 font-bold text-slate-800">{sale.month} {sale.year}</td>
-                        <td className="p-2.5">{sale.qtyDeclared || '0'} L</td>
-                        <td className="p-2.5 font-semibold text-blue-700">{sale.verifiedQty || '0'} L</td>
+                        <td className="p-2.5">{sale.qtyDeclared || '0'} {activeUnit}</td>
+                        <td className="p-2.5 font-semibold text-blue-700">{sale.verifiedQty || '0'} {activeUnit}</td>
                         <td className="p-2.5 font-bold">
                           {(parseFloat(sale.underDeclared) || 0) > 0 ? (
-                            <span className="text-rose-600 font-bold">+{sale.underDeclared} L</span>
+                            <span className="text-rose-600 font-bold">+{sale.underDeclared} {activeUnit}</span>
                           ) : (
-                            <span className="text-emerald-600">0 L</span>
+                            <span className="text-emerald-600">0 {activeUnit}</span>
                           )}
                         </td>
                         <td className="p-2.5">Ksh {sale.sellingPrice || '0'}</td>
@@ -616,7 +591,7 @@ export const DboSigningPortal: React.FC = () => {
                 <span>Under-Declaration Compliance Commitment Recorded</span>
               </div>
               <p className="text-[11px] text-rose-700">
-                The compliance inspection documented an under-declaration penalty totaling{' '}
+                The compliance inspection documented an under-declaration Levy + penalty totaling{' '}
                 <strong>
                   Ksh {nonCompliance.reduce((acc: number, nc: any) => acc + (parseFloat(nc.amount) || 0), 0).toLocaleString()}
                 </strong>.
@@ -642,9 +617,9 @@ export const DboSigningPortal: React.FC = () => {
         <form onSubmit={handleSubmitSignature} className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
           <div className="border-b border-slate-100 pb-4">
             <span className="text-[10px] font-black tracking-widest text-emerald-600 uppercase">Operator Affirmation</span>
-            <h2 className="text-xl font-black text-slate-900">Statutory Declarations & Signature</h2>
+            <h2 className="text-xl font-black text-slate-900">Declarations & Signature</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Please review the statutory affirmations below, provide your official name and title, and execute your signature.
+              All fields below are mandatory. Please review the compliance affirmations, enter your official name and designation, and execute your signature.
             </p>
           </div>
 
@@ -660,7 +635,7 @@ export const DboSigningPortal: React.FC = () => {
                 className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
               />
               <span className="text-xs text-slate-700 leading-relaxed font-medium">
-                <strong>1. Accuracy of Information:</strong> I/We confirm that the information provided in this validation form is true and accurate to the best of my/our knowledge.
+                <strong>1. Accuracy of Information: <span className="text-rose-500">*</span></strong> I/We confirm that the information provided in this validation form is true and accurate to the best of my/our knowledge.
               </span>
             </label>
 
@@ -675,7 +650,7 @@ export const DboSigningPortal: React.FC = () => {
                   className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
                 />
                 <span className="text-xs text-slate-700 leading-relaxed font-medium">
-                  <strong>2. Statutory Compliance Agreement:</strong> I/We understand that under-declaration of milk volumes is an offense under the Dairy Industry Act and agree to pay calculated under-declared volumes and monies within specified periods.
+                  <strong>2. Compliance Agreement: <span className="text-rose-500">*</span></strong> I/We understand that under-declaration of milk volumes is an offense under the Dairy Industry Act and agree to pay calculated under-declared volumes and monies within specified periods.
                 </span>
               </label>
             )}
@@ -690,17 +665,17 @@ export const DboSigningPortal: React.FC = () => {
                 className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
               />
               <span className="text-xs text-slate-700 leading-relaxed font-medium">
-                <strong>3. Premise Inspection Scope Disclosure:</strong> I/We confirm that I/We have been informed, presented with, read and understood the KDB Premise Inspection Scope Disclosure, including legal obligations to maintain records and traceability under the Dairy Industry Act (Cap 336), Laws of Kenya.
+                <strong>3. Premise Inspection Scope Disclosure: <span className="text-rose-500">*</span></strong> I/We confirm that I/We have been informed, presented with, read and understood the KDB Premise Inspection Scope Disclosure, including legal obligations to maintain records and traceability under the Dairy Industry Act (Cap 336), Laws of Kenya.
               </span>
             </label>
           </div>
 
-          {/* DBO Name and Designation (Leave blank for manual entry) */}
+          {/* DBO Name and Designation (Mandatory manual entry) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                <span>Full Name of DBO / Authorized Representative <span className="text-rose-500">*</span></span>
-                <span className="text-[10px] text-slate-400 font-normal lowercase">manual entry</span>
+                <span>Name of DBO Representative <span className="text-rose-500">*</span></span>
+                <span className="text-[10px] text-rose-500 font-bold uppercase">Required</span>
               </label>
               <input
                 type="text"
@@ -714,8 +689,9 @@ export const DboSigningPortal: React.FC = () => {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Designation / Capacity <span className="text-rose-500">*</span>
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+                <span>Designation / Capacity/Role/Position <span className="text-rose-500">*</span></span>
+                <span className="text-[10px] text-rose-500 font-bold uppercase">Required</span>
               </label>
               <input
                 type="text"
@@ -729,11 +705,12 @@ export const DboSigningPortal: React.FC = () => {
             </div>
           </div>
 
-          {/* Signature Canvas Section */}
+          {/* Signature Canvas Section (Mandatory) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                DBO Signature <span className="text-rose-500">*</span>
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <span>DBO Signature <span className="text-rose-500">*</span></span>
+                <span className="text-[10px] text-rose-500 font-bold uppercase">(Required)</span>
               </label>
               <div className="flex items-center gap-3 text-xs">
                 {dboSignature && (
@@ -781,7 +758,7 @@ export const DboSigningPortal: React.FC = () => {
                     }}
                   />
                   <div className="flex items-center justify-between px-2 pt-2 text-[11px] text-slate-400 border-t border-slate-100">
-                    <span>Draw with your finger or stylus above</span>
+                    <span>Draw your signature with finger or mouse above</span>
                     <button
                       type="button"
                       onClick={handleSaveDrawnSignature}
@@ -829,7 +806,7 @@ export const DboSigningPortal: React.FC = () => {
               ) : isExpired ? (
                 <>
                   <Lock className="w-4 h-4" />
-                  <span>Link Expired — Request New Link</span>
+                  <span>Link Expired</span>
                 </>
               ) : (
                 <>
@@ -845,76 +822,6 @@ export const DboSigningPortal: React.FC = () => {
         </form>
       </main>
 
-      {/* Scannable QR Code Modal */}
-      {showQrModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 text-center space-y-4 border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div className="flex items-center gap-2 text-left">
-                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                  <QrCode className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-extrabold text-slate-900">Scannable QR Code</h3>
-                  <p className="text-[10px] text-slate-500">Scan with camera to open on mobile</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowQrModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
-              <QRCodeSVG 
-                value={currentUrl} 
-                size={180}
-                level="M"
-                includeMargin={true}
-                className="rounded-xl border border-slate-200 bg-white p-2 shadow-xs"
-              />
-              <span className="text-[10px] text-slate-400 mt-2 font-mono break-all line-clamp-1">
-                {currentUrl}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleCopyLink}
-                className={`w-full py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs ${
-                  linkCopied
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-900 hover:bg-black text-white'
-                }`}
-              >
-                {linkCopied ? (
-                  <>
-                    <CheckCheck className="w-4 h-4" />
-                    <span>Link Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4" />
-                    <span>Copy Link</span>
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowQrModal(false)}
-                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* PDF Modal Preview (Entire Multi-Page Document) */}
       {showPdfModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
@@ -924,7 +831,7 @@ export const DboSigningPortal: React.FC = () => {
                 <FileText className="w-5 h-5 text-emerald-600" />
                 <div>
                   <h3 className="text-sm font-extrabold text-slate-900">Official Inspection Form Draft PDF</h3>
-                  <p className="text-[10px] text-slate-500">Complete multi-page statutory document</p>
+                  <p className="text-[10px] text-slate-500">Complete multi-page validation document</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -967,9 +874,9 @@ export const DboSigningPortal: React.FC = () => {
                 </div>
               ) : pdfPreviewUrl ? (
                 <iframe
-                  src={`${pdfPreviewUrl}#toolbar=1&navpanes=0&scrollbar=1&view=FitH`}
+                  src={pdfPreviewUrl}
                   title="PDF Preview"
-                  className="w-full h-full border-none"
+                  className="w-full h-full border-none bg-white"
                 />
               ) : (
                 <div className="h-full flex items-center justify-center text-xs text-slate-500">
@@ -978,10 +885,7 @@ export const DboSigningPortal: React.FC = () => {
               )}
             </div>
 
-            <div className="px-4 sm:px-6 py-2.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
-              <span className="text-[11px] text-slate-500">
-                Kenya Dairy Board Official Inspection Document • Dairy Industry Act (Cap 336)
-              </span>
+            <div className="px-4 sm:px-6 py-2.5 border-t border-slate-100 bg-slate-50 flex items-center justify-end">
               <button
                 type="button"
                 onClick={() => setShowPdfModal(false)}

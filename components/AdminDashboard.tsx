@@ -1067,7 +1067,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   )}
                 </div>
-                <p className="text-slate-400 font-medium text-[10px] mt-0.5">Operational control for Kericho & Region levy compliance.</p>
+                <p className="text-slate-400 font-medium text-[10px] mt-0.5">Operational control for levy compliance.</p>
               </div>
             )}
             <button
@@ -1728,7 +1728,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               type="text"
                               value={complaintAssignedTo}
                               onChange={(e) => setComplaintAssignedTo(e.target.value)}
-                              placeholder="e.g. Inspectorate Department"
+                              placeholder="e.g. Compliance Department"
                               className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
                             />
                           </div>
@@ -2808,7 +2808,7 @@ CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHE
                             type="text"
                             value={newSigTitle}
                             onChange={(e) => setNewSigTitle(e.target.value)}
-                            placeholder="e.g. Compliance Officer / Inspector"
+                            placeholder="e.g. Compliance Officer"
                             className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-xs"
                           />
                         </div>

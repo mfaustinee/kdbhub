@@ -264,7 +264,8 @@ export const COMMON_INSTITUTIONAL_CHECKLIST_ITEMS: FieldChecklistItem[] = [
       'No Duplicates Identified',
       'Duplicate Candidates Identified',
       'Review Required',
-      'Unable to Determine'
+      'Unable to Determine',
+      'Not Applicable'
     ]
   },
   {
@@ -280,7 +281,8 @@ export const COMMON_INSTITUTIONAL_CHECKLIST_ITEMS: FieldChecklistItem[] = [
       'Fully Supported',
       'Partially Supported (Exceptions)',
       'Not Supported',
-      'Not Tested / Unable to Verify'
+      'Not Tested / Unable to Verify',
+      'Not Applicable'
     ]
   },
   {
@@ -296,7 +298,8 @@ export const COMMON_INSTITUTIONAL_CHECKLIST_ITEMS: FieldChecklistItem[] = [
       'Fully Traced',
       'Partially Traced (Exceptions)',
       'Not Traced',
-      'Not Tested / Unable to Verify'
+      'Not Tested / Unable to Verify',
+      'Not Applicable'
     ]
   },
 
@@ -647,11 +650,11 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
   {
     ref: 'CP17',
     subGroup: 'Quality & Payment Records',
-    dataItem: 'Statutory Deductions & Farmer Payout Statements',
+    dataItem: 'Deductions & Farmer Payout Statements',
     primarySource: 'Payout Statements & Deduction Records',
     validationTest: 'Reconcile monthly farmer payout schedules, itemized deductions (transport, feed, advances), and farm-gate net payouts.',
     evidenceDetail: 'Gross payout, deductions, net payment, payment date',
-    title: 'Statutory Deductions & Farmer Payout Statements',
+    title: 'Deductions & Farmer Payout Statements',
     description: 'Reconcile monthly farmer payout schedules, itemized deductions (transport, feed, advances), and farm-gate net payouts.',
     statusOptions: [
       'Complete & Compliant',
@@ -1673,10 +1676,10 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     subGroup: 'Producer / Aggregator Payments & Contracts',
     dataItem: 'Producer / Aggregator Payment & Contract Audit',
     primarySource: 'Contracts',
-    validationTest: 'Sample contracts and payout files for compliance with minimum payout prices, statutory timelines, and transparent deductions.',
+    validationTest: 'Sample contracts and payout files for compliance with minimum payout prices, transparent timelines, and transparent deductions.',
     evidenceDetail: 'producer/aggregator contracts, payment terms, quantities purchased, agreed prices, actual supplier payments, reconciliation between contractual terms and actual payments',
     title: 'Producer / Aggregator Payment & Contract Audit',
-    description: 'Sample contracts and payout files for compliance with minimum payout prices, statutory timelines, and transparent deductions.',
+    description: 'Sample contracts and payout files for compliance with minimum payout prices, transparent timelines, and transparent deductions.',
     statusOptions: [
       'Complete & Compliant',
       'Discrepancies / Non-Compliance Identified',
@@ -1801,7 +1804,7 @@ export const FIELD_CHECKLIST_SECTIONS: FieldChecklistSection[] = [
   {
     id: 'sec-common-institutional',
     sectionNumber: 1,
-    title: 'COMMON INSTITUTIONAL AREAS',
+    title: 'Validation & reconciliation areas',
     shortName: 'Common Areas',
     focus: 'Institutional reconciliation tests across Permit & Regulatory Compliance, Transaction & Data Integrity, Record Quality & Controls, and Data Extraction & Historical Issues.',
     categoryKeywords: ['all', 'common', 'institutional', 'general', 'universal'],
@@ -1812,7 +1815,7 @@ export const FIELD_CHECKLIST_SECTIONS: FieldChecklistSection[] = [
     sectionNumber: 2,
     title: 'COOLING PLANT',
     shortName: 'Cooling Plant',
-    focus: 'Regulatory classification & fee-band capacity, producer register & contracts, intake vs bulk dispatch mass balance, receiving-side confirmation, quality-based payments (fat/SNF), statutory farmer payouts, and measurement calibration controls.',
+    focus: 'Regulatory classification & fee-band capacity, producer register & contracts, intake vs bulk dispatch mass balance, receiving-side confirmation, quality-based payments (fat/SNF), timely farmer payouts, and measurement calibration controls.',
     categoryKeywords: ['cooling plant', 'cooling', 'plant', 'collection center', 'cooperative', 'chilling', 'cp'],
     items: COOLING_PLANT_CHECKLIST_ITEMS
   },
@@ -1949,7 +1952,7 @@ export const getActiveChecklistSections = (clientCategory?: string): FieldCheckl
       ...commonSec,
       id: 'sec-common-institutional-p1',
       sectionNumber: 1,
-      title: `Validation and Reconciliation Areas (${categoryLabel})`,
+      title: `Validation & reconciliation areas (${categoryLabel})`,
       shortName: 'Section 1',
       focus: '',
       items: part1Items

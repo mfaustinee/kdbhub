@@ -822,22 +822,6 @@ const App: React.FC = () => {
           } />
         </Routes>
       </main>
-      
-      <footer className="py-6 border-t border-slate-100 bg-white/80 text-center flex flex-col sm:flex-row items-center justify-between px-6 max-w-7xl mx-auto gap-4">
-        <p className="text-xs text-slate-400 font-medium">
-          Kenya Dairy Board Regulatory & Compliance Portal
-        </p>
-        <button
-          type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-full transition-all cursor-pointer shadow-xs"
-          id="footer-back-to-top-btn"
-          title="Scroll to top of page"
-        >
-          <ArrowUp className="w-3.5 h-3.5" />
-          <span>Back to Top</span>
-        </button>
-      </footer>
 
       <ScrollToTopButton />
     </div>

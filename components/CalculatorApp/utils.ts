@@ -9,7 +9,7 @@ export const MONTH_NAMES = [
 ];
 
 /**
- * Formats Month- Year for statutory payment due dates (e.g. "Sept- 2026", "Oct- 2026")
+ * Formats Month- Year for agreed payment due dates (e.g. "Sept- 2026", "Oct- 2026")
  */
 export const formatPaymentMonthYear = (date: Date = new Date()): string => {
   const monthAbbrs = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];

@@ -230,7 +230,7 @@ const ComplaintPDFContent: React.FC<ComplaintPDFContentProps> = ({ complaint, id
           <div className="p-4 bg-red-50/40 rounded-lg border border-red-200 text-[11pt] space-y-2">
             <div className="grid grid-cols-3 gap-4 text-xs">
               <p><strong>Category Code:</strong> {complaint.complaintCategoryCode || 'KDB/COMP/' + complaint.id.slice(-4)}</p>
-              <p><strong>Assigned Officer/Dept:</strong> {complaint.assignedTo || complaint.receivedBy || 'Inspectorate Unit'}</p>
+              <p><strong>Assigned Officer/Dept:</strong> {complaint.assignedTo || complaint.receivedBy || 'Compliance Unit'}</p>
               <p><strong>Action Date:</strong> {complaint.actionDate || complaint.dateClosed || formattedDate}</p>
             </div>
             {complaint.investigationFindings && (
@@ -265,7 +265,7 @@ const ComplaintPDFContent: React.FC<ComplaintPDFContentProps> = ({ complaint, id
               FOR: KENYA DAIRY BOARD
             </p>
             <div className="space-y-1.5 min-h-[100px]">
-              <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Name:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{complaint.officialName || 'Authorized KDB Inspector'}</span></p>
+              <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Name:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{complaint.officialName || 'Authorized KDB Compliance Officer'}</span></p>
               <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Title:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{complaint.officialTitle || 'Compliance Officer'}</span></p>
               <div className="py-1 h-16 flex items-center">
                 {complaint.officialSignature ? (

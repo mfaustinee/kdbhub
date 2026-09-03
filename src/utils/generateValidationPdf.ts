@@ -1,8 +1,11 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { FIELD_CHECKLIST_SECTIONS } from '../../components/fieldChecklistData';
+import { getActiveChecklistItems } from '../../components/fieldChecklistData';
 
 const KDB_LOGO_URL = "https://odolazcniphinupgyaqo.supabase.co/storage/v1/object/sign/Pdf%20logo/KDB-LOGOx100h.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV8zNDNkNjNiOC1jY2RlLTQwYTgtOGVmMS1lN2UyY2NjNzQ0NjUiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJQZGYgbG9nby9LREItTE9HT3gxMDBoLnBuZyIsImlhdCI6MTc3NDQwODY3MywiZXhwIjoyMDg5NzY4NjczfQ.r_8Gre72kWfCNdIGpiNEePogU0ieuPOJYqAyvqJ7YsQ";
+
+// KDB Official Emblem Navy Blue
+const KDB_NAVY_BLUE: [number, number, number] = [12, 53, 106];
 
 let cachedLogoImage: HTMLImageElement | null = null;
 let logoFetchPromise: Promise<HTMLImageElement | null> | null = null;
@@ -33,7 +36,7 @@ const getCachedLogo = async (): Promise<HTMLImageElement | null> => {
   return logoFetchPromise;
 };
 
-export const generateValidationPdfDataUri = async (data: any, globalUnit: string = 'L'): Promise<string> => {
+export const generateValidationPdfDoc = async (data: any, globalUnit: string = 'L'): Promise<jsPDF> => {
   const doc = new jsPDF();
   let currentY = 130;
 
@@ -90,10 +93,10 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
   doc.line(45, 47, 165, 47);
   doc.setFont("helvetica", "normal");
 
-  // SECTION 1: General Information
+  // SECTION: General Information (Unnumbered)
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("1. General Information:", 20, 58);
+  doc.text("General Information", 20, 58);
   doc.setFont("helvetica", "normal");
 
   doc.setFontSize(9);
@@ -114,113 +117,73 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
 
   currentY = 134;
 
-  // SECTION 2: Records & Traceability
+  // SECTION: Records & Traceability (Unnumbered)
   checkPageBreak(35);
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("2. Records & Traceability:", 20, currentY);
+  doc.text("Records & Traceability", 20, currentY);
   doc.setFont("helvetica", "normal");
+
+  const traceabilityDisplay = data.traceability === 'Yes' || data.traceability === 'No'
+    ? data.traceability
+    : 'See records/result status below';
 
   autoTable(doc, {
     startY: currentY + 4,
     head: [['Detail', 'Value']],
     body: [
-      ['Records & Traceability Status', data.traceability || 'No'],
+      ['Records & Traceability Status', { content: traceabilityDisplay, styles: { fontStyle: 'italic' } }],
       ['Nature of Produce?', Array.isArray(data.natureOfProduce) ? data.natureOfProduce.join(', ') : (data.natureOfProduce || 'Raw Milk')],
       ['Source', data.source || 'Direct from Farmers'],
     ],
     styles: { fontSize: 8 },
-    headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
+    headStyles: { fillColor: KDB_NAVY_BLUE, textColor: 255, fontStyle: 'bold' }
   });
   currentY = (doc as any).lastAutoTable.finalY + 8;
 
-  // Optional Field Records Checklist (rendered when checklist items are evaluated)
+  // Continuous Field Records Checklist: CA01–CA05, Target permit items, CA06–CA13
+  // Continuous table format matching the app; removed validation test and primary source and evidence
   if (data.fieldChecklist && Object.keys(data.fieldChecklist).length > 0) {
-    FIELD_CHECKLIST_SECTIONS.forEach(sec => {
-      const secEvaluatedItems: Array<[string, string, string, string, string]> = [];
-      sec.items.forEach(item => {
-        const entry = data.fieldChecklist?.[item.ref];
-        if (entry && (entry.status || (entry.notes && entry.notes.trim() !== ''))) {
-          const subGroupLabel = item.subGroup ? `[${item.subGroup}]\n` : '';
-          secEvaluatedItems.push([
-            item.ref,
-            `${subGroupLabel}${item.dataItem || item.title}\n${item.validationTest || item.description}`,
-            `${item.primarySource || '-'}\n[Evidence: ${item.evidenceDetail || '-'}]`,
-            entry.status || 'Evaluated',
-            entry.notes || '-'
-          ]);
+    const activeItems = getActiveChecklistItems(data.category);
+    const evaluatedRows: Array<[string, string, string, string]> = [];
+
+    activeItems.forEach(item => {
+      const entry = data.fieldChecklist?.[item.ref];
+      if (entry && (entry.status || (entry.notes && entry.notes.trim() !== ''))) {
+        const subGroupPrefix = item.subGroup ? `[${item.subGroup}] ` : '';
+        evaluatedRows.push([
+          item.ref,
+          `${subGroupPrefix}${item.dataItem || item.title}`,
+          entry.status || 'Evaluated',
+          entry.notes || '-'
+        ]);
+      }
+    });
+
+    if (evaluatedRows.length > 0) {
+      checkPageBreak(30);
+      autoTable(doc, {
+        startY: currentY,
+        head: [['Ref', 'Operational Area / Data Item', 'Record/Result Status', 'Observations & Notes']],
+        body: evaluatedRows,
+        styles: { fontSize: 7, cellPadding: 2.5 },
+        headStyles: { fillColor: KDB_NAVY_BLUE, textColor: 255, fontStyle: 'bold' },
+        columnStyles: {
+          0: { cellWidth: 16, fontStyle: 'bold' },
+          1: { cellWidth: 74 },
+          2: { cellWidth: 42 },
+          3: { cellWidth: 44 }
         }
       });
-
-      if (secEvaluatedItems.length > 0) {
-        checkPageBreak(40);
-        doc.setFontSize(10);
-        doc.setFont("helvetica", "bold");
-        const rangeLabel = sec.items.length > 0 ? ` (${sec.items[0]?.ref} – ${sec.items[sec.items.length - 1]?.ref})` : '';
-        doc.text(`Section ${sec.sectionNumber}: ${sec.title} Checklist & Reconciliation${rangeLabel}:`, 20, currentY);
-        doc.setFont("helvetica", "normal");
-
-        autoTable(doc, {
-          startY: currentY + 4,
-          head: [['Ref', 'Data Item & Validation Test', 'Primary Source & Evidence', 'Record/Result Status', 'Observations & Notes']],
-          body: secEvaluatedItems,
-          styles: { fontSize: 7, cellPadding: 2 },
-          headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' },
-          columnStyles: {
-            0: { cellWidth: 14, fontStyle: 'bold' },
-            1: { cellWidth: 62 },
-            2: { cellWidth: 42 },
-            3: { cellWidth: 30 },
-            4: { cellWidth: 27 }
-          }
-        });
-        currentY = (doc as any).lastAutoTable.finalY + 8;
-      }
-    });
+      currentY = (doc as any).lastAutoTable.finalY + 8;
+    }
   }
 
-  // SECTION 2(a): Exception Register Table
-  if (Array.isArray(data.exceptionRegister) && data.exceptionRegister.length > 0) {
-    checkPageBreak(40);
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "bold");
-    doc.text("2(a). Exception Register (Discrepancies & Mismatches Tracked):", 20, currentY);
-    doc.setFont("helvetica", "normal");
-
-    autoTable(doc, {
-      startY: currentY + 4,
-      head: [['Type', 'Definition', 'Example', 'Source', 'Owner', 'Due Date', 'Resolution Evidence', 'Status']],
-      body: data.exceptionRegister.map((exc: any) => [
-        exc.type || '-',
-        exc.definition || '-',
-        exc.example || '-',
-        exc.source || '-',
-        exc.owner || '-',
-        exc.dueDate || '-',
-        exc.resolutionEvidence || '-',
-        exc.status || 'Open'
-      ]),
-      styles: { fontSize: 7, cellPadding: 2 },
-      headStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold' },
-      columnStyles: {
-        0: { cellWidth: 22, fontStyle: 'bold' },
-        1: { cellWidth: 32 },
-        2: { cellWidth: 25 },
-        3: { cellWidth: 22 },
-        4: { cellWidth: 20 },
-        5: { cellWidth: 18 },
-        6: { cellWidth: 24 },
-        7: { cellWidth: 12, fontStyle: 'bold' }
-      }
-    });
-    currentY = (doc as any).lastAutoTable.finalY + 8;
-  }
-
-  // SECTION 2 (b): Volume & Sales Data
+  // SECTION: Volume & Sales Data (Unnumbered)
   checkPageBreak(35);
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("2 (b). Volume & Sales Data:", 20, currentY);
+  doc.text("Volume & Sales Data", 20, currentY);
   doc.setFont("helvetica", "normal");
   currentY += 2;
 
@@ -243,36 +206,53 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
         formatNum(i.avgVolPerDay)
       ]),
       styles: { fontSize: 8 },
-      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
+      headStyles: { fillColor: KDB_NAVY_BLUE, textColor: 255, fontStyle: 'bold' }
     });
     currentY = (doc as any).lastAutoTable.finalY + 8;
   }
 
   // Sales Table
   const sales = Array.isArray(data.sales) ? data.sales : [];
+  const isBranchFacility = Boolean(data.isBranchFacility || (data.branch && data.branch.toLowerCase().includes('branch')));
+
   if (data.hasLocalSales !== false && sales.length > 0) {
     checkPageBreak(25);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Local Sales Data", 20, currentY + 2);
+    doc.text(isBranchFacility ? "Branch Witnessed Quantity Data" : "Local Sales Data", 20, currentY + 2);
     doc.setFont("helvetica", "normal");
 
-    autoTable(doc, {
-      startY: currentY + 5,
-      head: [['Month/Year', `Declared (${globalUnit})`, `Witnessed (${globalUnit})`, `Projected (${globalUnit})`, `Under Declared (${globalUnit})`, 'Buying Price (Kshs)', 'Selling Price (Kshs)', `Avg Vol/Day (${globalUnit}/Day)`]],
-      body: sales.map((s: any) => [
-        `${s.month} ${s.year}`, 
-        formatNum(s.qtyDeclared || '0'), 
-        formatNum(s.verifiedQty || '0'), 
-        formatNum(s.projectedQty || '0'), 
-        formatNum(s.underDeclared || '0'), 
-        formatNum(s.buyingPrice || '0'), 
-        formatNum(s.sellingPrice || '0'), 
-        formatNum(s.avgVolPerDay || '0')
-      ]),
-      styles: { fontSize: 7 },
-      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
-    });
+    if (isBranchFacility) {
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Month/Year', `Witnessed Quantity (${globalUnit})`, 'Selling Price (Kshs)', `Avg Vol/Day (${globalUnit}/Day)`]],
+        body: sales.map((s: any) => [
+          `${s.month} ${s.year}`, 
+          formatNum(s.verifiedQty || '0'), 
+          formatNum(s.sellingPrice || '0'), 
+          formatNum(s.avgVolPerDay || '0')
+        ]),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: KDB_NAVY_BLUE, textColor: 255, fontStyle: 'bold' }
+      });
+    } else {
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Month/Year', `Declared (${globalUnit})`, `Witnessed (${globalUnit})`, `Projected (${globalUnit})`, `Under Declared (${globalUnit})`, 'Buying Price (Kshs)', 'Selling Price (Kshs)', `Avg Vol/Day (${globalUnit}/Day)`]],
+        body: sales.map((s: any) => [
+          `${s.month} ${s.year}`, 
+          formatNum(s.qtyDeclared || '0'), 
+          formatNum(s.verifiedQty || '0'), 
+          formatNum(s.projectedQty || '0'), 
+          formatNum(s.underDeclared || '0'), 
+          formatNum(s.buyingPrice || '0'), 
+          formatNum(s.sellingPrice || '0'), 
+          formatNum(s.avgVolPerDay || '0')
+        ]),
+        styles: { fontSize: 7 },
+        headStyles: { fillColor: KDB_NAVY_BLUE, textColor: 255, fontStyle: 'bold' }
+      });
+    }
     currentY = (doc as any).lastAutoTable.finalY + 8;
   }
 
@@ -330,21 +310,27 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
     });
   }
 
-  // SECTION 3: Compliance & Confirmation -> Under-Declaration & Statutory CSL Arrears Schedule
+  // SECTION: Compliance & Confirmation -> Under-Declaration & Settlement Schedule
   const nonCompliance = Array.isArray(data.nonCompliance) ? data.nonCompliance : [];
   
   checkPageBreak(35);
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("3. Compliance & Confirmation:", 20, currentY);
+  doc.text("Compliance & Confirmation", 20, currentY);
   doc.setFont("helvetica", "normal");
   currentY += 2;
 
   checkPageBreak(25);
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
-  doc.text("Under-Declaration & Statutory CSL Arrears Schedule", 20, currentY + 2);
+  doc.text("Under-Declaration & Settlement Schedule", 20, currentY + 2);
   doc.setFont("helvetica", "normal");
+
+  // Calculate validity date (end of current month)
+  const now = new Date();
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const validityDateStr = lastDay.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  const validityStatement = `Validity: Settlement calculation valid till ${validityDateStr}; figures subject to recalculation thereafter.`;
 
   if (nonCompliance.length === 0) {
     doc.setFontSize(9);
@@ -360,7 +346,7 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
 
     autoTable(doc, {
       startY: currentY + 5,
-      head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Recalculated Amount (Kshs)', 'Month/Year to Pay', 'MPESA REF']],
+      head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Recalculated Amount (Kshs)', 'Agreed Due Date', 'MPESA REF']],
       body: [
         ...nonCompliance.map((nc: any) => [
           nc.month || '', 
@@ -370,7 +356,7 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
           nc.mpesaRef || ''
         ]),
         [
-          { content: 'TOTAL', styles: { fontStyle: 'bold' } }, 
+          { content: 'TOTAL SETTLEMENT ARREARS', styles: { fontStyle: 'bold' } }, 
           '', 
           { content: totalPenalty.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
           '', 
@@ -378,23 +364,32 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
         ]
       ],
       styles: { fontSize: 8 },
-      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontStyle: 'bold' }
+      headStyles: { fillColor: KDB_NAVY_BLUE, textColor: 255, fontStyle: 'bold' }
     });
-    currentY = (doc as any).lastAutoTable.finalY + 8;
+    currentY = (doc as any).lastAutoTable.finalY + 3;
+
+    // Appended validity statement
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(60, 60, 60);
+    doc.text(`* ${validityStatement}`, 20, currentY + 3);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont("helvetica", "normal");
+    currentY += 8;
   }
 
-  // SECTION 4: Comments & Recommended Corrective Actions
+  // SECTION: Comments & Recommendations (Unnumbered)
   checkPageBreak(30);
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("4. Comments & Recommended Corrective Actions:", 20, currentY);
+  doc.text("Comments & Recommendations", 20, currentY);
   doc.setFont("helvetica", "normal");
   currentY += 6;
 
   if (data.comments) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
-    doc.text("Inspector Observations & Comments:", 20, currentY);
+    doc.text("Compliance Officer Observations & Comments:", 20, currentY);
     doc.setFont("helvetica", "normal");
     const splitComments = doc.splitTextToSize(data.comments, 170);
     doc.text(splitComments, 20, currentY + 4);
@@ -405,7 +400,7 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
     checkPageBreak(25);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
-    doc.text("Recommended Corrective Actions & Directives:", 20, currentY);
+    doc.text("Corrective Actions & Directives:", 20, currentY);
     doc.setFont("helvetica", "normal");
     const splitActions = doc.splitTextToSize(data.recommendedActions, 170);
     doc.text(splitActions, 20, currentY + 4);
@@ -414,7 +409,7 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
     if (data.actionDueDate || data.actionOwner) {
       doc.setFontSize(8);
       doc.setFont("helvetica", "italic");
-      const metaText = `Remediation Due Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
+      const metaText = `Resolution Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
       doc.text(metaText, 20, currentY);
       doc.setFont("helvetica", "normal");
       currentY += 6;
@@ -431,11 +426,11 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
 
   currentY += 4;
 
-  // SECTION 5: Declarations
+  // SECTION: Declarations (Unnumbered)
   checkPageBreak(45);
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("5. Declarations:", 20, currentY);
+  doc.text("Declarations", 20, currentY);
   doc.setFont("helvetica", "normal");
   currentY += 7;
 
@@ -459,11 +454,11 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
   });
   currentY += 3;
 
-  // Signatures
+  // SECTION: Signatures (Unnumbered, words "Signature & Authorization" removed)
   checkPageBreak(45);
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
-  doc.text("Signatures & Authorization:", 20, currentY);
+  doc.text("Signatures", 20, currentY);
   doc.setFont("helvetica", "normal");
   currentY += 6;
 
@@ -486,6 +481,25 @@ export const generateValidationPdfDataUri = async (data: any, globalUnit: string
       console.error('Error adding DBO signature:', e);
     }
   }
+  if (data.dboStamp && typeof data.dboStamp === 'string' && data.dboStamp.startsWith('data:image')) {
+    try {
+      const format = data.dboStamp.includes('png') ? 'PNG' : 'JPEG';
+      doc.addImage(data.dboStamp, format, 110, currentY + 18, 40, 15);
+    } catch (e) {
+      console.error('Error adding DBO stamp:', e);
+    }
+  }
 
+  return doc;
+};
+
+export const generateValidationPdfBlobUrl = async (data: any, globalUnit: string = 'L'): Promise<string> => {
+  const doc = await generateValidationPdfDoc(data, globalUnit);
+  const blob = doc.output('blob');
+  return URL.createObjectURL(blob);
+};
+
+export const generateValidationPdfDataUri = async (data: any, globalUnit: string = 'L'): Promise<string> => {
+  const doc = await generateValidationPdfDoc(data, globalUnit);
   return doc.output('datauristring');
 };

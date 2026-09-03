@@ -257,7 +257,7 @@ const InquiryPDFContent: React.FC<InquiryPDFContentProps> = ({ inquiry, id }) =>
             7. Terms and Declarations
           </h3>
           <p className="mt-1">a) The inquirer confirms that all particulars provided in this form are accurate and complete to the best of their knowledge.</p>
-          <p>b) The Kenya Dairy Board shall process inquiries in accordance with the Dairy Industry Act (Cap 336) and statutory service standards.</p>
+          <p>b) The Kenya Dairy Board shall process inquiries in accordance with the Dairy Industry Act (Cap 336) and official service standards.</p>
           <p>c) This record serves as an official acknowledgment of the inquiry and its official administrative disposition.</p>
         </section>
 
