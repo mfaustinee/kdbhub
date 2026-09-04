@@ -1,1 +1,51 @@
 @import "tailwindcss";
+
+/* 
+  Global Screen-Fitting & Anti-Horizontal-Scroll Rules:
+  Detects and constrains all viewport elements so that nothing blows out the screen width.
+*/
+html, body {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+
+#root {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* Prevent any media or canvas element from pushing beyond parent containers */
+img, video, canvas, svg {
+  max-width: 100%;
+}
+
+/* 
+  Universal Signature Rendering Rules:
+  Guarantees signature images and previews display properly across all mobile and desktop screens.
+*/
+img[alt*="Signature"], 
+img[alt*="signature"], 
+img[src*="signature"],
+.signature-img {
+  max-width: 100% !important;
+  object-fit: contain !important;
+}
+
+/* Signature Pad Canvas constraints */
+.sigCanvas,
+canvas.signature-canvas {
+  width: 100% !important;
+  max-width: 100% !important;
+  touch-action: none;
+}
+
+/* Smooth container scrolling for responsive tables */
+.overflow-x-auto,
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+}

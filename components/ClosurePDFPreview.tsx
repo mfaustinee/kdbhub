@@ -191,21 +191,37 @@ export const ClosurePDFPreview: React.FC<ClosurePDFPreviewProps> = ({ closure, o
   }
 
   return (
-    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[200] flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-[1024px] shadow-2xl rounded-none my-8 animate-in zoom-in-95 duration-300 relative">
-        <div className="absolute -top-12 right-0 flex space-x-4 print:hidden">
-          <button 
-            onClick={() => downloadClosurePDF(closure, 'closure-certificate')} 
-            className="bg-red-600 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-red-700 shadow-lg"
-          >
-            <Download className="w-4 h-4 mr-2" /> Download Notification PDF
-          </button>
-          <button onClick={onClose} className="bg-white/10 text-white p-2 rounded-lg hover:bg-white/20">
-            <X className="w-5 h-5" />
-          </button>
+    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[200] flex items-center justify-center p-2 sm:p-4 overflow-y-auto overflow-x-hidden">
+      <div className="bg-white w-full max-w-[1024px] shadow-2xl rounded-2xl sm:rounded-none my-auto animate-in zoom-in-95 duration-300 relative flex flex-col overflow-hidden max-h-[95vh]">
+        {/* Top Control Bar */}
+        <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between gap-2 border-b border-slate-800 print:hidden shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <ShieldCheck className="w-4 h-4 text-red-400 shrink-0" />
+            <span className="text-xs font-bold text-slate-200 truncate">Closure Notification Document Preview</span>
+          </div>
+          <div className="flex items-center space-x-2 shrink-0">
+            <button 
+              onClick={() => downloadClosurePDF(closure, 'closure-certificate')} 
+              className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded-xl font-bold text-xs flex items-center shadow-xs cursor-pointer transition-all"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" /> Download PDF
+            </button>
+            <button 
+              onClick={onClose} 
+              className="bg-slate-800 hover:bg-slate-700 text-white p-1.5 rounded-xl transition-colors cursor-pointer"
+              title="Close Preview"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        <ClosurePDFContent closure={closure} id="closure-certificate" />
+        {/* Scrollable Document Canvas Area */}
+        <div className="w-full overflow-x-auto overflow-y-auto p-2 sm:p-4 bg-slate-100 flex justify-start md:justify-center flex-1">
+          <div className="bg-white shadow-md">
+            <ClosurePDFContent closure={closure} id="closure-certificate" />
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -139,7 +139,7 @@ const AgreementContent: React.FC<AgreementContentProps> = ({ agreement, id }) =>
             <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Title:</span> <span className="font-bold" style={{ color: '#0f172a' }}>Accounts Assistant</span></p>
             <div className="py-1 h-16 flex items-center">
               {agreement.officialSignature ? (
-                <img src={agreement.officialSignature} className="max-h-full" alt="KDB Signature" crossOrigin="anonymous" />
+                <img src={agreement.officialSignature} className="max-h-full max-w-full object-contain" alt="KDB Signature" crossOrigin="anonymous" />
               ) : (
                 <div style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: '12px' }}>Awaiting Approval</div>
               )}
@@ -155,7 +155,7 @@ const AgreementContent: React.FC<AgreementContentProps> = ({ agreement, id }) =>
             <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Name:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{agreement.clientName}</span></p>
             <p><span className="text-[9px] font-bold uppercase" style={{ color: '#64748b' }}>Title:</span> <span className="font-bold" style={{ color: '#0f172a' }}>{agreement.clientTitle}</span></p>
             <div className="py-1 h-16 flex items-center">
-              <img src={agreement.clientSignature} className="max-h-full" alt="Operator Signature" crossOrigin="anonymous" />
+              <img src={agreement.clientSignature} className="max-h-full max-w-full object-contain" alt="Operator Signature" crossOrigin="anonymous" />
             </div>
           </div>
         </div>
@@ -183,24 +183,37 @@ export const PDFPreview: React.FC<PDFPreviewProps> = ({ agreement, onClose, isHi
   }
 
   return (
-    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[200] flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white w-full max-w-[1024px] shadow-2xl rounded-none my-8 animate-in zoom-in-95 duration-300 relative">
-        {/* UI Controls - Not part of the PDF */}
-        <div className="absolute -top-12 right-0 flex space-x-4 print:hidden">
-          <button 
-            onClick={() => downloadAgreementPDF(agreement, 'formal-agreement')} 
-            className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-xs flex items-center hover:bg-emerald-700 shadow-lg"
-          >
-            <Download className="w-4 h-4 mr-2" /> Download Official PDF
-          </button>
-          <button onClick={onClose} className="bg-white/10 text-white p-2 rounded-lg hover:bg-white/20">
-            <X className="w-5 h-5" />
-          </button>
+    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[200] flex items-center justify-center p-2 sm:p-4 overflow-y-auto overflow-x-hidden">
+      <div className="bg-white w-full max-w-[1024px] shadow-2xl rounded-2xl sm:rounded-none my-auto animate-in zoom-in-95 duration-300 relative flex flex-col overflow-hidden max-h-[95vh]">
+        {/* Top Control Bar - Always visible and responsive */}
+        <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between gap-2 border-b border-slate-800 print:hidden shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="text-xs font-bold text-slate-200 truncate">Payment Agreement Form Preview</span>
+          </div>
+          <div className="flex items-center space-x-2 shrink-0">
+            <button 
+              onClick={() => downloadAgreementPDF(agreement, 'formal-agreement')} 
+              className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-xl font-bold text-xs flex items-center shadow-xs cursor-pointer transition-all"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5" /> Download PDF
+            </button>
+            <button 
+              onClick={onClose} 
+              className="bg-slate-800 hover:bg-slate-700 text-white p-1.5 rounded-xl transition-colors cursor-pointer"
+              title="Close Preview"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* THE PDF CONTENT START */}
-        <AgreementContent agreement={agreement} id="formal-agreement" />
-        {/* THE PDF CONTENT END */}
+        {/* Scrollable Container - Contains 1024px document safely without blowing out window width */}
+        <div className="w-full overflow-x-auto overflow-y-auto p-2 sm:p-4 bg-slate-100 flex justify-start md:justify-center flex-1">
+          <div className="bg-white shadow-md">
+            <AgreementContent agreement={agreement} id="formal-agreement" />
+          </div>
+        </div>
       </div>
     </div>
   );

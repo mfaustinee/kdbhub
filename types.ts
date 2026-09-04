@@ -684,3 +684,20 @@ export interface ValidationDraft {
   dbo_signed_at?: string;
 }
 
+export interface ScopeDisclosureRecord {
+  id: string;
+  dboName: string;
+  permitNo: string;
+  premiseName: string;
+  location: string;
+  category: string;
+  signerName: string;
+  signerDesignation: string;
+  signature: string; // Base64 data URL
+  signedDate: string; // DD/MM/YYYY
+  status: 'draft' | 'signed';
+  createdAt?: string;
+  updatedAt?: string;
+  signedAt?: string;
+}
+

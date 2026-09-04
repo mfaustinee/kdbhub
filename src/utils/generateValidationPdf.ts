@@ -185,7 +185,8 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
   doc.setFont("helvetica", "bold");
   doc.text("Volume & Sales Data", 20, currentY);
   doc.setFont("helvetica", "normal");
-  currentY += 2;
+  // 1 row spacing between volume & sales data and total intake/local sales data
+  currentY += 8;
 
   // Intakes Table
   if ((data.category === 'CP>5,000 L/D' || data.category === 'CP<5,000 L/D' || data.category === 'Processor') && Array.isArray(data.intakes) && data.intakes.length > 0) {
@@ -318,7 +319,8 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
   doc.setFont("helvetica", "bold");
   doc.text("Compliance & Confirmation", 20, currentY);
   doc.setFont("helvetica", "normal");
-  currentY += 2;
+  // 1 row spacing between compliance & confirmation and underdeclaration schedule
+  currentY += 8;
 
   checkPageBreak(25);
   doc.setFontSize(10);
@@ -375,7 +377,8 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
     doc.text(`* ${validityStatement}`, 20, currentY + 3);
     doc.setTextColor(0, 0, 0);
     doc.setFont("helvetica", "normal");
-    currentY += 8;
+    // 2 rows spacing between the validity statement and comments & recommendations
+    currentY += 18;
   }
 
   // SECTION: Comments & Recommendations (Unnumbered)

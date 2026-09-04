@@ -1,4 +1,4 @@
-import { AgreementData, DebtorRecord, StaffConfig, ClosureNotificationData, LicensedClient, ClientReturn, DataValidation, ComplaintData, InquiryData, getIndividualValidationsCount, ValidationDraft, AuthoritySignature } from '../types';
+import { AgreementData, DebtorRecord, StaffConfig, ClosureNotificationData, LicensedClient, ClientReturn, DataValidation, ComplaintData, InquiryData, getIndividualValidationsCount, ValidationDraft, AuthoritySignature, ScopeDisclosureRecord } from '../types';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 let supabase: SupabaseClient | null = null;
@@ -1805,6 +1805,16 @@ export const DBService = {
     return newSignatures;
   },
 
+  async updateAuthoritySignature(sig: AuthoritySignature): Promise<AuthoritySignature[]> {
+    const current = await this.getAuthoritySignatures();
+    let updated = current.map(s => s.id === sig.id ? { ...s, ...sig } : s);
+    if (sig.isDefault) {
+      updated = updated.map(s => ({ ...s, isDefault: s.id === sig.id }));
+    }
+    await this.saveAuthoritySignatures(updated);
+    return updated;
+  },
+
   async moveAuthoritySignature(id: string, direction: 'up' | 'down'): Promise<AuthoritySignature[]> {
     const current = await this.getAuthoritySignatures();
     const index = current.findIndex(s => s.id === id);
@@ -3282,6 +3292,101 @@ export const DBService = {
       try {
         localStorage.setItem('kdb_validation_drafts_last_updated', String(Date.now()));
       } catch (_) {}
+    }
+  },
+
+  async getScopeDisclosures(): Promise<ScopeDisclosureRecord[]> {
+    try {
+      const response = await fetch('/api/scope-disclosures');
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data)) {
+          safeSetLocalStorage('kdb_scope_disclosures_cache', JSON.stringify(data));
+          return data;
+        }
+      }
+    } catch (e) {
+      console.warn('[DBService] Local API getScopeDisclosures warning:', e);
+    }
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        const { data, error } = await client.from('scope_disclosures').select('*').order('created_at', { ascending: false });
+        if (!error && data) {
+          const mapped = data.map(row => fromDb(row, {
+            id: '', dboName: '', permitNo: '', premiseName: '', location: '', category: '',
+            signerName: '', signerDesignation: '', signature: '', signedDate: '', status: 'draft',
+            createdAt: '', updatedAt: '', signedAt: ''
+          })) as ScopeDisclosureRecord[];
+          safeSetLocalStorage('kdb_scope_disclosures_cache', JSON.stringify(mapped));
+          return mapped;
+        }
+      } catch (err) {
+        console.warn('[DBService] Supabase getScopeDisclosures warning:', err);
+      }
+    }
+
+    return getArrayFromLocalStorage<ScopeDisclosureRecord>('kdb_scope_disclosures_cache');
+  },
+
+  async saveScopeDisclosure(record: ScopeDisclosureRecord): Promise<ScopeDisclosureRecord> {
+    const nowIso = new Date().toISOString();
+    const finalRecord: ScopeDisclosureRecord = {
+      ...record,
+      id: record.id || (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'SD-' + Date.now()),
+      createdAt: record.createdAt || nowIso,
+      updatedAt: nowIso
+    };
+
+    updateLocalStorageCollection('kdb_scope_disclosures_cache', finalRecord, 'id');
+
+    try {
+      await fetch('/api/scope-disclosures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(finalRecord)
+      });
+    } catch (e) {
+      console.warn('[DBService] Local API saveScopeDisclosure warning:', e);
+    }
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        await client.from('scope_disclosures').upsert(toDb(finalRecord));
+      } catch (err) {
+        console.warn('[DBService] Supabase saveScopeDisclosure warning:', err);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('scope_disclosure_updated', { detail: finalRecord }));
+    }
+
+    return finalRecord;
+  },
+
+  async deleteScopeDisclosure(id: string): Promise<void> {
+    removeFromLocalStorageCollection('kdb_scope_disclosures_cache', id, 'id');
+
+    try {
+      await fetch(`/api/scope-disclosures/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.warn('[DBService] Local API deleteScopeDisclosure warning:', e);
+    }
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        await client.from('scope_disclosures').delete().eq('id', id);
+      } catch (err) {
+        console.warn('[DBService] Supabase deleteScopeDisclosure warning:', err);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('scope_disclosure_deleted', { detail: { id } }));
     }
   }
 };

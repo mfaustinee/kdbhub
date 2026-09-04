@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
-import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown } from 'lucide-react';
+import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3 } from 'lucide-react';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
 import { ComplaintPDFPreview } from './ComplaintPDFPreview';
@@ -14,6 +14,7 @@ import { LicensedClientsModule } from './LicensedClientsModule';
 import { ClientReturnsModule } from './ClientReturnsModule';
 import { ReportsModule } from './ReportsModule';
 import { DataValidationModule } from './DataValidationModule';
+import { ScopeDisclosureModule } from './ScopeDisclosureModule';
 
 interface AdminDashboardProps {
   agreements: AgreementData[];
@@ -57,7 +58,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onStaffUpdate 
 }) => {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'requests_to_approve' | 'clients' | 'returns' | 'reports' | 'data_validation' | 'settings'>('data_validation');
+  const [tab, setTab] = useState<'requests_to_approve' | 'clients' | 'returns' | 'reports' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
   const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations' | 'complaints' | 'inquiries'>('agreements');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -71,6 +72,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const getTabLabel = (currentTab: typeof tab) => {
     switch (currentTab) {
       case 'data_validation': return 'Data Validation Form';
+      case 'scope_disclosure': return 'Scope Disclosure Form';
       case 'requests_to_approve': return 'Requests to Approve';
       case 'clients': return 'Clients Registry';
       case 'returns': return 'Client Returns';
@@ -136,6 +138,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newSigTitle, setNewSigTitle] = useState('');
   const [newSigImage, setNewSigImage] = useState('');
   const [isSavingSig, setIsSavingSig] = useState(false);
+  const [editingSig, setEditingSig] = useState<AuthoritySignature | null>(null);
+  const [editSigName, setEditSigName] = useState('');
+  const [editSigTitle, setEditSigTitle] = useState('');
+  const [editSigImage, setEditSigImage] = useState('');
+  const [editSigIsDefault, setEditSigIsDefault] = useState(false);
+  const [isSavingEditSig, setIsSavingEditSig] = useState(false);
   const [systemHealth, setSystemHealth] = useState<any>({
     status: 'checking',
     writable: false,
@@ -685,6 +693,94 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     reader.readAsDataURL(file);
   };
 
+  const handleOpenEditAuthoritySignature = (sig: AuthoritySignature) => {
+    setEditingSig(sig);
+    setEditSigName(sig.name);
+    setEditSigTitle(sig.title || '');
+    setEditSigImage(sig.signature);
+    setEditSigIsDefault(!!sig.isDefault);
+  };
+
+  const handleFileChangeForEditSig = (file: File | null) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 800;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          setEditSigImage(canvas.toDataURL('image/png', 0.85));
+        } else {
+          setEditSigImage(e.target?.result as string);
+        }
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveEditAuthoritySignature = async () => {
+    if (!editingSig) return;
+    if (!editSigName.trim()) {
+      alert('Please provide the officer name.');
+      return;
+    }
+    if (!editSigImage) {
+      alert('Signature image cannot be empty.');
+      return;
+    }
+
+    setIsSavingEditSig(true);
+    try {
+      const updatedItem: AuthoritySignature = {
+        ...editingSig,
+        name: editSigName.trim(),
+        title: editSigTitle.trim() || undefined,
+        signature: editSigImage,
+        isDefault: editSigIsDefault
+      };
+      const updated = await DBService.updateAuthoritySignature(updatedItem);
+      setAuthoritySigs(updated);
+
+      if (editSigIsDefault || staffConfig.officialSignature === editingSig.signature) {
+        onStaffUpdate({
+          ...staffConfig,
+          authoritySignatures: updated,
+          officialSignature: editSigImage,
+          officialName: editSigName.trim(),
+          officialTitle: editSigTitle.trim() || staffConfig.officialTitle
+        });
+      } else {
+        onStaffUpdate({
+          ...staffConfig,
+          authoritySignatures: updated
+        });
+      }
+
+      setEditingSig(null);
+    } catch (err: any) {
+      alert('Failed to update signature: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSavingEditSig(false);
+    }
+  };
+
   const handleApprove = async () => {
     if (!adminName) return alert("Please enter your name for authorization.");
     if (!staffConfig.officialSignature) return alert("Please upload an official signature in Staff Setup first.");
@@ -975,6 +1071,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button 
+              onClick={() => changeTab('scope_disclosure')} 
+              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'scope_disclosure' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
+            >
+              <div className="flex items-center">
+                <FileText className="w-4 h-4 mr-3 shrink-0" />
+                Scope Disclosure Form
+              </div>
+              {tab === 'scope_disclosure' && <Check className="w-4 h-4 text-emerald-400" />}
+            </button>
+
+            <button 
               onClick={() => changeTab('requests_to_approve')} 
               className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'requests_to_approve' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
             >
@@ -1087,6 +1194,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <FileCheck className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Data Validation Form</span>}
+            </button>
+
+            <button 
+              onClick={() => changeTab('scope_disclosure')} 
+              title="Scope Disclosure Form"
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'scope_disclosure' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+              <FileText className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
+              {!isSidebarCollapsed && <span>Scope Disclosure Form</span>}
             </button>
 
             <button 
@@ -2151,6 +2267,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {tab === 'scope_disclosure' && (
+        <div className="animate-in fade-in duration-500">
+          <ScopeDisclosureModule isAdmin={true} isStandalone={false} />
+        </div>
+      )}
+
       {tab === 'reports' && (
         <div className="animate-in fade-in duration-500">
           <ReportsModule />
@@ -2714,6 +2836,14 @@ CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHE
                                 <div className="flex items-center gap-1.5 shrink-0">
                                   <button
                                     type="button"
+                                    onClick={() => handleOpenEditAuthoritySignature(sig)}
+                                    className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                                    title="Edit this signature"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
                                     disabled={isFirst}
                                     onClick={() => handleMoveToTop(sig.id)}
                                     className="px-2 py-1.5 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 rounded-lg text-[10px] font-bold transition-all disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
@@ -2862,6 +2992,104 @@ CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHE
                     </div>
                   )}
 
+                  {/* Edit Signature Modal */}
+                  {editingSig && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[250] flex items-center justify-center p-4">
+                      <div className="bg-white p-6 rounded-2xl border border-blue-200 shadow-2xl max-w-lg w-full space-y-4 animate-in zoom-in-95 duration-200">
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2">
+                            <Edit3 className="w-4 h-4 text-blue-600" />
+                            <h5 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Edit Authority Signature Profile</h5>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setEditingSig(null)}
+                            className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Officer Full Name *</label>
+                            <input
+                              type="text"
+                              value={editSigName}
+                              onChange={(e) => setEditSigName(e.target.value)}
+                              placeholder="e.g. Officer John Doe"
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Designation / Title (Optional)</label>
+                            <input
+                              type="text"
+                              value={editSigTitle}
+                              onChange={(e) => setEditSigTitle(e.target.value)}
+                              placeholder="e.g. Compliance Officer"
+                              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signature File (Replace or Keep)</label>
+                          <div className="flex flex-col sm:flex-row items-center gap-4">
+                            <div className="w-36 h-20 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden p-1">
+                              {editSigImage ? (
+                                <img src={editSigImage} alt="Preview" className="max-h-full max-w-full object-contain" />
+                              ) : (
+                                <Upload className="w-5 h-5 text-slate-300" />
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handleFileChangeForEditSig(e.target.files?.[0] || null)}
+                                className="text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                              />
+                              <p className="text-[10px] text-slate-400 mt-1">Upload to replace existing signature image, or keep as-is.</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-2">
+                          <input
+                            type="checkbox"
+                            id="editSigDefault"
+                            checked={editSigIsDefault}
+                            onChange={(e) => setEditSigIsDefault(e.target.checked)}
+                            className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <label htmlFor="editSigDefault" className="text-xs text-slate-700 cursor-pointer font-medium">
+                            Set as Default Authority Signature
+                          </label>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => setEditingSig(null)}
+                            className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isSavingEditSig}
+                            onClick={handleSaveEditAuthoritySignature}
+                            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {isSavingEditSig ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            Save Changes
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Signatures List Grid */}
                   {authoritySigs.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2913,6 +3141,14 @@ CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHE
                                     </button>
                                   </div>
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditAuthoritySignature(sig)}
+                                  className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer ml-0.5"
+                                  title="Edit this signature"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteAuthoritySignature(sig.id)}

@@ -24,6 +24,7 @@ const CLIENTS_FILE = path.join(DATA_DIR, "clients.json");
 const RETURNS_FILE = path.join(DATA_DIR, "returns.json");
 const VALIDATIONS_FILE = path.join(DATA_DIR, "validations.json");
 const VALIDATION_DRAFTS_FILE = path.join(DATA_DIR, "validation_drafts.json");
+const SCOPE_DISCLOSURES_FILE = path.join(DATA_DIR, "scope_disclosures.json");
 const LOG_FILE = path.join(DATA_DIR, "server.log");
 
 // Ensure data directory exists early for logging
@@ -1077,6 +1078,102 @@ async function startServer() {
       } catch (error: any) {
         logToFile(`CRITICAL Error deleting draft: ${error.message}`);
         res.status(500).json({ error: "Failed to delete draft", details: error.message });
+      }
+    });
+
+    // Scope Disclosures API Routes
+    app.get("/api/scope-disclosures", async (req, res) => {
+      try {
+        const list = await readJsonArrayFile(SCOPE_DISCLOSURES_FILE);
+        res.json(list);
+      } catch (error: any) {
+        logToFile(`Error reading scope disclosures: ${error.message}`);
+        res.status(500).json({ error: "Failed to read scope disclosures" });
+      }
+    });
+
+    app.get("/api/scope-disclosures/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const list = await readJsonArrayFile(SCOPE_DISCLOSURES_FILE);
+        const match = list.find((item: any) => item.id === id);
+        if (match) return res.json(match);
+
+        if (sUrl && sKey) {
+          try {
+            const serverSupabase = createClient(sUrl, sKey);
+            const { data } = await serverSupabase.from('scope_disclosures').select('*').eq('id', id).maybeSingle();
+            if (data) return res.json(data);
+          } catch (_) {}
+        }
+        res.status(404).json({ error: "Scope disclosure record not found" });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to fetch scope disclosure record" });
+      }
+    });
+
+    app.post("/api/scope-disclosures", async (req, res) => {
+      try {
+        if (!req.body) return res.status(400).json({ error: "Missing request body" });
+        const record = req.body;
+        const nowIso = new Date().toISOString();
+        if (!record.id) {
+          record.id = 'SD-' + Date.now();
+        }
+        record.updatedAt = nowIso;
+        if (!record.createdAt) record.createdAt = nowIso;
+
+        const list = await readJsonArrayFile(SCOPE_DISCLOSURES_FILE);
+        const idx = list.findIndex((item: any) => item.id === record.id);
+        if (idx >= 0) {
+          list[idx] = record;
+        } else {
+          list.unshift(record);
+        }
+
+        await fs.promises.writeFile(SCOPE_DISCLOSURES_FILE, JSON.stringify(list, null, 2));
+        logToFile(`[Server] Saved scope disclosure: ${record.id} (${record.premiseName || 'N/A'})`);
+
+        if (sUrl && sKey) {
+          (async () => {
+            try {
+              const serverSupabase = createClient(sUrl, sKey);
+              const dbRow: any = {};
+              for (const k in record) {
+                dbRow[k.toLowerCase()] = record[k];
+              }
+              await serverSupabase.from('scope_disclosures').upsert(dbRow);
+            } catch (sbErr: any) {
+              logToFile(`[Server] Supabase scope disclosure sync warning: ${sbErr.message}`);
+            }
+          })();
+        }
+
+        res.json(record);
+      } catch (error: any) {
+        logToFile(`Error saving scope disclosure: ${error.message}`);
+        res.status(500).json({ error: "Failed to save scope disclosure" });
+      }
+    });
+
+    app.delete("/api/scope-disclosures/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const list = await readJsonArrayFile(SCOPE_DISCLOSURES_FILE);
+        const filtered = list.filter((item: any) => item.id !== id);
+        await fs.promises.writeFile(SCOPE_DISCLOSURES_FILE, JSON.stringify(filtered, null, 2));
+
+        if (sUrl && sKey) {
+          (async () => {
+            try {
+              const serverSupabase = createClient(sUrl, sKey);
+              await serverSupabase.from('scope_disclosures').delete().eq('id', id);
+            } catch (_) {}
+          })();
+        }
+        res.json({ success: true });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to delete scope disclosure" });
       }
     });
 

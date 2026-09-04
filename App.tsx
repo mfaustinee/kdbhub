@@ -1,5 +1,6 @@
 
 import DataValidationModule from './components/DataValidationModule';
+import { ScopeDisclosureModule } from './components/ScopeDisclosureModule';
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { AgreementForm } from './components/AgreementForm.tsx';
@@ -656,6 +657,8 @@ const App: React.FC = () => {
             />
           } />
           <Route path="/data-validation" element={<DataValidationModule />} />
+          <Route path="/scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
+          <Route path="/sign-scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
           <Route path="/portal" element={
             <PortalHub 
               onSelectPaymentPortal={() => navigate('/payment-agreement')} 
