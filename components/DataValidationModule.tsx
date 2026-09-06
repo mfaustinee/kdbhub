@@ -7,11 +7,12 @@ import { QRCodeSVG } from 'qrcode.react';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
-import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem, ScopeDisclosureRecord } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem, ExceptionStatus, ScopeDisclosureRecord } from '../types';
 import { FieldChecklistComponent } from './FieldChecklistComponent';
 import { FIELD_CHECKLIST_SECTIONS, hasAnyChecklistValue, getActiveChecklistItems } from './fieldChecklistData';
 import { TransactionReconciliationComponent } from './TransactionReconciliationComponent';
 import { CommentsAndCorrectiveActionsComponent } from './CommentsAndCorrectiveActionsComponent';
+import { ExceptionRegisterComponent } from './ExceptionRegisterComponent';
 import { generateValidationPdfDataUri } from '../src/utils/generateValidationPdf';
 import { generateScopeDisclosurePdfDoc } from '../src/utils/generateScopeDisclosurePdf';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
@@ -30,6 +31,8 @@ import {
   FileText,
   ChevronRight,
   ChevronLeft,
+  ChevronsLeft,
+  ChevronsRight,
   Save,
   Trash2,
   PenTool,
@@ -64,7 +67,8 @@ import {
   EyeOff,
   Lock,
   Download,
-  AlertTriangle
+  AlertTriangle,
+  Cloud
 } from 'lucide-react';
 
 // Replace this with your actual Supabase public URL
@@ -198,6 +202,7 @@ interface FormData {
   recommendedActions?: string;
   actionDueDate?: string;
   actionOwner?: string;
+  pastExceptions?: ExceptionRegisterItem[];
 }
 
 const parseSellingPrices = (sellingPriceStr: string): Record<string, string> => {
@@ -830,7 +835,8 @@ const initialData: FormData = {
   exceptionRegister: [],
   recommendedActions: '',
   actionDueDate: '',
-  actionOwner: ''
+  actionOwner: '',
+  pastExceptions: []
 };
 
 const getMirroredSellingPrice = (product: string, sales: SalesEntry[]): string => {
@@ -943,6 +949,7 @@ export function DataValidationModule() {
     savedTime?: string;
   } | null>(null);
   const [draftLastSaved, setDraftLastSaved] = useState<string | null>(null);
+  const [isMobileSyncInfoOpen, setIsMobileSyncInfoOpen] = useState(false);
   const isMountedRef = useRef(false);
   const isRestoringRef = useRef(false);
   const [failedFields, setFailedFields] = useState<string[]>([]);
@@ -966,6 +973,7 @@ export function DataValidationModule() {
   const [isDboLinkModalOpen, setIsDboLinkModalOpen] = useState(false);
   const [currentSigningLink, setCurrentSigningLink] = useState('');
   const [isSigningUrlMasked, setIsSigningUrlMasked] = useState(true);
+  const [isSigningQrMasked, setIsSigningQrMasked] = useState(true);
   const [signingDraftTarget, setSigningDraftTarget] = useState<ValidationDraft | null>(null);
   const [signingExpiresAtTimestamp, setSigningExpiresAtTimestamp] = useState<number | null>(null);
   const [signingRemainingSeconds, setSigningRemainingSeconds] = useState<number | null>(null);
@@ -977,6 +985,18 @@ export function DataValidationModule() {
     designation: string;
     signedAt: string;
   } | null>(null);
+
+  // Helper to mask remote DBO signing link for officer security and privacy
+  const getMaskedSigningUrl = (url: string) => {
+    if (!url) return '';
+    try {
+      const parsed = new URL(url);
+      const maskedPath = parsed.pathname.replace(/\/sign-validation\/[^/?#]+/, '/sign-validation/••••••••');
+      return `${parsed.origin}${maskedPath}?token=••••••••••••••••`;
+    } catch {
+      return url.replace(/token=([^&]{4})[^&]+([^&]{3})/, 'token=$1••••••••$2');
+    }
+  };
 
   // Authority signatures state & modal management
   const [authoritySignatures, setAuthoritySignatures] = useState<AuthoritySignature[]>([]);
@@ -2133,6 +2153,8 @@ export function DataValidationModule() {
       setSigningExpiresAtTimestamp(expiryMs);
       setSigningRemainingSeconds(5 * 60);
       setLinkCopied(false);
+      setIsSigningUrlMasked(true);
+      setIsSigningQrMasked(true);
       setIsDboLinkModalOpen(true);
       await refreshDraftsList();
 
@@ -2333,6 +2355,7 @@ export function DataValidationModule() {
           recommendedActions: parsed.formData.recommendedActions || '',
           actionDueDate: parsed.formData.actionDueDate || '',
           actionOwner: parsed.formData.actionOwner || '',
+          pastExceptions: parsed.formData.pastExceptions || [],
           traceability: restoredTraceability
         });
         if (parsed.declarations) setDeclarations(parsed.declarations);
@@ -2620,6 +2643,7 @@ export function DataValidationModule() {
         recommendedActions: rawData.recommendedActions || '',
         actionDueDate: rawData.actionDueDate || '',
         actionOwner: rawData.actionOwner || '',
+        pastExceptions: rawData.pastExceptions || [],
         traceability: recalledTraceability,
         distOutlets: rawData.distOutlets || [{ location: '', volPerDay: '', permitStatus: 'None', levyInfo: '' }],
         distNatureOfProduce: rawData.distNatureOfProduce || []
@@ -3306,10 +3330,14 @@ export function DataValidationModule() {
         return false;
       }
     } else if (s === 4) {
-      // Step 4: Compliance & Confirmation / Exception Register (non-blocking)
+      // Step 4: Compliance & Confirmation (non-blocking)
       return true;
     } else if (s === 5) {
-      // Step 5: Comments & Recommended Corrective Actions (non-blocking)
+      // Step 5: Comments & Recommended Corrective Actions
+      if (!formData.actionOwner || formData.actionOwner.trim() === '') {
+        setStatus({ type: 'error', message: 'Responsible Person / DBO Representative is mandatory before proceeding to Step 6.' });
+        return false;
+      }
       return true;
     } else if (s === 6) {
       // Step 6: Declarations & Signatures
@@ -3598,43 +3626,6 @@ export function DataValidationModule() {
           currentY = (doc as any).lastAutoTable.finalY + 10;
         }
       });
-    }
-
-    // EXCEPTION REGISTER Table (Flows directly after Checklist Findings)
-    if (Array.isArray(data.exceptionRegister) && data.exceptionRegister.length > 0) {
-      checkPageBreak(40);
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "bold");
-      doc.text("Exception Register (Discrepancies & Mismatches Tracked):", 20, currentY);
-      doc.setFont("helvetica", "normal");
-
-      autoTable(doc, {
-        startY: currentY + 4,
-        head: [['Type', 'Definition', 'Example', 'Source', 'Owner', 'Due Date', 'Resolution Evidence', 'Status']],
-        body: data.exceptionRegister.map((exc: any) => [
-          exc.type || '-',
-          exc.definition || '-',
-          exc.example || '-',
-          exc.source || '-',
-          exc.owner || '-',
-          exc.dueDate || '-',
-          exc.resolutionEvidence || '-',
-          exc.status || 'Open'
-        ]),
-        styles: { fontSize: 7, cellPadding: 2 },
-        headStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold' },
-        columnStyles: {
-          0: { cellWidth: 22, fontStyle: 'bold' },
-          1: { cellWidth: 32 },
-          2: { cellWidth: 25 },
-          3: { cellWidth: 22 },
-          4: { cellWidth: 20 },
-          5: { cellWidth: 18 },
-          6: { cellWidth: 24 },
-          7: { cellWidth: 12, fontStyle: 'bold' }
-        }
-      });
-      currentY = (doc as any).lastAutoTable.finalY + 10;
     }
 
     // Compliance Section: Transaction Reconciliation & Under-Declaration (Only for main facility / standard validations)
@@ -3963,6 +3954,11 @@ export function DataValidationModule() {
     }
     if (!formData.complianceOfficer || !formData.complianceSignature || !formData.confirmationName || !formData.designation || !formData.dboSignature) {
       setStatus({ type: 'error', message: 'Please complete all signature fields before submitting.' });
+      setIsSubmitting(false);
+      return;
+    }
+    if (!formData.actionOwner || formData.actionOwner.trim() === '') {
+      setStatus({ type: 'error', message: 'Responsible Person / DBO Representative is mandatory before submitting.' });
       setIsSubmitting(false);
       return;
     }
@@ -4841,12 +4837,345 @@ export function DataValidationModule() {
     });
   };
 
+  // Overrides for status and resolution notes of previous audit exceptions
+  const [previousExceptionsOverride, setPreviousExceptionsOverride] = useState<Record<string, { status?: ExceptionStatus; notes?: string; source?: string; owner?: string; dueDate?: string; correctiveAction?: string }>>({});
+
+  const handleUpdatePreviousExceptionStatus = (id: string, newStatus: ExceptionStatus, notes?: string) => {
+    setFormData(prev => {
+      const existsInPast = (prev.pastExceptions || []).some(e => e.id === id);
+      if (existsInPast) {
+        return {
+          ...prev,
+          pastExceptions: (prev.pastExceptions || []).map(e => e.id === id ? { ...e, status: newStatus, resolutionEvidence: notes ?? e.resolutionEvidence } : e)
+        };
+      }
+      return prev;
+    });
+
+    setPreviousExceptionsOverride(prev => ({
+      ...prev,
+      [id]: { ...(prev[id] || {}), status: newStatus, notes }
+    }));
+    setStatus({
+      type: 'success',
+      message: `Previous audit exception status updated to "${newStatus}".`
+    });
+  };
+
+  const handleUpdatePreviousExceptionField = (id: string, field: string, value: any) => {
+    setFormData(prev => {
+      const existsInPast = (prev.pastExceptions || []).some(e => e.id === id);
+      if (existsInPast) {
+        return {
+          ...prev,
+          pastExceptions: (prev.pastExceptions || []).map(e => e.id === id ? { ...e, [field]: value } : e)
+        };
+      }
+      return prev;
+    });
+
+    setPreviousExceptionsOverride(prev => {
+      const cur = prev[id] || {};
+      return {
+        ...prev,
+        [id]: {
+          ...cur,
+          [field]: value
+        }
+      };
+    });
+  };
+
+  const handleRecordPastException = (item: ExceptionRegisterItem) => {
+    setFormData(prev => ({
+      ...prev,
+      pastExceptions: [...(prev.pastExceptions || []), item]
+    }));
+    setStatus({
+      type: 'success',
+      message: `Past exception "${item.type}" recorded.`
+    });
+  };
+
+  const handleDeletePreviousException = (id: string) => {
+    setFormData(prev => ({
+      ...prev,
+      pastExceptions: (prev.pastExceptions || []).filter(e => e.id !== id),
+      exceptionRegister: (prev.exceptionRegister || []).filter(e => e.id !== id)
+    }));
+    setStatus({
+      type: 'success',
+      message: 'Exception removed from register.'
+    });
+  };
+
+  const handleCarryForwardException = (item: ExceptionRegisterItem) => {
+    setFormData(prev => {
+      const existing = prev.exceptionRegister || [];
+      if (existing.some(e => e.id === item.id || (e.source === item.source && e.example === item.example))) {
+        setStatus({ type: 'error', message: 'This exception is already tracked in the current audit.' });
+        return prev;
+      }
+      const carried: ExceptionRegisterItem = {
+        ...item,
+        id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' 
+          ? crypto.randomUUID() 
+          : `exc-carried-${Date.now()}`,
+        origin: 'previous',
+        previousPeriod: (item as any).period || 'Prior Audit',
+        status: 'Open'
+      };
+      return {
+        ...prev,
+        exceptionRegister: [...existing, carried]
+      };
+    });
+    setStatus({ type: 'success', message: `Historical exception "${item.type}" carried forward into current audit.` });
+  };
+
+  // Historical / Previous audit exceptions collected from past validations of this premise/client
+  const previousAuditExceptions = useMemo(() => {
+    const list: Array<ExceptionRegisterItem & { period?: string; validationDate?: string }> = [];
+    const seenKeys = new Set<string>();
+
+    // 1. Manually recorded past exceptions
+    if (Array.isArray(formData.pastExceptions)) {
+      formData.pastExceptions.forEach(exc => {
+        if (!seenKeys.has(exc.id)) {
+          seenKeys.add(exc.id);
+          const override = previousExceptionsOverride[exc.id];
+          list.push({
+            ...exc,
+            source: override?.source || exc.source || 'Historical Records Review',
+            owner: override?.owner || exc.owner || '',
+            dueDate: override?.dueDate || exc.dueDate || '',
+            correctiveAction: override?.correctiveAction || exc.correctiveAction || exc.resolutionEvidence || '',
+            status: override?.status || exc.status || 'Open',
+            resolutionEvidence: override?.notes || exc.resolutionEvidence || '',
+            origin: 'previous'
+          });
+        }
+      });
+    }
+
+    // 2. Historical exceptions extracted from previous validation reports (lastCollections)
+    lastCollections.forEach(c => {
+      let raw = c.rawData;
+      if (typeof raw === 'string') {
+        try { raw = JSON.parse(raw); } catch { raw = {}; }
+      }
+      const formObj = raw?.formData || raw;
+      const excs = formObj?.exceptionRegister || raw?.exceptionRegister;
+      if (Array.isArray(excs)) {
+        excs.forEach((exc: any) => {
+          const key = exc.id || `${c.fullPeriod || c.displayString || 'Past'}-${exc.type}-${exc.source || ''}-${exc.example || ''}`;
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            const override = previousExceptionsOverride[key];
+            list.push({
+              id: key,
+              type: exc.type || 'General Finding',
+              definition: exc.definition || '',
+              example: exc.example || exc.definition || '',
+              source: override?.source || exc.source || `Previous Audit (${c.fullPeriod || c.displayString || 'Past Period'})`,
+              owner: override?.owner || exc.owner || '',
+              dueDate: override?.dueDate || exc.dueDate || '',
+              correctiveAction: override?.correctiveAction || exc.correctiveAction || exc.resolutionEvidence || '',
+              resolutionEvidence: override?.notes || exc.resolutionEvidence || '',
+              status: override?.status || exc.status || 'Open',
+              origin: 'previous',
+              period: c.fullPeriod || c.displayString,
+              validationDate: c.date || (raw?.validatedAt || raw?.date || '')
+            });
+          }
+        });
+      }
+    });
+
+    return list;
+  }, [formData.pastExceptions, lastCollections, previousExceptionsOverride]);
+
   return (
-    <div className="min-h-screen bg-[#f5f5f4] text-[#1a1a1a] font-sans p-2 md:p-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Connection Status & Quick Reset Banner */}
-        <div className="mb-4 bg-white rounded-xl p-3 md:p-4 shadow-sm border border-black/5 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-3 w-full sm:w-auto">
+    <div className="w-full text-[#1a1a1a] font-sans">
+      <div className="w-full">
+        {/* Mobile Compact Header Bar with Minimalised Direct Action Icons */}
+        <div className="mb-3 sm:hidden bg-white rounded-none sm:rounded-xl px-3 py-2 shadow-xs border-y sm:border border-black/5 flex items-center justify-between gap-2 relative">
+          {/* Left Group: Sync indicator + Step badge + Draft timestamp */}
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Sync Icon Button */}
+            <button
+              type="button"
+              onClick={() => setIsMobileSyncInfoOpen(!isMobileSyncInfoOpen)}
+              className="relative p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors cursor-pointer shrink-0"
+              title={isConnected ? "Google Sheets: Connected" : "Google Sheets: Credentials Missing"}
+            >
+              <Cloud className="w-4 h-4 text-slate-700" />
+              <span className={`w-2 h-2 rounded-full absolute top-0.5 right-0.5 ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+            </button>
+
+            {/* Step Badge */}
+            {step > 0 ? (
+              <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[11px] font-bold border border-blue-100 shrink-0">
+                Step {step === 6 ? '6 (Summary)' : `${step}/6`}
+              </span>
+            ) : (
+              <span className="text-xs font-bold text-slate-800 truncate">
+                Validation
+              </span>
+            )}
+
+            {/* Draft saved timestamp */}
+            {draftLastSaved && (
+              <span className="text-[10px] text-slate-500 font-medium truncate hidden min-[380px]:flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                <span className="truncate">{draftLastSaved}</span>
+              </span>
+            )}
+          </div>
+
+          {/* Right Group: Step navigation & Minimalised Direct Action Icons */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {step > 0 && (
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 mr-0.5">
+                <button
+                  type="button"
+                  onClick={() => step > 1 ? setStep(1) : setStep(0)}
+                  disabled={step === 0}
+                  className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-700 hover:text-slate-950 bg-white border border-slate-200 shadow-2xs hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-35"
+                  title="Go to First Step"
+                  id="mobile-header-first-btn"
+                >
+                  <ChevronsLeft className="w-4 h-4 stroke-[2.5]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => step > 0 && setStep(step - 1)}
+                  className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-700 hover:text-slate-950 bg-white border border-slate-200 shadow-2xs hover:bg-slate-50 transition-all cursor-pointer"
+                  title="Previous step"
+                  id="mobile-header-back-btn"
+                >
+                  <ChevronLeft className="w-4.5 h-4.5 stroke-[2.5]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (step < 6) {
+                      validateStep(step) && setStep(step + 1);
+                    } else if (step === 6) {
+                      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+                    }
+                  }}
+                  className={`flex items-center justify-center w-7 h-7 rounded-lg text-white shadow-2xs transition-all cursor-pointer ${
+                    step === 6 ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'
+                  }`}
+                  title={step === 6 ? "To Submit" : "Next step"}
+                  id="mobile-header-next-btn"
+                >
+                  <ChevronRight className="w-4.5 h-4.5 stroke-[2.5]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStep(6)}
+                  disabled={step === 6}
+                  className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-700 hover:text-slate-950 bg-white border border-slate-200 shadow-2xs hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-35"
+                  title="Go to Last Step (Step 6)"
+                  id="mobile-header-last-btn"
+                >
+                  <ChevronsRight className="w-4 h-4 stroke-[2.5]" />
+                </button>
+              </div>
+            )}
+
+            {/* Direct Minimalised Icon: Saved Drafts */}
+            <button
+              type="button"
+              onClick={() => setIsDraftsModalOpen(true)}
+              className="relative p-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 transition-all cursor-pointer shrink-0"
+              title={`Saved Drafts (${draftsList.length})`}
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-amber-600" />
+              {draftsList.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-amber-500 text-white text-[8px] font-bold flex items-center justify-center shadow-xs">
+                  {draftsList.length}
+                </span>
+              )}
+            </button>
+
+            {/* Direct Minimalised Icon: Save Current Draft */}
+            <button
+              type="button"
+              onClick={handleManualSaveDraft}
+              disabled={isSubmittingDraft}
+              className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition-all cursor-pointer disabled:opacity-50 shrink-0"
+              title={isSubmittingDraft ? "Saving Draft..." : "Save Current Draft"}
+            >
+              {isSubmittingDraft ? (
+                <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+              ) : (
+                <Save className="w-3.5 h-3.5 text-blue-600" />
+              )}
+            </button>
+
+            {/* Direct Minimalised Icon: Scroll to Submit / Signature */}
+            <button
+              type="button"
+              onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })}
+              className="p-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 border border-slate-200 transition-all cursor-pointer shrink-0"
+              title="Scroll to Submit / Signature"
+            >
+              <ArrowDown className="w-3.5 h-3.5 text-slate-600" />
+            </button>
+
+            {/* Direct Minimalised Icon: Clear All Entries */}
+            <button
+              type="button"
+              onClick={handleClearEntries}
+              className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 transition-all cursor-pointer shrink-0"
+              title="Clear All Entries"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+            </button>
+          </div>
+
+          {/* Mobile Sync Popover */}
+          {isMobileSyncInfoOpen && (
+            <>
+              <div 
+                className="fixed inset-0 z-40 bg-black/20" 
+                onClick={() => setIsMobileSyncInfoOpen(false)} 
+              />
+              <div className="absolute left-2 top-11 z-50 w-64 bg-slate-900 text-white p-3 rounded-2xl shadow-xl text-xs space-y-1.5 animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                    Google Sheets Sync
+                  </span>
+                  <button 
+                    type="button" 
+                    onClick={() => setIsMobileSyncInfoOpen(false)}
+                    className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  {isConnected 
+                    ? 'Service Account is active and ready to synchronize validated records.' 
+                    : 'Service Account credentials missing or unconfigured.'}
+                </p>
+                {isConnected && (
+                  <span className="inline-block text-[10px] font-bold bg-emerald-900/80 text-emerald-300 border border-emerald-700/50 px-2 py-0.5 rounded-full">
+                    Ready to Sync
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Desktop / Tablet Full Header Banner (hidden on mobile, visible on sm and up) */}
+        <div className="mb-4 hidden sm:flex bg-white rounded-xl p-3 md:p-4 shadow-sm border border-black/5 items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
               <div>
@@ -4861,26 +5190,41 @@ export function DataValidationModule() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
+          <div className="flex items-center gap-2 justify-end flex-wrap">
             {draftLastSaved && (
-              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 text-slate-600 rounded-lg text-[11px] font-medium border border-slate-200 shadow-2xs">
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 text-slate-600 rounded-lg text-[11px] font-medium border border-slate-200 shadow-2xs">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 <span>Draft saved at {draftLastSaved}</span>
               </div>
             )}
 
             {step > 0 && (
-              <div className="flex items-center bg-gray-100/90 p-0.5 rounded-lg border border-gray-200 text-xs shadow-2xs">
+              <div className="flex items-center gap-1.5 bg-slate-100/90 p-1 rounded-xl border border-slate-200 text-xs shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (step > 1) setStep(1);
+                    else if (step === 1) setStep(0);
+                  }}
+                  disabled={step === 0}
+                  className="flex items-center gap-1 px-3 py-1.5 text-slate-700 hover:text-slate-950 bg-white hover:bg-slate-50 border border-slate-200/80 rounded-lg transition-all text-xs font-bold shadow-xs cursor-pointer disabled:opacity-40"
+                  title="Go to First Step"
+                  id="top-banner-first-step-btn"
+                >
+                  <ChevronsLeft className="w-4 h-4 stroke-[2.5]" />
+                  <span>First</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => {
                     if (step > 0) setStep(step - 1);
                   }}
-                  className="flex items-center gap-1 px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 text-slate-700 hover:text-slate-950 bg-white hover:bg-slate-50 border border-slate-200/80 rounded-lg transition-all text-xs font-bold shadow-xs cursor-pointer"
                   title="Go back to previous step"
                   id="top-banner-back-btn"
                 >
-                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <ChevronLeft className="w-4.5 h-4.5 stroke-[2.5]" />
                   <span>Back</span>
                 </button>
 
@@ -4893,24 +5237,38 @@ export function DataValidationModule() {
                       window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
                     }
                   }}
-                  className="flex items-center gap-1 px-2.5 py-1 text-gray-600 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
+                  className={`flex items-center gap-1.5 px-4 py-1.5 text-white rounded-lg transition-all text-xs font-bold shadow-xs cursor-pointer ${
+                    step === 6 ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'
+                  }`}
                   title={step === 6 ? "Scroll to Submit section" : "Go to next step"}
                   id="top-banner-next-btn"
                 >
                   <span>{step === 6 ? "To Submit" : "Next"}</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
+                  <ChevronRight className="w-4.5 h-4.5 stroke-[2.5]" />
                 </button>
 
-                <span className="w-px h-3.5 bg-gray-300 mx-0.5" />
+                <button
+                  type="button"
+                  onClick={() => setStep(6)}
+                  disabled={step === 6}
+                  className="flex items-center gap-1 px-3 py-1.5 text-slate-700 hover:text-slate-950 bg-white hover:bg-slate-50 border border-slate-200/80 rounded-lg transition-all text-xs font-bold shadow-xs cursor-pointer disabled:opacity-40"
+                  title="Go to Last Step (Step 6)"
+                  id="top-banner-last-step-btn"
+                >
+                  <span>Last</span>
+                  <ChevronsRight className="w-4 h-4 stroke-[2.5]" />
+                </button>
+
+                <span className="w-px h-4 bg-slate-300 mx-0.5" />
 
                 <button
                   type="button"
                   onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })}
-                  className="flex items-center gap-1 px-2.5 py-1 text-gray-500 hover:text-gray-900 hover:bg-white rounded-md transition-all text-xs font-medium cursor-pointer"
+                  className="flex items-center gap-1 px-3 py-1.5 text-slate-600 hover:text-slate-950 hover:bg-white rounded-lg transition-all text-xs font-semibold cursor-pointer"
                   title="Scroll smoothly to bottom of page"
                   id="top-banner-scroll-bottom-btn"
                 >
-                  <ArrowDown className="w-3.5 h-3.5" />
+                  <ArrowDown className="w-4 h-4 text-slate-600" />
                   <span>Bottom</span>
                 </button>
               </div>
@@ -4919,7 +5277,7 @@ export function DataValidationModule() {
             <button
               type="button"
               onClick={() => setIsDraftsModalOpen(true)}
-              className="relative w-full sm:w-auto px-3.5 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
+              className="relative px-3.5 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
               title="View all saved validation drafts"
               id="view-saved-drafts-btn"
             >
@@ -4936,7 +5294,7 @@ export function DataValidationModule() {
               type="button"
               onClick={handleManualSaveDraft}
               disabled={isSubmittingDraft}
-              className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
+              className="px-3.5 py-2 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0 disabled:opacity-50"
               title="Save current form entries to draft"
               id="top-save-draft-btn"
             >
@@ -4951,7 +5309,7 @@ export function DataValidationModule() {
             <button
               type="button"
               onClick={handleClearEntries}
-              className="w-full sm:w-auto px-3.5 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
+              className="px-3.5 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer shrink-0"
               title="Clear all form entries"
               id="clear-entries-btn"
             >
@@ -5133,7 +5491,7 @@ export function DataValidationModule() {
         </AnimatePresence>
 
         {/* Form Container */}
-        <div className="bg-white rounded-2xl shadow-lg border border-black/5 overflow-hidden">
+        <div className="w-full bg-white rounded-none sm:rounded-2xl md:rounded-3xl shadow-lg border-y sm:border border-black/5 overflow-hidden mb-4">
           {/* Progress Bar */}
           <div className="h-1.5 w-full bg-gray-100">
             <motion.div 
@@ -5143,7 +5501,7 @@ export function DataValidationModule() {
             />
           </div>
 
-          <form onSubmit={handleSubmit} className="p-8">
+          <form onSubmit={handleSubmit} className="p-3 sm:p-6 lg:p-8">
             <AnimatePresence mode="wait">
               {step === 0 && (
                 <motion.div
@@ -5209,7 +5567,7 @@ export function DataValidationModule() {
                                   )}
                                 </div>
                                 <p className="text-[10px] text-gray-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
-                                  <span>Step {stepNum === 0 ? '1 (Search)' : stepNum + 1} of 4</span>
+                                  <span>Step {stepNum === 0 ? '1 (Search)' : stepNum + 1} of 6</span>
                                   <span>&bull;</span>
                                   <span>Permit: {draft.permitNo || 'N/A'}</span>
                                   {form.startTime && (
@@ -5278,9 +5636,9 @@ export function DataValidationModule() {
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                     {/* Top Row: Reduced Branch box to accommodate Date, Start Time and End Time on larger screens */}
-                    <div className="md:col-span-2">
+                    <div className="sm:col-span-2">
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3.5 items-end">
                         <div className="space-y-2 sm:col-span-1 lg:col-span-3">
                           <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Branch</label>
@@ -5769,7 +6127,7 @@ export function DataValidationModule() {
                   </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Contacts</label>
                       <input
@@ -5949,6 +6307,23 @@ export function DataValidationModule() {
                     </div>
                   </div>
 
+                  {/* Step 1: Previous Audit Exceptions Tracker */}
+                  <ExceptionRegisterComponent
+                    mode="step1-previous"
+                    previousExceptions={previousAuditExceptions}
+                    currentExceptions={formData.exceptionRegister || []}
+                    onUpdateCurrentExceptions={(updated) => setFormData(prev => ({ ...prev, exceptionRegister: updated }))}
+                    onUpdatePreviousExceptionStatus={handleUpdatePreviousExceptionStatus}
+                    onUpdatePreviousExceptionField={handleUpdatePreviousExceptionField}
+                    onAddPastException={handleRecordPastException}
+                    onDeletePreviousException={handleDeletePreviousException}
+                    onCarryForwardToCurrent={handleCarryForwardException}
+                    dboName={formData.dboName || selectedClient?.clientName}
+                    premiseName={formData.premiseName}
+                    actionOwner={formData.actionOwner}
+                    globalUnit={globalUnit}
+                  />
+
                   <div className="flex justify-between items-center gap-3 pt-4">
                     <button
                       type="button"
@@ -5976,6 +6351,16 @@ export function DataValidationModule() {
                       >
                         Next Step
                         <ChevronRight className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStep(6)}
+                        className="flex items-center gap-1 px-3.5 py-2.5 sm:py-3 text-xs sm:text-sm text-slate-700 font-bold hover:text-black hover:bg-slate-100 rounded-xl transition-all border border-slate-200 cursor-pointer"
+                        title="Jump to Last Step (Step 6)"
+                        id="step1-bottom-last-step-btn"
+                      >
+                        <span>Last Step</span>
+                        <ChevronsRight className="w-4 h-4 stroke-[2.5]" />
                       </button>
                     </div>
                   </div>
@@ -6177,7 +6562,7 @@ export function DataValidationModule() {
                     </div>
 
                     {/* Produce Metadata Section (Nature of Produce & Source) */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-gray-50/50 rounded-3xl border border-gray-100">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 p-4 sm:p-6 bg-gray-50/50 rounded-2xl sm:rounded-3xl border border-gray-100 w-full">
                       <div className={`space-y-2 p-2.5 rounded-2xl transition-all ${failedFields.includes('natureOfProduce') ? 'bg-red-50/50 border border-red-300 ring-2 ring-red-100' : 'border border-transparent'}`}>
                         <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Nature of Produce?</label>
                         <div className="grid grid-cols-2 gap-2">
@@ -6468,7 +6853,7 @@ export function DataValidationModule() {
 
                     {/* Section: Universal Buying Price & Product-Specific Selling Prices Configuration */}
                     {formData.hasLocalSales && (
-                      <div className="p-4 bg-gradient-to-r from-blue-50/70 via-indigo-50/40 to-blue-50/70 rounded-2xl border border-blue-100 shadow-sm space-y-4">
+                      <div className="w-full bg-[#f0f4fa] rounded-none sm:rounded-2xl md:rounded-3xl p-3 sm:p-6 mb-4 border border-blue-100/80 shadow-sm space-y-4">
                         <div className="flex items-center justify-between">
                           <div>
                             <h4 className="text-xs font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
@@ -6485,15 +6870,15 @@ export function DataValidationModule() {
 
                         {/* Universal Buying Price (For categories where buying price is not mirrored from intakes) */}
                         {!(formData.category === 'CP>5,000 L/D' || formData.category === 'CP<5,000 L/D' || formData.category === 'Processor') && (
-                          <div className="p-3 bg-white rounded-xl border border-blue-100/80 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="w-full bg-white rounded-xl p-3 sm:p-4 mb-3 shadow-2xs border border-blue-100/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
                             <div>
                               <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold text-gray-800">Universal Buying Price</span>
+                                <span className="text-xs sm:text-sm font-semibold text-gray-800">Universal Buying Price</span>
                                 <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">Kshs</span>
                               </div>
                               <p className="text-[10px] text-gray-500 mt-0.5">Applies across all products for this entity.</p>
                             </div>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
                               <label className="text-[11px] font-medium text-gray-600 whitespace-nowrap">Buying Price:</label>
                               <input
                                 type="text"
@@ -6515,38 +6900,38 @@ export function DataValidationModule() {
                                   }));
                                   setFailedFields(prev => prev.filter(f => !f.includes('-buyingPrice')));
                                 }}
-                                className="w-32 px-3 py-1.5 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-semibold text-gray-800"
+                                className="w-28 sm:w-32 px-3 py-1.5 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-semibold text-gray-800"
                               />
                             </div>
                           </div>
                         )}
 
                         {/* Product-Specific Selling Prices */}
-                        <div className="space-y-2">
+                        <div className="space-y-2 w-full">
                           <div className="flex items-center justify-between">
                             <span className="text-[11px] font-bold text-blue-950 uppercase tracking-wider">Product Selling Prices</span>
                             <span className="text-[10px] text-gray-500">Per nature of produce</span>
                           </div>
 
                           {formData.natureOfProduce.length === 0 ? (
-                            <div className="p-3 bg-white/80 rounded-xl border border-blue-100 text-center">
+                            <div className="w-full p-3 bg-white rounded-xl border border-blue-100 text-center shadow-2xs">
                               <p className="text-xs text-gray-500 italic">Please select at least one product in "Nature of Produce" above to configure selling prices.</p>
                             </div>
                           ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3 w-full">
                               {formData.natureOfProduce.map((product) => {
                                 const sPrice = defaultProductPrices.sellingPrices[product] || '';
 
                                 return (
-                                  <div key={product} className="p-3 bg-white rounded-xl border border-blue-100/80 shadow-2xs space-y-2">
+                                  <div key={product} className="w-full bg-white rounded-xl p-3 sm:p-4 mb-3 shadow-2xs border border-blue-100/80 space-y-2">
                                     <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
-                                      <span className="text-xs font-bold text-gray-800">{product}</span>
+                                      <span className="text-xs sm:text-sm font-semibold text-gray-800">{product}</span>
                                       <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">Kshs</span>
                                     </div>
 
                                     <div className="flex items-center justify-between gap-2">
                                       <label className="text-[11px] font-medium text-gray-600 whitespace-nowrap">Selling Price:</label>
-                                      <div className="flex items-center gap-1">
+                                      <div className="flex items-center gap-1 flex-1 justify-end">
                                         <input
                                           type="text"
                                           placeholder="0.00"
@@ -6578,7 +6963,7 @@ export function DataValidationModule() {
                                               setFailedFields(prev => prev.filter(f => !f.includes('-sellingPrice')));
                                             }
                                           }}
-                                          className="w-24 px-2 py-1 rounded border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-medium text-blue-700"
+                                          className="w-24 sm:w-28 px-2 py-1 rounded border border-gray-200 focus:border-blue-500 outline-none text-xs text-right font-medium text-blue-700"
                                         />
                                       </div>
                                     </div>
@@ -6818,7 +7203,7 @@ export function DataValidationModule() {
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="space-y-6 border border-gray-100 bg-white p-6 rounded-3xl shadow-sm"
+                      className="space-y-6 border border-gray-100 bg-white p-4 sm:p-6 rounded-2xl sm:rounded-3xl shadow-sm w-full"
                     >
                       <div className="border-b border-gray-100 pb-4">
                         <h3 className="font-bold text-gray-900 text-sm tracking-wide uppercase">Distributor Details</h3>
@@ -6828,7 +7213,7 @@ export function DataValidationModule() {
                       <div className="space-y-8">
                         {formData.distributors.map((dist, dIdx) => {
                           return (
-                            <div key={dIdx} className="p-6 bg-slate-50/40 border border-slate-100 rounded-3xl relative space-y-5">
+                            <div key={dIdx} className="p-4 sm:p-6 bg-slate-50/40 border border-slate-100 rounded-2xl sm:rounded-3xl relative space-y-5 w-full">
                               <div className="flex justify-between items-center border-b border-slate-100/60 pb-3">
                                 <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wide">
                                   Distributor #{dIdx + 1}: {dist.name || 'Unnamed'}
@@ -6849,7 +7234,7 @@ export function DataValidationModule() {
                                 )}
                               </div>
 
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="space-y-1 relative">
                                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Distributor Name</label>
                                   <input
@@ -7543,7 +7928,10 @@ export function DataValidationModule() {
                     onChange={(updatedFields) => {
                       setFormData(prev => ({
                         ...prev,
-                        ...updatedFields
+                        ...updatedFields,
+                        confirmationName: (prev.confirmationName && prev.confirmationName !== prev.actionOwner)
+                          ? prev.confirmationName
+                          : (updatedFields.actionOwner !== undefined ? updatedFields.actionOwner : prev.confirmationName)
                       }));
                     }}
                   />
@@ -7598,13 +7986,28 @@ export function DataValidationModule() {
                   className="space-y-6"
                   id="step6-declarations-and-signatures-section"
                 >
-                  <div className="flex items-center gap-2 mb-6 pb-3 border-b border-gray-100">
+                  <div className="flex items-center gap-2.5 mb-6 pb-3 border-b border-gray-100">
                     <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">6</div>
                     <div>
-                      <h2 className="text-lg font-bold text-gray-900">Declarations</h2>
-                      <p className="text-[11px] text-gray-500 font-medium">Compliance affirmations and official sign-offs</p>
+                      <h2 className="text-lg font-bold text-gray-900">Step 6: Exceptions Register, Declarations & Signatures</h2>
+                      <p className="text-[11px] text-gray-500 font-medium">Exceptions register, compliance affirmations, and official sign-offs</p>
                     </div>
                   </div>
+
+                  {/* Step 6: Exceptions Register */}
+                  <ExceptionRegisterComponent
+                    mode="step6-consolidated"
+                    previousExceptions={previousAuditExceptions}
+                    currentExceptions={formData.exceptionRegister || []}
+                    onUpdateCurrentExceptions={(updated) => setFormData(prev => ({ ...prev, exceptionRegister: updated }))}
+                    onUpdatePreviousExceptionStatus={handleUpdatePreviousExceptionStatus}
+                    onUpdatePreviousExceptionField={handleUpdatePreviousExceptionField}
+                    onDeletePreviousException={handleDeletePreviousException}
+                    dboName={formData.dboName || selectedClient?.clientName}
+                    premiseName={formData.premiseName}
+                    actionOwner={formData.actionOwner}
+                    globalUnit={globalUnit}
+                  />
 
                   {/* Declarations Box */}
                   <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-4">
@@ -7689,14 +8092,91 @@ export function DataValidationModule() {
                     </div>
                   </div>
 
+                  {/* Scope Disclosure Status (Moved after Declarations - Internal UI Only, Excluded from PDF) */}
+                  <div 
+                    className={`p-4 rounded-2xl border transition-all ${
+                      scopeDisclosureStatus.isSigned 
+                        ? 'bg-emerald-50/70 border-emerald-200/90 text-emerald-950' 
+                        : 'bg-amber-50/80 border-amber-200/90 text-amber-950'
+                    }`} 
+                    id="step6-scope-disclosure-status-card"
+                    data-html2canvas-ignore="true"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start sm:items-center gap-3">
+                        <div className={`p-2 rounded-xl shrink-0 ${
+                          scopeDisclosureStatus.isSigned 
+                            ? 'bg-emerald-100 text-emerald-700' 
+                            : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          <FileText className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                              Inspection Scope Disclosure
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1 ${
+                              scopeDisclosureStatus.isSigned
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-amber-500 text-white'
+                            }`}>
+                              <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                              {scopeDisclosureStatus.isSigned ? 'EXECUTED & SIGNED' : 'PENDING SIGNATURE'}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 bg-white/80 px-1.5 py-0.5 rounded border border-slate-200">
+                              <EyeOff className="w-3 h-3 text-slate-400" />
+                              Excluded from PDF
+                            </span>
+                          </div>
+                          <p className="text-xs font-semibold mt-1 text-slate-800">
+                            {scopeDisclosureStatus.isSigned 
+                              ? `Signed by ${scopeDisclosureStatus.record?.signerName || 'DBO Representative'}${scopeDisclosureStatus.record?.signedDate ? ` on ${scopeDisclosureStatus.record.signedDate}` : ''}`
+                              : 'Scope Disclosure Pending Signature — Requires signoff in Step 1'}
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            {scopeDisclosureStatus.isSigned 
+                              ? 'Scope of inspection, statutory record access and legal obligations confirmed.'
+                              : 'Under Cap 336, the premise inspection scope disclosure must be signed by the DBO representative or authorized officer in Step 1 before final audit submission.'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+                        {!scopeDisclosureStatus.isSigned && (
+                          <button
+                            type="button"
+                            onClick={() => setStep(1)}
+                            className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                            id="jump-step1-sign-scope-disclosure-btn"
+                            title="Navigate back to Step 1 to execute scope disclosure"
+                          >
+                            <ChevronsLeft className="w-4 h-4 stroke-[2.5]" />
+                            <span>Go to Step 1 to Sign</span>
+                          </button>
+                        )}
+                        {scopeDisclosureStatus.isSigned && scopeDisclosureStatus.record && (
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadScopeDisclosurePdf(scopeDisclosureStatus.record)}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                            title="Download Signed Scope Disclosure PDF"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Download PDF</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Signatures Section */}
-                  <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-6" id="signatures-section">
+                  <div className="bg-white p-4 sm:p-6 rounded-2xl border border-gray-100 space-y-6 w-full" id="signatures-section">
                     <div className="flex items-center gap-2 pb-3 border-b border-gray-100">
                       <PenTool className="w-4 h-4 text-blue-600" />
                       <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">Signatures</h3>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                       <div className="space-y-4">
                         <div className="space-y-2">
                           <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Compliance Officer Name</label>
@@ -7952,12 +8432,20 @@ export function DataValidationModule() {
                         )}
 
                         <div className="space-y-2">
-                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name</label>
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name (Representative)</label>
+                            {formData.actionOwner && (
+                              <span className="text-[10px] text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100">
+                                Pre-filled from Step 5
+                              </span>
+                            )}
+                          </div>
                           <input
                             type="text"
                             name="confirmationName"
-                            value={formData.confirmationName}
+                            value={formData.confirmationName || formData.actionOwner || ''}
                             onChange={handleChange}
+                            placeholder={formData.actionOwner || "Representative / DBO Name"}
                             className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
                           />
                         </div>
@@ -8060,6 +8548,16 @@ export function DataValidationModule() {
                   <div className="flex flex-col gap-4 pt-6">
                     <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 sm:gap-4">
                       <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setStep(1)}
+                          className="flex-1 sm:flex-none flex justify-center items-center gap-1 sm:gap-1.5 px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm text-slate-700 font-bold hover:text-black hover:bg-slate-100 rounded-xl transition-all border border-slate-200 cursor-pointer"
+                          title="Jump to First Step (Facility & Scope)"
+                          id="step6-bottom-first-step-btn"
+                        >
+                          <ChevronsLeft className="w-4 h-4 stroke-[2.5]" />
+                          <span>First Step</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => setStep(5)}
@@ -8360,7 +8858,7 @@ export function DataValidationModule() {
                             <div className="flex items-center gap-3 text-[11px] text-gray-400 flex-wrap">
                               <span className="flex items-center gap-1 font-medium text-amber-800">
                                 <FileText className="w-3 h-3 text-amber-600" />
-                                Step {stepNum === 0 ? '1' : stepNum + 1} of 4
+                                Step {stepNum === 0 ? '1' : stepNum + 1} of 6
                               </span>
                               {form.startTime && (
                                 <>
@@ -8439,18 +8937,19 @@ export function DataValidationModule() {
           )}
         </AnimatePresence>
 
-        {/* Remote DBO Signing Link Modal (10-Minute Expiry) */}
+        {/* Remote DBO Signing Link Modal (5-Minute Expiry) */}
         {isDboLinkModalOpen && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl border border-gray-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150 max-h-[95vh] flex flex-col">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs">
+            {/* Use max-h-[90dvh] so it resizes dynamically when virtual keyboards pop up */}
+            <div className="bg-white rounded-2xl sm:rounded-3xl w-full max-w-2xl lg:max-w-4xl max-h-[90dvh] flex flex-col overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
               {/* Header */}
-              <div className="p-5 sm:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-50/70 via-indigo-50/30 to-white">
+              <div className="p-4 sm:p-5 md:p-6 border-b border-gray-100 flex items-center justify-between bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-white">
                 <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
-                    <Smartphone className="w-6 h-6" />
+                  <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
+                    <Smartphone className="w-5 h-5 sm:w-6 sm:h-6" />
                   </div>
                   <div>
-                    <h3 className="font-black text-lg text-gray-900 leading-snug">
+                    <h3 className="font-black text-base sm:text-lg text-gray-900 leading-snug">
                       Remote DBO Signing Link & QR Code
                     </h3>
                     <p className="text-xs text-gray-500 font-medium">
@@ -8458,224 +8957,294 @@ export function DataValidationModule() {
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsDboLinkModalOpen(false)}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+
+                <div className="flex items-center gap-2">
+                  {/* Master Privacy Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allMasked = isSigningUrlMasked && isSigningQrMasked;
+                      setIsSigningUrlMasked(!allMasked);
+                      setIsSigningQrMasked(!allMasked);
+                    }}
+                    className="px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 shadow-xs cursor-pointer"
+                    title={isSigningUrlMasked && isSigningQrMasked ? "Reveal Link & QR Code" : "Mask Link & QR Code for privacy"}
+                  >
+                    {isSigningUrlMasked && isSigningQrMasked ? (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-blue-600" />
+                        <span className="hidden sm:inline">Reveal Both</span>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="hidden sm:inline">Mask Both</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsDboLinkModalOpen(false)}
+                    className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
 
-              {/* Body */}
-              <div className="p-5 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
-                {/* Premise & DBO Target Info */}
-                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between gap-4">
-                  <div className="space-y-1 min-w-0">
-                    <div className="text-xs text-slate-400 font-bold uppercase tracking-wider">
-                      Premise & DBO
+              {/* Scrollable body */}
+              <div className="p-3 sm:p-6 overflow-y-auto flex-1 pb-safe space-y-4 sm:space-y-5">
+                {/* Responsive 2-Column Grid on Tablet/Desktop, Single-Column on Mobile */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 sm:gap-6">
+                  
+                  {/* Left Column: Masked Scannable QR Card */}
+                  <div className="md:col-span-5 bg-slate-50 border border-slate-200/90 rounded-2xl p-4 sm:p-5 flex flex-col justify-between items-center text-center">
+                    <div className="w-full flex items-center justify-between pb-2 border-b border-slate-200/70">
+                      <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-slate-700">
+                        <Smartphone className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Scannable QR Link</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsSigningQrMasked(!isSigningQrMasked)}
+                        className="text-[11px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
+                        title={isSigningQrMasked ? "Reveal QR Code" : "Mask QR Code for privacy"}
+                      >
+                        {isSigningQrMasked ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                        <span>{isSigningQrMasked ? 'Reveal QR' : 'Mask QR'}</span>
+                      </button>
                     </div>
-                    <div className="text-sm font-bold text-slate-800 truncate">
-                      {signingDraftTarget?.premiseName || formData.premiseName || 'Inspection Premise'}
-                    </div>
-                    <div className="text-xs text-slate-500 flex items-center gap-2 flex-wrap">
-                      <span>DBO: <strong>{signingDraftTarget?.dboName || formData.dboName || 'Dairy Business Operator'}</strong></span>
-                      <span>•</span>
-                      <span>Permit: <strong className="font-mono">{signingDraftTarget?.permitNo || formData.permitNo || 'N/A'}</strong></span>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Status</div>
-                    {signingDraftTarget?.status === 'signed_by_dbo' || dboSignedNotification ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-200">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Signed
-                      </span>
-                    ) : signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-amber-800 bg-amber-100 px-2.5 py-1 rounded-full border border-amber-200">
-                        <Clock className="w-3.5 h-3.5" /> Awaiting Sign
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-rose-700 bg-rose-100 px-2.5 py-1 rounded-full border border-rose-200">
-                        <AlertCircle className="w-3.5 h-3.5" /> Expired
-                      </span>
-                    )}
-                  </div>
-                </div>
 
-                {/* Expiry Countdown Timer */}
-                {signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
-                  <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-700 flex items-center justify-center font-bold">
-                        <Clock className="w-5 h-5 animate-pulse" />
+                    {/* QR Code Container with Frosted Privacy Mask */}
+                    <div className="relative my-3 p-3 bg-white rounded-2xl border border-slate-200 shadow-xs flex items-center justify-center overflow-hidden w-[176px] h-[176px] shrink-0">
+                      <div className={`transition-all duration-300 ${isSigningQrMasked ? 'filter blur-md opacity-25 select-none pointer-events-none' : 'opacity-100'}`}>
+                        {currentSigningLink ? (
+                          <QRCodeSVG value={currentSigningLink} size={150} level="M" />
+                        ) : (
+                          <div className="w-36 h-36 bg-slate-100 flex items-center justify-center text-slate-400 text-xs">Generating...</div>
+                        )}
                       </div>
-                      <div>
-                        <div className="text-xs font-bold text-amber-950">Security Expiry Countdown</div>
-                        <div className="text-[11px] text-amber-700">Link auto-invalidates when timer reaches 00:00</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono text-2xl font-black text-amber-800 tracking-wider">
-                        {formatSecondsToMMSS(signingRemainingSeconds)}
-                      </div>
-                      <div className="text-[10px] text-amber-600 font-bold uppercase tracking-wider">Remaining</div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
-                        <AlertCircle className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-rose-950">Signing Link Expired</div>
-                        <div className="text-[11px] text-rose-700">The 5-minute security window has elapsed. Click below to issue a new one.</div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleGenerateDboSigningLink(signingDraftTarget || undefined)}
-                      disabled={isGeneratingLink}
-                      className="px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 shadow-xs"
-                    >
-                      Regenerate
-                    </button>
-                  </div>
-                )}
 
-                {/* Scannable QR Code */}
-                {currentSigningLink && (
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row items-center justify-center gap-4 text-center sm:text-left">
-                    <div className="p-2.5 bg-white rounded-2xl border border-slate-200 shadow-xs shrink-0">
-                      <QRCodeSVG value={currentSigningLink} size={120} level="M" />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5 justify-center sm:justify-start">
-                        <span>Scan with Phone / Tablet Camera</span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 leading-relaxed">
-                        DBO can point their smartphone camera at this QR code to instantly open the full validation document, review all findings, enter their name, and sign on-screen.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Live Notification If Already Signed */}
-                {(signingDraftTarget?.status === 'signed_by_dbo' || dboSignedNotification) && (
-                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                      <CheckCircle2 className="w-6 h-6" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-bold text-emerald-950">
-                        DBO Signature Successfully Recorded!
-                      </div>
-                      <div className="text-xs text-emerald-700">
-                        {dboSignedNotification?.name ? `Confirmed by ${dboSignedNotification.name} (${dboSignedNotification.designation || 'DBO'})` : 'The DBO has completed the form and signed declarations.'}
-                        {dboSignedNotification?.signedAt && ` • ${new Date(dboSignedNotification.signedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Link Input Box with Security Masking */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
-                      <Lock className="w-3 h-3 text-slate-400" />
-                      <span>Shareable Portal URL</span>
-                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-medium border border-emerald-200">
-                        {isSigningUrlMasked ? 'Masked for Security' : 'Visible'}
-                      </span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsSigningUrlMasked(!isSigningUrlMasked)}
-                      className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 cursor-pointer"
-                      title={isSigningUrlMasked ? "Show full URL" : "Mask URL for security"}
-                    >
-                      {isSigningUrlMasked ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                      <span>{isSigningUrlMasked ? 'Reveal URL' : 'Mask URL'}</span>
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      readOnly
-                      value={
-                        isSigningUrlMasked && currentSigningLink
-                          ? currentSigningLink.replace(/token=([^&]{4})[^&]+([^&]{3})/, 'token=$1••••••••$2')
-                          : currentSigningLink
-                      }
-                      className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-mono select-all focus:outline-none focus:bg-white focus:border-blue-500 tracking-tight"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleCopySigningLink}
-                      className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs ${
-                        linkCopied
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-blue-600 hover:bg-blue-700 text-white'
-                      }`}
-                      title="Copy full active link to clipboard"
-                    >
-                      {linkCopied ? (
-                        <>
-                          <CheckCheck className="w-4 h-4" />
-                          <span>Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-4 h-4" />
-                          <span>Copy Link</span>
-                        </>
+                      {/* Interactive Masking Overlay */}
+                      {isSigningQrMasked && (
+                        <div
+                          onClick={() => setIsSigningQrMasked(false)}
+                          className="absolute inset-0 bg-slate-900/80 backdrop-blur-xs rounded-2xl flex flex-col items-center justify-center p-3 text-center cursor-pointer transition-all hover:bg-slate-900/85 group"
+                          title="Click to reveal QR Code"
+                        >
+                          <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center mb-1 group-hover:scale-105 transition-transform">
+                            <Lock className="w-5 h-5" />
+                          </div>
+                          <span className="text-xs font-black text-white tracking-tight">QR Link Masked</span>
+                          <span className="text-[10px] text-slate-300 mt-0.5">Click or tap to reveal</span>
+                          <span className="mt-2 px-2.5 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[10px] font-bold inline-flex items-center gap-1 shadow-xs">
+                            <Eye className="w-3 h-3" /> Reveal QR
+                          </span>
+                        </div>
                       )}
+                    </div>
+
+                    <p className="text-[11px] text-slate-500 leading-relaxed max-w-[240px]">
+                      Point smartphone or tablet camera to instantly review regulatory findings and sign on-screen.
+                    </p>
+
+                    <a
+                      href={currentSigningLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 w-full py-2 px-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-blue-300" />
+                      <span>Open Portal In New Tab</span>
+                    </a>
+                  </div>
+
+                  {/* Right Column: Target Details, Countdown & Masked Link Actions */}
+                  <div className="md:col-span-7 flex flex-col justify-between space-y-3.5">
+                    
+                    {/* Premise & DBO Target Info */}
+                    <div className="p-3.5 sm:p-4 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between gap-3">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                          Inspection Target
+                        </div>
+                        <div className="text-xs sm:text-sm font-bold text-slate-800 truncate">
+                          {signingDraftTarget?.premiseName || formData.premiseName || 'Inspection Premise'}
+                        </div>
+                        <div className="text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap">
+                          <span>DBO: <strong>{signingDraftTarget?.dboName || formData.dboName || 'Dairy Business Operator'}</strong></span>
+                          <span>•</span>
+                          <span>Permit: <strong className="font-mono">{signingDraftTarget?.permitNo || formData.permitNo || 'N/A'}</strong></span>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Status</div>
+                        {signingDraftTarget?.status === 'signed_by_dbo' || dboSignedNotification ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-extrabold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Signed
+                          </span>
+                        ) : signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-extrabold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-200">
+                            <Clock className="w-3.5 h-3.5" /> Awaiting
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-extrabold text-rose-700 bg-rose-100 px-2.5 py-0.5 rounded-full border border-rose-200">
+                            <AlertCircle className="w-3.5 h-3.5" /> Expired
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Expiry Countdown Timer */}
+                    {signingRemainingSeconds !== null && signingRemainingSeconds > 0 ? (
+                      <div className="p-3 sm:p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-700 flex items-center justify-center font-bold">
+                            <Clock className="w-4 h-4 animate-pulse" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-amber-950">5-Min Security Window</div>
+                            <div className="text-[11px] text-amber-700">Link auto-invalidates when countdown reaches 00:00</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-mono text-xl sm:text-2xl font-black text-amber-800 tracking-wider">
+                            {formatSecondsToMMSS(signingRemainingSeconds)}
+                          </div>
+                          <div className="text-[10px] text-amber-600 font-bold uppercase tracking-wider">Remaining</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 sm:p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+                            <AlertCircle className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-rose-950">5-Minute Window Expired</div>
+                            <div className="text-[11px] text-rose-700">The secure window elapsed. Click to issue a fresh link.</div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleGenerateDboSigningLink(signingDraftTarget || undefined)}
+                          disabled={isGeneratingLink}
+                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 shadow-xs"
+                        >
+                          Regenerate
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Live Notification If Already Signed */}
+                    {(signingDraftTarget?.status === 'signed_by_dbo' || dboSignedNotification) && (
+                      <div className="p-3 sm:p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs sm:text-sm font-bold text-emerald-950">
+                            DBO Signature Successfully Captured!
+                          </div>
+                          <div className="text-[11px] text-emerald-700">
+                            {dboSignedNotification?.name ? `Confirmed by ${dboSignedNotification.name} (${dboSignedNotification.designation || 'DBO'})` : 'The DBO has completed the form and signed declarations.'}
+                            {dboSignedNotification?.signedAt && ` • ${new Date(dboSignedNotification.signedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Masked Link Input Box with Privacy Toggle */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                          <Lock className="w-3 h-3 text-slate-400" />
+                          <span>Remote Signing URL</span>
+                          <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-medium border border-emerald-200">
+                            {isSigningUrlMasked ? 'Masked for Security' : 'Visible'}
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setIsSigningUrlMasked(!isSigningUrlMasked)}
+                          className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 cursor-pointer"
+                          title={isSigningUrlMasked ? "Show full URL" : "Mask URL for security"}
+                        >
+                          {isSigningUrlMasked ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                          <span>{isSigningUrlMasked ? 'Reveal Link' : 'Mask Link'}</span>
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={
+                            isSigningUrlMasked && currentSigningLink
+                              ? getMaskedSigningUrl(currentSigningLink)
+                              : currentSigningLink
+                          }
+                          className="w-full px-3 py-2 sm:px-3.5 sm:py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-mono select-all focus:outline-none focus:bg-white focus:border-blue-500 tracking-tight"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCopySigningLink}
+                          className={`px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs ${
+                            linkCopied
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-blue-600 hover:bg-blue-700 text-white'
+                          }`}
+                          title="Copy full active link to clipboard"
+                        >
+                          {linkCopied ? (
+                            <>
+                              <CheckCheck className="w-4 h-4" />
+                              <span>Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-4 h-4" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* WhatsApp Fast Share Button */}
+                    <button
+                      type="button"
+                      onClick={handleShareWhatsApp}
+                      className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      <span>Send Direct via WhatsApp</span>
                     </button>
+
+                    {/* Polling Activity Status Indicator */}
+                    <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                        <span className="text-[11px]">Auto-listening for DBO remote signature...</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCheckDboStatus}
+                        disabled={isCheckingDboStatus}
+                        className="text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isCheckingDboStatus ? 'animate-spin' : ''}`} />
+                        <span>Check Now</span>
+                      </button>
+                    </div>
+
                   </div>
-                </div>
-
-                {/* Fast Action Buttons */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleShareWhatsApp}
-                    className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs"
-                  >
-                    <MessageSquare className="w-4 h-4" />
-                    <span>Send via WhatsApp</span>
-                  </button>
-
-                  <a
-                    href={currentSigningLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs text-center"
-                  >
-                    <FileText className="w-4 h-4 text-blue-300" />
-                    <span>View & Open Signing Portal</span>
-                  </a>
-                </div>
-
-                {/* Polling Activity Status Indicator */}
-                <div className="pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-                    <span className="text-[11px]">Auto-listening for DBO remote signature...</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleCheckDboStatus}
-                    disabled={isCheckingDboStatus}
-                    className="text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${isCheckingDboStatus ? 'animate-spin' : ''}`} />
-                    <span>Check Now</span>
-                  </button>
                 </div>
               </div>
 
               {/* Footer */}
-              <div className="p-4 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between">
+              <div className="p-3 sm:p-4 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between">
                 <button
                   type="button"
                   onClick={() => handleGenerateDboSigningLink(signingDraftTarget || undefined)}
@@ -8683,7 +9252,7 @@ export function DataValidationModule() {
                   className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   {isGeneratingLink ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                  <span>Generate New 10-Min Link</span>
+                  <span>Generate Fresh 5-Min Link</span>
                 </button>
 
                 <button
@@ -8701,11 +9270,11 @@ export function DataValidationModule() {
         {/* 7-Point Split-Screen Reconciliation Overlay */}
         <AnimatePresence>
           {showReconciliation && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-300">
-              <div className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
-                <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-4 text-white flex justify-between items-center">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-2 sm:p-4 animate-in fade-in duration-300">
+              <div className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90dvh]">
+                <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-4 sm:px-6 py-4 text-white flex justify-between items-center">
                   <div>
-                    <h3 className="text-lg font-black tracking-tight">7-Point Profile & Branch Reconciliation Required</h3>
+                    <h3 className="text-base sm:text-lg font-black tracking-tight">7-Point Profile & Branch Reconciliation Required</h3>
                     <p className="text-xs text-amber-100 font-medium">Conflicting data points identified between Data Validation input and core Clients database.</p>
                   </div>
                   {selectedClient && (
@@ -8715,7 +9284,7 @@ export function DataValidationModule() {
                   )}
                 </div>
                 
-                <div className="p-6 overflow-y-auto space-y-6 flex-grow">
+                <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-grow pb-safe">
                   {/* Branch Selection & Context Card for 7-Point Reconciliation */}
                   {selectedClient && (
                     <div className="p-5 bg-gradient-to-br from-blue-50/90 to-indigo-50/50 rounded-2xl border border-blue-100 space-y-4 text-left">
@@ -9160,8 +9729,8 @@ export function DataValidationModule() {
         {/* Scope Disclosure Interactive Modal */}
         {showScopeDisclosureModal && (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-            <div className="bg-white rounded-3xl w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
-              <div className="flex-1 overflow-y-auto">
+            <div className="bg-white rounded-2xl sm:rounded-3xl w-full max-w-5xl max-h-[90dvh] flex flex-col overflow-hidden shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex-1 overflow-y-auto pb-safe">
                 <ScopeDisclosureModule
                   initialPremiseName={formData.premiseName}
                   initialClientName={formData.dboName}

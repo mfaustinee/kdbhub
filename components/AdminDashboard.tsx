@@ -886,7 +886,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+    <div className="w-full max-w-7xl mx-auto px-0 sm:px-0 py-2 sm:py-4">
       {/* Hidden PDF Generation Container - Moved off-screen but kept in layout for html2canvas */}
       <div style={{ position: 'fixed', top: 0, left: '-9999px', width: '1024px', zIndex: -1000, overflow: 'hidden' }}>
         {selectedReview && (
@@ -1020,7 +1020,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* MOBILE HAMBURGER MENU NAVIGATION BAR (Visible on Mobile & Tablet) */}
-      <div className="lg:hidden bg-white p-3 rounded-2xl border border-slate-200 shadow-sm mb-4 transition-all">
+      <div className="lg:hidden bg-white p-3 rounded-none sm:rounded-2xl border-y sm:border border-slate-200 shadow-sm mb-4 transition-all">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <button

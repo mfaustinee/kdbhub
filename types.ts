@@ -475,18 +475,48 @@ export interface TransactionReconciliationItem {
   explanation: string; // Explanation / Action
 }
 
-export type ExceptionStatus = 'Open' | 'In Progress' | 'Resolved' | 'Closed' | 'Waived';
+export type ExceptionStatus = 
+  | 'Open' 
+  | 'Under Review'
+  | 'In Progress' 
+  | 'Payment Plan Active'
+  | 'Disputed'
+  | 'Pending Verification'
+  | 'Partially Settled'
+  | 'Cleared / Settled'
+  | 'Overdue'
+  | 'Escalated'
+  | 'Resolved'
+  | 'Closed'
+  | 'Waived';
+
+export const EXCEPTION_STATUS_OPTIONS: ExceptionStatus[] = [
+  'Open',
+  'Under Review',
+  'In Progress',
+  'Payment Plan Active',
+  'Disputed',
+  'Pending Verification',
+  'Partially Settled',
+  'Cleared / Settled',
+  'Overdue',
+  'Escalated'
+];
 
 export interface ExceptionRegisterItem {
   id: string;
   type: string; // Exception Type
   definition: string; // Definition
-  example: string; // Example
+  example: string; // Example / Observation
   source: string; // Source document / record
-  owner: string; // Owner responsible
+  owner: string; // Owner
   dueDate: string; // Due Date
-  resolutionEvidence: string; // Resolution Evidence
+  correctiveAction?: string; // Corrective Action Required
+  resolutionEvidence?: string; // Resolution Evidence / Notes
   status: ExceptionStatus; // Status
+  origin?: 'previous' | 'current';
+  previousPeriod?: string;
+  dateLogged?: string;
 }
 
 export const STANDARD_EXCEPTION_TYPES: Array<{

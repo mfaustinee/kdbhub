@@ -561,10 +561,10 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
   }
 
   return (
-    <div className="space-y-10 max-w-7xl mx-auto px-4 py-8">
+    <div className="space-y-6 sm:space-y-10 w-full max-w-7xl mx-auto px-0 sm:px-4 py-2 sm:py-8">
       
       {/* Top Level Reports Selector (Hidden on Print) */}
-      <div className="flex bg-slate-100 p-1.5 rounded-2xl print:hidden max-w-4xl overflow-x-auto gap-1">
+      <div className="flex bg-slate-100 p-1.5 rounded-none sm:rounded-2xl print:hidden max-w-4xl overflow-x-auto gap-1">
         <button
           onClick={() => setReportType('monthly')}
           className={`flex-1 min-w-[120px] py-3 text-xs font-black uppercase tracking-widest rounded-xl transition-all ${
@@ -636,7 +636,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
       {reportType === 'monthly' && (
         <>
           {/* CONTROL & FILTER BAR (Hidden on Print) */}
-      <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-xl space-y-4 print:hidden">
+      <div className="bg-white p-4 sm:p-6 rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-xl space-y-4 print:hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
@@ -713,7 +713,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ onRefresh }) => {
       </div>
 
       {/* ==================== THE PRINTABLE REPORT CONTAINER ==================== */}
-      <div id="kdb-report-printable" className="bg-white p-4 sm:p-10 rounded-[32px] border border-slate-100 shadow-sm print:shadow-none print:border-none print:p-0 space-y-10 text-slate-800">
+      <div id="kdb-report-printable" className="bg-white p-3 sm:p-10 rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-sm print:shadow-none print:border-none print:p-0 space-y-10 text-slate-800">
         
         {/* REPORT HEADER */}
         <div className="text-center space-y-2 border-b border-slate-200 pb-6">

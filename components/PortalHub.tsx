@@ -32,7 +32,7 @@ export const PortalHub: React.FC<PortalHubProps> = ({
   const activeCount = [showInquiry, showComplaint, showPayment, showClosure].filter(Boolean).length;
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-6 animate-in fade-in zoom-in-95 duration-500">
+    <div className="w-full max-w-5xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-6 animate-in fade-in zoom-in-95 duration-500">
       <div className="text-center space-y-2.5">
         <div className="inline-flex p-2 bg-emerald-50 rounded-xl border border-emerald-100 shadow-sm mb-1">
           <ShieldCheck className="w-6 h-6 text-emerald-600" />

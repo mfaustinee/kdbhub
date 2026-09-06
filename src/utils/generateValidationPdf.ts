@@ -142,18 +142,17 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
   currentY = (doc as any).lastAutoTable.finalY + 8;
 
   // Continuous Field Records Checklist: CA01–CA05, Target permit items, CA06–CA13
-  // Continuous table format matching the app; removed validation test and primary source and evidence
+  // Continuous table format matching the app; operational headers removed
   if (data.fieldChecklist && Object.keys(data.fieldChecklist).length > 0) {
     const activeItems = getActiveChecklistItems(data.category);
     const evaluatedRows: Array<[string, string, string, string]> = [];
 
     activeItems.forEach(item => {
-      const entry = data.fieldChecklist?.[item.ref];
+      const entry = data.fieldChecklist?.[item.ref] || (item.legacyRef ? data.fieldChecklist?.[item.legacyRef] : undefined);
       if (entry && (entry.status || (entry.notes && entry.notes.trim() !== ''))) {
-        const subGroupPrefix = item.subGroup ? `[${item.subGroup}] ` : '';
         evaluatedRows.push([
           item.ref,
-          `${subGroupPrefix}${item.dataItem || item.title}`,
+          item.dataItem || item.title,
           entry.status || 'Evaluated',
           entry.notes || '-'
         ]);
@@ -164,7 +163,7 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
       checkPageBreak(30);
       autoTable(doc, {
         startY: currentY,
-        head: [['Ref', 'Operational Area / Data Item', 'Record/Result Status', 'Observations & Notes']],
+        head: [['Ref', 'Check Description / Data Item', 'Record/Result Status', 'Observations & Notes']],
         body: evaluatedRows,
         styles: { fontSize: 7, cellPadding: 2.5 },
         headStyles: { fillColor: KDB_NAVY_BLUE, textColor: 255, fontStyle: 'bold' },

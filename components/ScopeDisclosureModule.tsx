@@ -66,7 +66,8 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
   const [attemptedSubmit, setAttemptedSubmit] = useState(false);
 
-  // 20-minute Timer for QR Code and generated link (inspector-side)
+  // Timer for QR Code and generated link: '20min' (Standard 20-minute validity) or 'no_timer' (Continuous / No Expiry)
+  const [qrTimerMode, setQrTimerMode] = useState<'20min' | 'no_timer'>('20min');
   const [qrExpiresAt, setQrExpiresAt] = useState<number>(() => Date.now() + 20 * 60 * 1000);
   const [qrSecondsLeft, setQrSecondsLeft] = useState<number>(20 * 60);
 
@@ -182,8 +183,14 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
       const locParam = params.get('location') || initialLocation;
       const catParam = params.get('category') || initialCategory;
       const expParam = params.get('exp');
+      const timerParam = params.get('timer');
 
-      if (expParam) {
+      if (timerParam === 'none') {
+        // Explicit no-timer mode: continuous validity session
+        setSessionExpiresAt(null);
+        setSessionSecondsLeft(null);
+        setIsSessionExpired(false);
+      } else if (expParam) {
         const parsedExp = parseInt(expParam, 10);
         if (!isNaN(parsedExp)) {
           setSessionExpiresAt(parsedExp);
@@ -251,7 +258,7 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
     setSearchQuery('');
   };
 
-  // Generate QR Link (20-Minute Expiration)
+  // Generate QR Link (20-Minute Expiration or No Timer / Continuous Validity)
   const getQrUrl = () => {
     if (typeof window === 'undefined') return '';
     const base = window.location.origin;
@@ -261,8 +268,14 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
     if (formData.permitNo) params.set('permit', formData.permitNo);
     if (formData.location) params.set('location', formData.location);
     if (formData.category) params.set('category', formData.category);
-    // Include 20-minute validity timestamp in the QR link
-    params.set('exp', qrExpiresAt.toString());
+
+    if (qrTimerMode === '20min') {
+      // Include 20-minute validity timestamp in the QR link
+      params.set('exp', qrExpiresAt.toString());
+    } else {
+      // Explicit No Timer mode: continuous validity
+      params.set('timer', 'none');
+    }
     return `${base}/scope-disclosure?${params.toString()}`;
   };
 
@@ -453,12 +466,14 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
                 <button
                   type="button"
                   onClick={openQrModal}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
-                  title="Open QR Code for mobile touch signing (20 Mins Validity)"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  title="Open QR Code for mobile touch signing"
                 >
                   <QrCode className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">QR Access</span>
-                  <span className="text-[10px] font-medium text-amber-300 hidden md:inline">• 20m</span>
+                  <span className={`text-[10px] font-bold hidden md:inline ${qrTimerMode === '20min' ? 'text-amber-300' : 'text-emerald-300'}`}>
+                    {qrTimerMode === '20min' ? '• 20m' : '• No Exp'}
+                  </span>
                 </button>
               )}
 
@@ -1071,10 +1086,10 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
                     <button
                       type="button"
                       onClick={openQrModal}
-                      className="flex items-center gap-1 text-xs text-blue-700 font-bold hover:text-blue-900 underline"
+                      className="flex items-center gap-1.5 text-xs text-blue-700 font-bold hover:text-blue-900 underline cursor-pointer"
                     >
                       <QrCode className="w-3.5 h-3.5" />
-                      Sign on phone / tablet via QR code (20-Min Timer)
+                      <span>Sign on phone / tablet via QR code ({qrTimerMode === '20min' ? '20-Min Timer' : 'No Timer'})</span>
                     </button>
                   )}
                 </div>
@@ -1199,66 +1214,104 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
         )}
       </main>
 
-      {/* QR CODE MODAL (20-MINUTE VALIDITY TIMER) */}
+      {/* QR CODE MODAL (20-MINUTE VALIDITY TIMER OR NO TIMER) */}
       {showQrModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 text-center relative animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 md:p-6 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-100 text-center relative animate-in fade-in zoom-in-95 duration-150 my-auto">
             <button
               type="button"
               onClick={() => setShowQrModal(false)}
-              className="absolute right-4 top-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full cursor-pointer"
+              className="absolute right-3.5 top-3.5 sm:right-4 sm:top-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full cursor-pointer transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
 
-            <div className="w-12 h-12 bg-blue-50 text-blue-700 rounded-2xl flex items-center justify-center mx-auto mb-3">
+            <div className="w-12 h-12 bg-blue-50 text-blue-700 rounded-2xl flex items-center justify-center mx-auto mb-2.5">
               <QrCode className="w-6 h-6" />
             </div>
 
-            <h3 className="text-base font-black text-slate-900">
-              Mobile Touch Signing
+            <h3 className="text-base sm:text-lg font-black text-slate-900">
+              Scope Disclosure Remote Signing
             </h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Point smartphone or tablet camera to open and sign the Scope Disclosure Form.
+            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+              Scan with smartphone camera or share link for digital touch signing on licensee mobile device.
             </p>
 
-            {/* 20-Minute Countdown Badge */}
-            <div className={`inline-flex items-center gap-1.5 mt-2.5 px-3 py-1 rounded-full text-xs font-bold border ${
-              qrSecondsLeft > 60 
-                ? 'bg-amber-50 text-amber-900 border-amber-300' 
-                : qrSecondsLeft > 0 
-                  ? 'bg-rose-50 text-rose-800 border-rose-300 animate-pulse' 
-                  : 'bg-slate-100 text-slate-600 border-slate-300'
-            }`}>
-              <Clock className="w-3.5 h-3.5 text-amber-700" />
-              <span>
-                {qrSecondsLeft > 0 
-                  ? `Valid for 20 mins • ${formatTimer(qrSecondsLeft)} left` 
-                  : 'Expired (20-min window elapsed)'}
-              </span>
+            {/* Validity Mode Switcher (20-Min Option vs No Timer) */}
+            <div className="mt-3.5 mb-2.5 bg-slate-100/90 p-1 rounded-2xl flex items-center gap-1 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setQrTimerMode('20min')}
+                className={`flex-1 py-1.5 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  qrTimerMode === '20min'
+                    ? 'bg-white text-slate-900 shadow-xs border border-slate-200/60'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                <span>20-Min Timer</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setQrTimerMode('no_timer')}
+                className={`flex-1 py-1.5 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  qrTimerMode === 'no_timer'
+                    ? 'bg-white text-emerald-900 shadow-xs border border-slate-200/60'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>No Timer (Continuous)</span>
+              </button>
             </div>
 
-            {/* Premise Context */}
+            {/* Validity Status Badge */}
+            {qrTimerMode === '20min' ? (
+              <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+                qrSecondsLeft > 60 
+                  ? 'bg-amber-50 text-amber-900 border-amber-300' 
+                  : qrSecondsLeft > 0 
+                    ? 'bg-rose-50 text-rose-800 border-rose-300 animate-pulse' 
+                    : 'bg-slate-100 text-slate-600 border-slate-300'
+              }`}>
+                <Clock className="w-3.5 h-3.5 text-amber-700" />
+                <span>
+                  {qrSecondsLeft > 0 
+                    ? `Valid for 20 mins • ${formatTimer(qrSecondsLeft)} remaining` 
+                    : 'Expired (20-min window elapsed)'}
+                </span>
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border bg-emerald-50 text-emerald-900 border-emerald-300">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>No Timer • Continuous Validity (Does Not Expire)</span>
+              </div>
+            )}
+
+            {/* Premise Context Card */}
             {formData.premiseName && (
-              <div className="mt-3 p-2 bg-slate-50 rounded-xl border border-slate-200 text-left">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Target Premise</p>
-                <p className="text-xs font-bold text-slate-800 truncate">{formData.premiseName}</p>
+              <div className="mt-3 p-2.5 bg-slate-50 rounded-2xl border border-slate-200 text-left">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Target Premise</span>
+                  <span className="text-[10px] font-mono font-bold text-slate-500">{formData.permitNo || 'No Permit'}</span>
+                </div>
+                <p className="text-xs font-bold text-slate-800 truncate mt-0.5">{formData.premiseName}</p>
                 {formData.dboName && (
-                  <p className="text-[11px] text-slate-500 truncate">{formData.dboName}</p>
+                  <p className="text-[11px] text-slate-500 truncate">{formData.dboName} • {formData.location}</p>
                 )}
               </div>
             )}
 
-            {/* The QR Code with optional expired overlay */}
-            <div className="relative p-4 bg-white rounded-2xl border-2 border-dashed border-slate-200 my-4 flex justify-center shadow-inner">
+            {/* The QR Code Container */}
+            <div className="relative p-4 sm:p-5 bg-white rounded-2xl border-2 border-dashed border-slate-200 my-3.5 flex justify-center shadow-inner">
               <QRCodeSVG
                 value={getQrUrl()}
-                size={200}
+                size={190}
                 level="M"
                 includeMargin={true}
               />
 
-              {qrSecondsLeft <= 0 && (
+              {qrTimerMode === '20min' && qrSecondsLeft <= 0 && (
                 <div className="absolute inset-0 bg-white/95 backdrop-blur-xs rounded-2xl flex flex-col items-center justify-center p-4">
                   <AlertTriangle className="w-8 h-8 text-rose-500 mb-2" />
                   <p className="text-xs font-black text-slate-900">QR Code Expired</p>
@@ -1279,7 +1332,7 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyLink}
-                  disabled={qrSecondsLeft <= 0}
+                  disabled={qrTimerMode === '20min' && qrSecondsLeft <= 0}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
@@ -1297,13 +1350,19 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
                 </a>
               </div>
 
-              <button
-                type="button"
-                onClick={resetQrTimer}
-                className="w-full text-center text-[11px] font-bold text-blue-600 hover:text-blue-800 py-1 transition-colors cursor-pointer"
-              >
-                ↻ Refresh / Extend 20-min window
-              </button>
+              {qrTimerMode === '20min' ? (
+                <button
+                  type="button"
+                  onClick={resetQrTimer}
+                  className="w-full text-center text-[11px] font-bold text-blue-600 hover:text-blue-800 py-1 transition-colors cursor-pointer"
+                >
+                  ↻ Refresh / Reset 20-min window
+                </button>
+              ) : (
+                <p className="text-[11px] text-emerald-700 font-semibold py-1">
+                  ✓ Active link without expiry timestamp
+                </p>
+              )}
             </div>
           </div>
         </div>

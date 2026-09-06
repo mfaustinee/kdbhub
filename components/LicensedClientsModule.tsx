@@ -941,7 +941,7 @@ export const LicensedClientsModule: React.FC = () => {
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
       {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-4 sm:p-5 text-white relative overflow-hidden shadow-md">
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-none sm:rounded-2xl p-4 sm:p-5 text-white relative overflow-hidden shadow-md">
         <div className="absolute right-0 bottom-0 opacity-10 translate-y-6 translate-x-6 pointer-events-none">
           <Building size={200} className="text-white" />
         </div>
@@ -993,7 +993,7 @@ export const LicensedClientsModule: React.FC = () => {
       </div>
 
       {/* Category Breakdown Table */}
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-sm overflow-hidden">
         <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div>
             <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest">Breakdown by Permit Category</h3>
@@ -1055,7 +1055,7 @@ export const LicensedClientsModule: React.FC = () => {
       </div>
 
       {/* Main Registry List */}
-      <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm p-6 space-y-6">
+      <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-sm p-4 sm:p-6 space-y-6">
         
         {/* Toolbar & Filters */}
         <div className="flex flex-col xl:flex-row gap-3 justify-between items-stretch xl:items-center">

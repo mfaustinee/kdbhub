@@ -54,6 +54,39 @@ export const DboSigningPortal: React.FC = () => {
   const sigPadRef = useRef<SignatureCanvas | null>(null);
   const [isPadEmpty, setIsPadEmpty] = useState(true);
 
+  // Handle high-DPI (Retina) scaling on mount & resize so signatures are crisp and coordinates don't drift
+  useEffect(() => {
+    const handleDprResize = () => {
+      if (sigPadRef.current) {
+        const canvas = sigPadRef.current.getCanvas();
+        if (canvas && canvas.offsetWidth > 0 && canvas.offsetHeight > 0) {
+          const ratio = Math.max(window.devicePixelRatio || 1, 1);
+          const targetWidth = Math.floor(canvas.offsetWidth * ratio);
+          const targetHeight = Math.floor(canvas.offsetHeight * ratio);
+          if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+            const data = sigPadRef.current.isEmpty() ? null : sigPadRef.current.toData();
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.scale(ratio, ratio);
+            }
+            if (data) {
+              sigPadRef.current.fromData(data);
+            }
+          }
+        }
+      }
+    };
+
+    const timer = setTimeout(handleDprResize, 50);
+    window.addEventListener('resize', handleDprResize);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', handleDprResize);
+    };
+  }, []);
+
   // PDF Preview
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
@@ -504,9 +537,9 @@ export const DboSigningPortal: React.FC = () => {
       </header>
 
       {/* Main Content Container */}
-      <main className="max-w-4xl mx-auto px-4 pt-6 space-y-6">
+      <main className="w-full max-w-4xl mx-auto px-0 sm:px-4 pt-2 sm:pt-6 space-y-4 sm:space-y-6">
         {/* Premise & Audit Overview Card */}
-        <section className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+        <section className="w-full bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
             <div>
               <span className="text-[10px] font-black tracking-widest text-slate-400 uppercase">Validation and Reconciliation Overview</span>
@@ -614,7 +647,7 @@ export const DboSigningPortal: React.FC = () => {
         </section>
 
         {/* Declarations & Operator Signature Section */}
-        <form onSubmit={handleSubmitSignature} className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-6">
+        <form onSubmit={handleSubmitSignature} className="w-full bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-200 p-4 sm:p-8 shadow-sm space-y-6">
           <div className="border-b border-slate-100 pb-4">
             <span className="text-[10px] font-black tracking-widest text-emerald-600 uppercase">Operator Affirmation</span>
             <h2 className="text-xl font-black text-slate-900">Declarations & Signature</h2>

@@ -573,12 +573,13 @@ const App: React.FC = () => {
   };
 
   const isSigningPortal = location.pathname.startsWith('/sign-validation');
+  const isStandaloneRoute = isSigningPortal || location.pathname === '/data-validation';
 
   return (
-    <div className="min-h-screen flex flex-col font-sans bg-slate-50 text-slate-900">
+    <div className="min-h-screen flex flex-col font-sans bg-[#f5f5f4] text-[#1a1a1a]">
       {!isSigningPortal && (
         <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm print:hidden">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          <div className="w-full max-w-7xl mx-auto px-3 sm:px-4 md:px-6 lg:px-8">
             <div className="flex justify-between h-14 items-center">
               <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => navigate('/')}>
                 <div className="bg-emerald-600 p-1.5 rounded-lg flex items-center shadow-sm">
@@ -641,7 +642,7 @@ const App: React.FC = () => {
         </header>
       )}
 
-      <main className="flex-grow">
+      <main className="w-full max-w-7xl mx-auto px-0 sm:px-4 md:px-6 lg:px-8 py-0 sm:py-6 flex-grow">
         <Routes>
           <Route path="/sign-validation/:draftId" element={<DboSigningPortal />} />
           <Route path="/sign-validation" element={<DboSigningPortal />} />

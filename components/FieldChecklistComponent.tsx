@@ -298,7 +298,7 @@ export const FieldChecklistComponent: React.FC<FieldChecklistComponentProps> = (
                   {activeSections.map(sec => {
                     const isSuggested = sec.id === suggestedSectionId;
                     const isActive = activeSectionId === sec.id;
-                    const filledCount = sec.items.filter(item => value[item.ref]?.status).length;
+                    const filledCount = sec.items.filter(item => (value[item.ref]?.status || (item.legacyRef && value[item.legacyRef]?.status))).length;
                     
                     return (
                       <button
@@ -385,7 +385,7 @@ export const FieldChecklistComponent: React.FC<FieldChecklistComponentProps> = (
               {/* Sections Display */}
               <div className="space-y-6">
                 {displayedSections.map(section => {
-                  const sectionFilledCount = section.items.filter(item => value[item.ref]?.status).length;
+                  const sectionFilledCount = section.items.filter(item => (value[item.ref]?.status || (item.legacyRef && value[item.legacyRef]?.status))).length;
                   const isSectionMatch = section.id === suggestedSectionId;
                   const currentSecIndex = activeSections.findIndex(s => s.id === section.id);
                   const prevSection = currentSecIndex > 0 ? activeSections[currentSecIndex - 1] : null;
@@ -474,7 +474,7 @@ export const FieldChecklistComponent: React.FC<FieldChecklistComponentProps> = (
                       {/* Items List */}
                       <div className="divide-y divide-slate-100">
                         {section.items.map((item, idx) => {
-                          const currentVal = value[item.ref] || { status: '', notes: '' };
+                          const currentVal = value[item.ref] || (item.legacyRef ? value[item.legacyRef] : undefined) || { status: '', notes: '' };
                           const statusOptions = getItemStatusOptions(item);
                           const isPositive = currentVal.status === statusOptions[0]?.value;
                           const isNA = currentVal.status === statusOptions[3]?.value;

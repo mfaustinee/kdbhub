@@ -2,6 +2,7 @@ import { FieldChecklistResultStatus } from '../types';
 
 export interface FieldChecklistItem {
   ref: string;
+  legacyRef?: string;
   subGroup?: string;
   dataItem: string;
   primarySource: string;
@@ -495,7 +496,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Supporting Reconciliation Components
   {
-    ref: 'CP08',
+    ref: 'CP07.1',
+    legacyRef: 'CP08',
     subGroup: 'Supporting Reconciliation Components',
     dataItem: 'Opening Milk Balance',
     primarySource: 'Stock/intake records',
@@ -511,7 +513,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CP09',
+    ref: 'CP07.2',
+    legacyRef: 'CP09',
     subGroup: 'Supporting Reconciliation Components',
     dataItem: 'Milk Received',
     primarySource: 'Intake records',
@@ -527,7 +530,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CP10',
+    ref: 'CP07.3',
+    legacyRef: 'CP10',
     subGroup: 'Supporting Reconciliation Components',
     dataItem: 'Milk Dispatched',
     primarySource: 'Dispatch notes',
@@ -543,7 +547,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CP11',
+    ref: 'CP07.4',
+    legacyRef: 'CP11',
     subGroup: 'Supporting Reconciliation Components',
     dataItem: 'Closing Balance',
     primarySource: 'Stock records',
@@ -561,7 +566,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Sales / Dispatch & Invoice Reconciliation
   {
-    ref: 'CP12',
+    ref: 'CP08',
+    legacyRef: 'CP12',
     subGroup: 'Sales / Dispatch & Invoice Reconciliation',
     dataItem: 'Dispatch-To-Invoice Reconciliation',
     primarySource: 'Dispatch/invoices',
@@ -578,7 +584,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CP13',
+    ref: 'CP09',
+    legacyRef: 'CP13',
     subGroup: 'Sales / Dispatch & Invoice Reconciliation',
     dataItem: 'Receiving-Side Confirmation',
     primarySource: 'Receiving records where available',
@@ -597,7 +604,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Analytical / Exception Testing
   {
-    ref: 'CP14',
+    ref: 'CP10',
+    legacyRef: 'CP14',
     subGroup: 'Analytical / Exception Testing',
     dataItem: 'Zero Activity',
     primarySource: 'Intake records',
@@ -613,7 +621,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CP15',
+    ref: 'CP11',
+    legacyRef: 'CP15',
     subGroup: 'Analytical / Exception Testing',
     dataItem: 'Abnormal Volumes',
     primarySource: 'Daily summaries',
@@ -631,7 +640,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Quality & Payment Records
   {
-    ref: 'CP16',
+    ref: 'CP12',
+    legacyRef: 'CP16',
     subGroup: 'Quality & Payment Records',
     dataItem: 'Quality-Based Payment (Fat & Snf) Records',
     primarySource: 'Quality & Payment Records',
@@ -648,7 +658,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CP17',
+    ref: 'CP13',
+    legacyRef: 'CP17',
     subGroup: 'Quality & Payment Records',
     dataItem: 'Deductions & Farmer Payout Statements',
     primarySource: 'Payout Statements & Deduction Records',
@@ -667,7 +678,8 @@ export const COOLING_PLANT_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Measurement & Calibration Controls
   {
-    ref: 'CP18',
+    ref: 'CP14',
+    legacyRef: 'CP18',
     subGroup: 'Measurement & Calibration Controls',
     dataItem: 'Calibration Certificates For Testing & Weighing',
     primarySource: 'Calibration Certificates & Equipment Register',
@@ -1190,7 +1202,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Supporting / Analytical tests
   {
-    ref: 'CI02',
+    ref: 'CI01.1',
+    legacyRef: 'CI02',
     subGroup: 'Supporting / Analytical tests',
     dataItem: 'Sustained Throughput',
     primarySource: 'Monthly records',
@@ -1207,7 +1220,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI03',
+    ref: 'CI01.2',
+    legacyRef: 'CI03',
     subGroup: 'Supporting / Analytical tests',
     dataItem: 'Raw Milk Purchases',
     primarySource: 'Supplier records',
@@ -1224,7 +1238,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI04',
+    ref: 'CI01.3',
+    legacyRef: 'CI04',
     subGroup: 'Supporting / Analytical tests',
     dataItem: 'Supplier Payments',
     primarySource: 'Finance records',
@@ -1241,7 +1256,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI05',
+    ref: 'CI01.4',
+    legacyRef: 'CI05',
     subGroup: 'Supporting / Analytical tests',
     dataItem: 'Production Output',
     primarySource: 'Production records',
@@ -1258,7 +1274,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI06',
+    ref: 'CI01.5',
+    legacyRef: 'CI06',
     subGroup: 'Supporting / Analytical tests',
     dataItem: 'Sales Quantity',
     primarySource: 'Sales records',
@@ -1275,7 +1292,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI07',
+    ref: 'CI01.6',
+    legacyRef: 'CI07',
     subGroup: 'Supporting / Analytical tests',
     dataItem: 'Stock Balance',
     primarySource: 'Stock records',
@@ -1294,7 +1312,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Product & Customer Classification
   {
-    ref: 'CI08',
+    ref: 'CI02',
+    legacyRef: 'CI08',
     subGroup: 'Product & Customer Classification',
     dataItem: 'Product Scope',
     primarySource: 'Permit/production',
@@ -1311,7 +1330,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI09',
+    ref: 'CI03',
+    legacyRef: 'CI09',
     subGroup: 'Product & Customer Classification',
     dataItem: 'Buyer Class',
     primarySource: 'Permit/sales',
@@ -1330,7 +1350,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Data Completeness & Anomaly Testing
   {
-    ref: 'CI10',
+    ref: 'CI04',
+    legacyRef: 'CI10',
     subGroup: 'Data Completeness & Anomaly Testing',
     dataItem: 'Missing Periods',
     primarySource: 'Records/files',
@@ -1347,7 +1368,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI11',
+    ref: 'CI05',
+    legacyRef: 'CI11',
     subGroup: 'Data Completeness & Anomaly Testing',
     dataItem: 'Related / Duplicate Records',
     primarySource: 'Master register',
@@ -1364,7 +1386,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI12',
+    ref: 'CI06',
+    legacyRef: 'CI12',
     subGroup: 'Data Completeness & Anomaly Testing',
     dataItem: 'Split Activity',
     primarySource: 'Master/transaction records',
@@ -1381,7 +1404,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CI13',
+    ref: 'CI07',
+    legacyRef: 'CI13',
     subGroup: 'Data Completeness & Anomaly Testing',
     dataItem: 'Classification Change',
     primarySource: 'Throughput trend',
@@ -1400,7 +1424,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Batch Production & Ingredient Traceability
   {
-    ref: 'CI14',
+    ref: 'CI08',
+    legacyRef: 'CI14',
     subGroup: 'Batch Production & Ingredient Traceability',
     dataItem: 'Batch Production Logs & Ingredient Traceability',
     primarySource: 'Batch Production & Ingredient Records',
@@ -1420,7 +1445,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Finished Goods, Inventory & Sales
   {
-    ref: 'CI15',
+    ref: 'CI09',
+    legacyRef: 'CI15',
     subGroup: 'Finished Goods, Inventory & Sales',
     dataItem: 'Finished Goods Inventory & Sales Ledger',
     primarySource: 'Finished Goods Register & Sales Ledger',
@@ -1440,7 +1466,8 @@ export const COTTAGE_INDUSTRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Recall & Quality Controls
   {
-    ref: 'CI16',
+    ref: 'CI10',
+    legacyRef: 'CI16',
     subGroup: 'Recall & Quality Controls',
     dataItem: 'Product Recall & Quality Non-Conformance Log',
     primarySource: 'Recall & Non-Conformance Register',
@@ -1481,7 +1508,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Supporting / Analytical Components
   {
-    ref: 'MD02',
+    ref: 'MD01.1',
+    legacyRef: 'MD02',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Daily Handling',
     primarySource: 'Intake/production records',
@@ -1498,7 +1526,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD03',
+    ref: 'MD01.2',
+    legacyRef: 'MD03',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Classification Period',
     primarySource: 'Permit/throughput data',
@@ -1515,7 +1544,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD04',
+    ref: 'MD01.3',
+    legacyRef: 'MD04',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Processing Capacity',
     primarySource: 'Permit/asset records',
@@ -1531,7 +1561,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD05',
+    ref: 'MD01.4',
+    legacyRef: 'MD05',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Raw Milk Purchases',
     primarySource: 'Supplier records',
@@ -1548,7 +1579,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD06',
+    ref: 'MD01.5',
+    legacyRef: 'MD06',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Supplier Payments',
     primarySource: 'Finance records',
@@ -1565,7 +1597,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD07',
+    ref: 'MD01.6',
+    legacyRef: 'MD07',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Production Output',
     primarySource: 'Production records',
@@ -1582,7 +1615,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD08',
+    ref: 'MD01.7',
+    legacyRef: 'MD08',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Production Losses',
     primarySource: 'Production records',
@@ -1599,7 +1633,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD09',
+    ref: 'MD01.8',
+    legacyRef: 'MD09',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Finished Stock',
     primarySource: 'Stock records',
@@ -1616,7 +1651,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD10',
+    ref: 'MD01.9',
+    legacyRef: 'MD10',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Sales',
     primarySource: 'Sales ledger',
@@ -1633,7 +1669,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD11',
+    ref: 'MD01.10',
+    legacyRef: 'MD11',
     subGroup: 'Supporting / Analytical Components',
     dataItem: 'Dispatch',
     primarySource: 'Dispatch records',
@@ -1652,7 +1689,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Process Control & Temperature Records
   {
-    ref: 'MD12',
+    ref: 'MD02',
+    legacyRef: 'MD12',
     subGroup: 'Process Control & Temperature Records',
     dataItem: 'Pasteurizer / Temperature & Flow Chart Records',
     primarySource: 'Pasteurizer Temperature & Flow Records',
@@ -1672,7 +1710,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Producer / Aggregator Payments & Contracts
   {
-    ref: 'MD13',
+    ref: 'MD03',
+    legacyRef: 'MD13',
     subGroup: 'Producer / Aggregator Payments & Contracts',
     dataItem: 'Producer / Aggregator Payment & Contract Audit',
     primarySource: 'Contracts',
@@ -1691,7 +1730,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Traceability & Dispatch
   {
-    ref: 'MD14',
+    ref: 'MD04',
+    legacyRef: 'MD14',
     subGroup: 'Traceability & Dispatch',
     dataItem: 'Traceability Lot Coding & Dispatch Manifests',
     primarySource: 'Lot/Batch Register & Dispatch Manifests',
@@ -1711,7 +1751,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Product & Buyer Classification
   {
-    ref: 'MD15',
+    ref: 'MD05',
+    legacyRef: 'MD15',
     subGroup: 'Product & Buyer Classification',
     dataItem: 'Product Scope',
     primarySource: 'Permit/production/sales',
@@ -1728,7 +1769,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD16',
+    ref: 'MD06',
+    legacyRef: 'MD16',
     subGroup: 'Product & Buyer Classification',
     dataItem: 'Buyer Class',
     primarySource: 'Permit/sales',
@@ -1745,7 +1787,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD17',
+    ref: 'MD07',
+    legacyRef: 'MD17',
     subGroup: 'Product & Buyer Classification',
     dataItem: 'Levy Remittance',
     primarySource: 'Finance/bank/Returns',
@@ -1765,7 +1808,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
 
   // Classification & Data Integrity
   {
-    ref: 'MD18',
+    ref: 'MD08',
+    legacyRef: 'MD18',
     subGroup: 'Classification & Data Integrity',
     dataItem: 'Classification Continuity',
     primarySource: 'Permit history/throughput',
@@ -1782,7 +1826,8 @@ export const MINI_DAIRY_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'MD19',
+    ref: 'MD09',
+    legacyRef: 'MD19',
     subGroup: 'Classification & Data Integrity',
     dataItem: 'Duplicate / Related Records',
     primarySource: 'Master register',

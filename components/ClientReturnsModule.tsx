@@ -1479,7 +1479,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
               </div>
 
               {/* Action Bar & Filters */}
-              <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col xl:flex-row justify-between gap-4">
+              <div className="bg-white p-4 sm:p-6 rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-sm flex flex-col xl:flex-row justify-between gap-4">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3 flex-grow">
                   {/* Search input */}
                   <div className="relative">
@@ -1587,7 +1587,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
               </div>
 
               {/* Main Registry Table */}
-              <div className="bg-white rounded-[40px] border border-slate-100 shadow-xl overflow-hidden">
+              <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-xl overflow-hidden">
                 {filteredClientSummaries.length === 0 ? (
                   <div className="p-20 text-center space-y-4">
                     <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto" />

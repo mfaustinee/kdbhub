@@ -712,7 +712,7 @@ export const ValidationsCounterView: React.FC<ValidationsCounterViewProps> = ({
     <div className="space-y-8 animate-in fade-in duration-300">
       
       {/* 1. TOP HEADER & CONTROLS BAR (Hidden on Print) */}
-      <div className="bg-white p-6 sm:p-8 rounded-[32px] border border-slate-100 shadow-xl space-y-6 print:hidden">
+      <div className="bg-white p-4 sm:p-8 rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-xl space-y-6 print:hidden">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-100">
           <div>
             <div className="flex items-center gap-2 mb-1.5">
@@ -978,7 +978,7 @@ export const ValidationsCounterView: React.FC<ValidationsCounterViewProps> = ({
           {displayedQuarters.map(quarter => (
             <div 
               key={quarter.id}
-              className="bg-white rounded-[32px] border border-slate-100 shadow-xl overflow-hidden print:shadow-none print:border-none space-y-6 p-6 sm:p-8"
+              className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-xl overflow-hidden print:shadow-none print:border-none space-y-6 p-4 sm:p-8"
             >
               
               {/* Quarter Header */}
@@ -1170,7 +1170,7 @@ export const ValidationsCounterView: React.FC<ValidationsCounterViewProps> = ({
 
       {/* 4. COMPREHENSIVE CATEGORY MATRIX TABLE */}
       {activeTab === 'matrix' && (
-        <div className="bg-white rounded-[32px] border border-slate-100 shadow-xl overflow-hidden p-6 sm:p-8 space-y-6">
+        <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-xl overflow-hidden p-4 sm:p-8 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
             <div>
               <h3 className="text-xl font-black text-slate-900 tracking-tight">

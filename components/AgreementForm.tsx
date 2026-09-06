@@ -217,7 +217,7 @@ export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtor
   }, []);
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-6">
+    <div className="w-full max-w-3xl mx-auto px-0 sm:px-4 py-0 sm:py-6">
       {isSubmitting && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[200] flex items-center justify-center p-6">
           <div className="max-w-md w-full text-center space-y-6 animate-in fade-in zoom-in-95">
@@ -238,7 +238,7 @@ export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtor
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow-md overflow-hidden border border-slate-100 animate-in fade-in zoom-in-95 duration-500">
+      <div className="w-full bg-white rounded-none sm:rounded-2xl md:rounded-3xl shadow-md overflow-hidden border-y sm:border border-slate-100 animate-in fade-in zoom-in-95 duration-500">
         <div className="bg-emerald-600 px-5 py-4 sm:px-6 sm:py-4 text-white flex justify-between items-center">
           <div>
             <h2 className="text-base sm:text-lg font-bold tracking-tight">Execution Portal</h2>

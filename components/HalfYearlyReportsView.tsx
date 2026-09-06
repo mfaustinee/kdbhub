@@ -468,7 +468,7 @@ export const HalfYearlyReportsView: React.FC<HalfYearlyReportsViewProps> = ({ cl
   return (
     <div className="space-y-6">
       {/* FILTER BAR FOR HALF-YEARLY REPORT (Hidden on print) */}
-      <div className="bg-slate-50/60 p-6 rounded-2xl border border-slate-100 grid grid-cols-1 md:grid-cols-5 gap-4 print:hidden">
+      <div className="bg-slate-50/60 p-4 sm:p-6 rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 grid grid-cols-1 md:grid-cols-5 gap-4 print:hidden">
         <div className="space-y-1">
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Branch Name</label>
           <input
@@ -541,7 +541,7 @@ export const HalfYearlyReportsView: React.FC<HalfYearlyReportsViewProps> = ({ cl
       </div>
 
       {/* PRINTABLE HALF YEAR CONTAINER */}
-      <div id="kdb-half-yearly-report-printable" className="bg-white p-2 sm:p-4 rounded-3xl border border-slate-100 shadow-sm print:shadow-none print:border-none print:p-0 space-y-10 text-slate-800">
+      <div id="kdb-half-yearly-report-printable" className="bg-white p-2 sm:p-4 rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-sm print:shadow-none print:border-none print:p-0 space-y-10 text-slate-800">
         
         {/* REPORT HEADER */}
         <div className="text-center space-y-2 border-b border-slate-200 pb-6">

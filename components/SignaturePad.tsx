@@ -36,6 +36,39 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({ onSave, label = "Dig
     }
   }, [value]);
 
+  // Handle high-DPI (Retina) scaling on mount & resize so signatures are crisp and coordinates don't drift
+  useEffect(() => {
+    const handleDprResize = () => {
+      if (sigPad.current) {
+        const canvas = sigPad.current.getCanvas();
+        if (canvas && canvas.offsetWidth > 0 && canvas.offsetHeight > 0) {
+          const ratio = Math.max(window.devicePixelRatio || 1, 1);
+          const targetWidth = Math.floor(canvas.offsetWidth * ratio);
+          const targetHeight = Math.floor(canvas.offsetHeight * ratio);
+          if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+            const data = sigPad.current.isEmpty() ? null : sigPad.current.toData();
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.scale(ratio, ratio);
+            }
+            if (data) {
+              sigPad.current.fromData(data);
+            }
+          }
+        }
+      }
+    };
+
+    const timer = setTimeout(handleDprResize, 50);
+    window.addEventListener('resize', handleDprResize);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', handleDprResize);
+    };
+  }, [signature]);
+
   // Clean up camera stream on unmount
   useEffect(() => {
     return () => {
