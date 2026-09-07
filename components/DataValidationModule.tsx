@@ -63,6 +63,7 @@ import {
   Scale,
   ShieldAlert,
   Sparkles,
+  FileCheck,
   Eye,
   EyeOff,
   Lock,
@@ -986,15 +987,16 @@ export function DataValidationModule() {
     signedAt: string;
   } | null>(null);
 
-  // Helper to mask remote DBO signing link for officer security and privacy
+  // Helper to mask remote DBO signing link for officer security and privacy (app address hidden)
   const getMaskedSigningUrl = (url: string) => {
     if (!url) return '';
     try {
       const parsed = new URL(url);
       const maskedPath = parsed.pathname.replace(/\/sign-validation\/[^/?#]+/, '/sign-validation/••••••••');
-      return `${parsed.origin}${maskedPath}?token=••••••••••••••••`;
+      // Ensure the app address is NOT exposed in the masked URL
+      return `https://••••••••${maskedPath}?token=••••••••••••••••`;
     } catch {
-      return url.replace(/token=([^&]{4})[^&]+([^&]{3})/, 'token=$1••••••••$2');
+      return url.replace(/https?:\/\/[^/]+/, 'https://••••••••').replace(/token=([^&]{4})[^&]+([^&]{3})/, 'token=$1••••••••$2');
     }
   };
 
@@ -1629,7 +1631,10 @@ export function DataValidationModule() {
     if (!targetRecord) return;
     try {
       const doc = await generateScopeDisclosurePdfDoc(targetRecord);
-      const filename = `KDB_Scope_Disclosure_${(targetRecord.premiseName || 'Premise').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+      const premiseClean = (targetRecord.premiseName || targetRecord.dboName || 'Premise').trim().replace(/[/\\?%*:|"<>]/g, '-');
+      const rawDate = (targetRecord.signedDate || new Date().toLocaleDateString('en-GB')).trim();
+      const safeDate = rawDate.replace(/\//g, '-').replace(/[/\\?%*:|"<>]/g, '-');
+      const filename = `KDB_Scope_Disclosure_${premiseClean}_${safeDate}.pdf`;
       doc.save(filename);
     } catch (err) {
       console.error('Error generating scope disclosure PDF:', err);
@@ -4995,6 +5000,216 @@ export function DataValidationModule() {
     return list;
   }, [formData.pastExceptions, lastCollections, previousExceptionsOverride]);
 
+  // Helper to mirror Corrective Actions Required from the Exceptions Register into Recommended Actions / Directives,
+  // while preserving any manually entered notes or custom directives.
+  const syncDirectivesFromExceptions = (
+    currentDirectives: string,
+    exceptions: ExceptionRegisterItem[],
+    prevExceptions?: Array<any>
+  ): string => {
+    const activeActions: string[] = [];
+
+    (exceptions || []).forEach(exc => {
+      const act = (exc.correctiveAction || exc.actionRequired)?.trim();
+      if (act && !activeActions.includes(act)) {
+        activeActions.push(act);
+      }
+    });
+
+    if (prevExceptions) {
+      prevExceptions.forEach(exc => {
+        if (exc.status !== 'Cleared / Settled') {
+          const act = (exc.correctiveAction || exc.actionRequired)?.trim();
+          if (act && !activeActions.includes(act)) {
+            activeActions.push(act);
+          }
+        }
+      });
+    }
+
+    if (activeActions.length === 0) {
+      return currentDirectives || '';
+    }
+
+    if (!currentDirectives || currentDirectives.trim() === '') {
+      return activeActions.map(a => `• ${a}`).join('\n');
+    }
+
+    // Identify which corrective actions are not yet included in the current directives
+    const missing = activeActions.filter(act => {
+      const cleanAct = act.toLowerCase().replace(/^[•\-\*\s]+/, '').trim();
+      return !currentDirectives.toLowerCase().includes(cleanAct);
+    });
+
+    if (missing.length === 0) {
+      return currentDirectives;
+    }
+
+    return `${currentDirectives.trim()}\n${missing.map(a => `• ${a}`).join('\n')}`;
+  };
+
+  // Mirrored directive actions from both current and open past exceptions
+  const mirroredDirectives = useMemo(() => {
+    const list: string[] = [];
+    (formData.exceptionRegister || []).forEach(exc => {
+      const act = (exc.correctiveAction || exc.actionRequired)?.trim();
+      if (act && !list.includes(act)) list.push(act);
+    });
+    (previousAuditExceptions || []).forEach(exc => {
+      if (exc.status !== 'Cleared / Settled') {
+        const act = (exc.correctiveAction || exc.actionRequired)?.trim();
+        if (act && !list.includes(act)) list.push(act);
+      }
+    });
+    return list;
+  }, [formData.exceptionRegister, previousAuditExceptions]);
+
+  // Quick comments list extracted from every identified exception's observation (obs:) detailed in definition
+  const exceptionObservationsList = useMemo(() => {
+    const list: Array<{ id: string; type: string; observation: string; definition?: string; source?: string }> = [];
+    const seenObs = new Set<string>();
+
+    // 1. Current audit exceptions
+    (formData.exceptionRegister || []).forEach(exc => {
+      const rawObs = (exc.example && exc.example.trim()) || (exc.definition && exc.definition.trim()) || '';
+      const cleanObs = rawObs.replace(/^obs[:\s-]+/i, '').trim();
+      if (cleanObs && !seenObs.has(cleanObs.toLowerCase())) {
+        seenObs.add(cleanObs.toLowerCase());
+        list.push({
+          id: exc.id,
+          type: exc.type || 'Finding',
+          observation: cleanObs,
+          definition: exc.definition,
+          source: exc.source
+        });
+      }
+    });
+
+    // 2. Previous unresolved exceptions
+    (previousAuditExceptions || []).forEach(exc => {
+      if (exc.status !== 'Cleared / Settled') {
+        const rawObs = (exc.example && exc.example.trim()) || (exc.definition && exc.definition.trim()) || '';
+        const cleanObs = rawObs.replace(/^obs[:\s-]+/i, '').trim();
+        if (cleanObs && !seenObs.has(cleanObs.toLowerCase())) {
+          seenObs.add(cleanObs.toLowerCase());
+          list.push({
+            id: exc.id,
+            type: exc.type || 'Previous Finding',
+            observation: cleanObs,
+            definition: exc.definition,
+            source: exc.source
+          });
+        }
+      }
+    });
+
+    return list;
+  }, [formData.exceptionRegister, previousAuditExceptions]);
+
+  // Handler to toggle an observation comment in/out of the General Comments
+  const handleToggleObservationComment = (type: string, observation: string) => {
+    const cleanObs = observation.replace(/^obs[:\s-]+/i, '').trim();
+    const commentLine = `${type} - Obs: ${cleanObs}`;
+    setFormData(prev => {
+      const current = prev.comments || '';
+      if (cleanObs && current.includes(cleanObs)) {
+        // Remove the line containing this observation
+        const lines = current.split('\n');
+        const filtered = lines.filter(line => !line.includes(cleanObs));
+        return { ...prev, comments: filtered.join('\n').trim() };
+      } else {
+        const trimmed = current.trim();
+        const updated = trimmed ? `${trimmed}\n• ${commentLine}` : `• ${commentLine}`;
+        return { ...prev, comments: updated };
+      }
+    });
+  };
+
+  // Real-time synchronization when user modifies current exceptions in Step 5
+  const handleUpdateExceptionsAndSyncDirectives = (updated: ExceptionRegisterItem[]) => {
+    setFormData(prev => {
+      const oldExceptions = prev.exceptionRegister || [];
+      let updatedDirectives = prev.recommendedActions || '';
+
+      // If an existing corrective action was edited in the table, replace it in the directives
+      updated.forEach(newItem => {
+        const oldItem = oldExceptions.find(o => o.id === newItem.id);
+        const oldAct = (oldItem?.correctiveAction || oldItem?.actionRequired)?.trim();
+        const newAct = (newItem.correctiveAction || newItem.actionRequired)?.trim();
+        if (oldAct && newAct && oldAct !== newAct && updatedDirectives.includes(oldAct)) {
+          updatedDirectives = updatedDirectives.split(oldAct).join(newAct);
+        }
+      });
+
+      // Synchronize any newly added actions without removing custom user directives
+      updatedDirectives = syncDirectivesFromExceptions(
+        updatedDirectives,
+        updated,
+        previousAuditExceptions
+      );
+
+      return {
+        ...prev,
+        exceptionRegister: updated,
+        recommendedActions: updatedDirectives
+      };
+    });
+  };
+
+  // Real-time synchronization when user modifies a previous exception's field
+  const handleUpdatePreviousExceptionFieldWithSync = (id: string, field: string, value: any) => {
+    handleUpdatePreviousExceptionField(id, field, value);
+    if ((field === 'correctiveAction' || field === 'actionRequired') && typeof value === 'string' && value.trim()) {
+      setFormData(prev => {
+        const updatedDirectives = syncDirectivesFromExceptions(
+          prev.recommendedActions || '',
+          prev.exceptionRegister || [],
+          previousAuditExceptions.map(p => p.id === id ? { ...p, [field]: value } : p)
+        );
+        return {
+          ...prev,
+          recommendedActions: updatedDirectives
+        };
+      });
+    }
+  };
+
+  // Manual trigger button to re-sync directives from exceptions in Step 5
+  const handleSyncMirroredDirectives = () => {
+    setFormData(prev => {
+      const updatedDirectives = syncDirectivesFromExceptions(
+        prev.recommendedActions || '',
+        prev.exceptionRegister || [],
+        previousAuditExceptions
+      );
+      return {
+        ...prev,
+        recommendedActions: updatedDirectives
+      };
+    });
+    setStatus({ type: 'success', message: 'Mirrored corrective actions from Exceptions Register.' });
+  };
+
+  // Automatically mirror directives when entering Step 5 if recommendedActions is empty or missing actions
+  useEffect(() => {
+    if (step === 5) {
+      setFormData(prev => {
+        const updatedDirectives = syncDirectivesFromExceptions(
+          prev.recommendedActions || '',
+          prev.exceptionRegister || [],
+          previousAuditExceptions
+        );
+        if (updatedDirectives !== (prev.recommendedActions || '')) {
+          return {
+            ...prev,
+            recommendedActions: updatedDirectives
+          };
+        }
+        return prev;
+      });
+    }
+  }, [step]);
+
   return (
     <div className="w-full text-[#1a1a1a] font-sans">
       <div className="w-full">
@@ -7917,14 +8132,57 @@ export function DataValidationModule() {
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
                   className="space-y-6"
-                  id="step5-comments-and-corrective-actions-section"
+                  id="step5-exceptions-and-comments-section"
                 >
-                  {/* Step 5: Comments & Recommendations */}
+                  <div className="flex items-center gap-2.5 mb-2 pb-3 border-b border-gray-100">
+                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">5</div>
+                    <div>
+                      <h2 className="text-lg font-bold text-gray-900">Step 5: Exceptions Register & Recommendations</h2>
+                      <p className="text-[11px] text-gray-500 font-medium">Review and record audit exceptions first, then formulate mirrored corrective directives and officer remarks</p>
+                    </div>
+                  </div>
+
+                  {/* 1. Exceptions Register (Comes BEFORE Comments & Recommendations) */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-full bg-slate-900 text-white text-xs font-bold flex items-center justify-center">5.1</span>
+                        <h3 className="text-sm sm:text-base font-bold text-slate-900">Exceptions Register (Audit Findings)</h3>
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">
+                        Each exception's "Corrective Action Required" automatically mirrors into directives below
+                      </span>
+                    </div>
+
+                    <ExceptionRegisterComponent
+                      mode="step6-consolidated"
+                      previousExceptions={previousAuditExceptions}
+                      currentExceptions={formData.exceptionRegister || []}
+                      onUpdateCurrentExceptions={handleUpdateExceptionsAndSyncDirectives}
+                      onUpdatePreviousExceptionStatus={handleUpdatePreviousExceptionStatus}
+                      onUpdatePreviousExceptionField={handleUpdatePreviousExceptionFieldWithSync}
+                      onDeletePreviousException={handleDeletePreviousException}
+                      onAppendComment={handleToggleObservationComment}
+                      isObservationAppended={(obs) => {
+                        const clean = obs ? obs.replace(/^obs[:\s-]+/i, '').trim() : '';
+                        return clean ? (formData.comments || '').includes(clean) : false;
+                      }}
+                      dboName={formData.dboName || selectedClient?.clientName}
+                      premiseName={formData.premiseName}
+                      actionOwner={formData.actionOwner}
+                      globalUnit={globalUnit}
+                    />
+                  </div>
+
+                  {/* 2. Comments & Recommendations (Follows the Exceptions Register, with mirrored directives) */}
                   <CommentsAndCorrectiveActionsComponent
                     comments={formData.comments}
                     recommendedActions={formData.recommendedActions || ''}
                     actionDueDate={formData.actionDueDate || ''}
                     actionOwner={formData.actionOwner || ''}
+                    mirroredDirectives={mirroredDirectives}
+                    exceptionObservations={exceptionObservationsList}
+                    onSyncMirroredDirectives={handleSyncMirroredDirectives}
                     onChange={(updatedFields) => {
                       setFormData(prev => ({
                         ...prev,
@@ -7989,25 +8247,38 @@ export function DataValidationModule() {
                   <div className="flex items-center gap-2.5 mb-6 pb-3 border-b border-gray-100">
                     <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">6</div>
                     <div>
-                      <h2 className="text-lg font-bold text-gray-900">Step 6: Exceptions Register, Declarations & Signatures</h2>
-                      <p className="text-[11px] text-gray-500 font-medium">Exceptions register, compliance affirmations, and official sign-offs</p>
+                      <h2 className="text-lg font-bold text-gray-900">Step 6: Declarations & Signatures</h2>
+                      <p className="text-[11px] text-gray-500 font-medium">Compliance affirmations, legal declarations, and official sign-offs</p>
                     </div>
                   </div>
 
-                  {/* Step 6: Exceptions Register */}
-                  <ExceptionRegisterComponent
-                    mode="step6-consolidated"
-                    previousExceptions={previousAuditExceptions}
-                    currentExceptions={formData.exceptionRegister || []}
-                    onUpdateCurrentExceptions={(updated) => setFormData(prev => ({ ...prev, exceptionRegister: updated }))}
-                    onUpdatePreviousExceptionStatus={handleUpdatePreviousExceptionStatus}
-                    onUpdatePreviousExceptionField={handleUpdatePreviousExceptionField}
-                    onDeletePreviousException={handleDeletePreviousException}
-                    dboName={formData.dboName || selectedClient?.clientName}
-                    premiseName={formData.premiseName}
-                    actionOwner={formData.actionOwner}
-                    globalUnit={globalUnit}
-                  />
+                  {/* Summary / Review card for Exceptions Register in Step 6 */}
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-xl bg-blue-100 text-blue-700">
+                        <FileCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-bold text-slate-900 uppercase tracking-wider">Exceptions Register & Directives</p>
+                          <span className="text-[10px] bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded-full">
+                            {mirroredDirectives.length} Directive(s) Mirrored
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          {(formData.exceptionRegister || []).length + previousAuditExceptions.length} total recorded exception(s). Corrective directives reviewed and recorded in Step 5.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setStep(5)}
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold transition-all cursor-pointer shadow-2xs shrink-0 self-start sm:self-auto"
+                      id="step6-review-exceptions-btn"
+                    >
+                      Review / Edit in Step 5
+                    </button>
+                  </div>
 
                   {/* Declarations Box */}
                   <div className="bg-white p-6 rounded-2xl border border-gray-100 space-y-4">

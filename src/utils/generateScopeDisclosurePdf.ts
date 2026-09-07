@@ -101,7 +101,6 @@ export const generateScopeDisclosurePdfDoc = async (data: Partial<ScopeDisclosur
   doc.setFontSize(8.5);
   const details = [
     { label: 'Name of Licensee (DBO):', value: data.dboName || '..................................................................................' },
-    { label: 'License / Permit Number:', value: data.permitNo || '..................................................................................' },
     { label: 'Premise Name & Location:', value: `${data.premiseName || ''}${data.premiseName && data.location ? ' - ' : ''}${data.location || ''}` || '..................................................................................' },
     { label: 'License Category (e.g., Processor, Cooling Plant):', value: data.category || '..................................................................................' }
   ];

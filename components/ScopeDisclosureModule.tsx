@@ -20,7 +20,11 @@ import {
   FileDown,
   Clock,
   X,
-  Printer
+  Printer,
+  Lock,
+  Eye,
+  EyeOff,
+  Smartphone
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { DBService } from '../services/db';
@@ -51,8 +55,8 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
   onSignedSuccess,
   onClose
 }) => {
-  // Only admins can see the Signed Registry. Default: false if standalone, true if embedded in admin dashboard
-  const userIsAdmin = isAdmin !== undefined ? isAdmin : !isStandalone;
+  // Only admins can see the Premise Search and Signed Registry. Remote signers via QR/link never see search.
+  const userIsAdmin = Boolean(isAdmin && !isStandalone);
 
   // Navigation tabs within module (non-admin clients only ever see 'form')
   const [activeSubTab, setActiveSubTab] = useState<'form' | 'registry'>('form');
@@ -98,6 +102,9 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
   // QR Modal
   const [showQrModal, setShowQrModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  // Privacy masking state for QR code & URL (same logic as Data Validation remote signing)
+  const [isQrMasked, setIsQrMasked] = useState(true);
+  const [isUrlMasked, setIsUrlMasked] = useState(true);
 
   // Reset/refresh QR 20-minute timer
   const resetQrTimer = () => {
@@ -160,9 +167,9 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
         setClients(fetchedClients || []);
         setDisclosures(fetchedDisclosures || []);
       } else {
-        // For non-admin client view, do not fetch entire signed registry to preserve confidentiality
-        const fetchedClients = await DBService.getClients();
-        setClients(fetchedClients || []);
+        // For non-admin remote signing via QR or link: do NOT fetch client registry or other signed records
+        setClients([]);
+        setDisclosures([]);
       }
     } catch (e) {
       console.warn('Error loading scope disclosure data:', e);
@@ -279,6 +286,20 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
     return `${base}/scope-disclosure?${params.toString()}`;
   };
 
+  // Helper to mask Scope Disclosure signing link for officer security and privacy (app address hidden)
+  const getMaskedScopeDisclosureUrl = (url: string) => {
+    if (!url) return '';
+    try {
+      const parsed = new URL(url);
+      const maskedPath = parsed.pathname.includes('/sign-scope-disclosure')
+        ? '/sign-scope-disclosure/••••••••'
+        : '/scope-disclosure/••••••••';
+      return `https://••••••••${maskedPath}?token=••••••••••••••••`;
+    } catch {
+      return 'https://••••••••/sign-scope-disclosure/••••••••?token=••••••••••••••••';
+    }
+  };
+
   const handleCopyLink = () => {
     const url = getQrUrl();
     navigator.clipboard.writeText(url);
@@ -296,14 +317,9 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
       return;
     }
 
-    // SECTION A MANDATORY VALIDATION: Name of Licensee, Permit No, Premise Name, Location, Category
+    // SECTION A MANDATORY VALIDATION: Name of Licensee, Premise Name, Location, Category
     if (!formData.dboName || !formData.dboName.trim()) {
       alert('Mandatory Field Missing: Please enter the Name of Licensee (DBO) in Section A.');
-      return;
-    }
-
-    if (!formData.permitNo || !formData.permitNo.trim()) {
-      alert('Mandatory Field Missing: Please enter the License / Permit Number in Section A.');
       return;
     }
 
@@ -381,8 +397,11 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
     setIsGeneratingPdf(true);
     try {
       const doc = await generateScopeDisclosurePdfDoc(dataToPrint);
-      const safePremise = (dataToPrint.premiseName || 'Premise').replace(/[^a-zA-Z0-9_-]/g, '_');
-      doc.save(`KDB_Premise_Inspection_Scope_Disclosure_${safePremise}.pdf`);
+      const premiseClean = (dataToPrint.premiseName || dataToPrint.dboName || 'Premise').trim().replace(/[/\\?%*:|"<>]/g, '-');
+      const rawDate = (dataToPrint.signedDate || new Date().toLocaleDateString('en-GB')).trim();
+      const safeDate = rawDate.replace(/\//g, '-').replace(/[/\\?%*:|"<>]/g, '-');
+      const filename = `KDB_Scope_Disclosure_${premiseClean}_${safeDate}.pdf`;
+      doc.save(filename);
     } catch (err) {
       console.error('Error generating PDF:', err);
       alert('Failed to generate PDF. Please try again.');
@@ -426,7 +445,7 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                KDB Premise Inspection Scope Disclosure & Statutory Licensee Acknowledgement
+                KDB Premise Inspection Scope Disclosure & Licensee Acknowledgement
               </p>
             </div>
 
@@ -641,121 +660,123 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
         {/* DOCUMENT FORM SUB-TAB */}
         {activeSubTab === 'form' && (
           <div className="space-y-6">
-            {/* Premise / Client Selector Banner */}
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                <div>
-                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
-                    Target Premise & Licensee Selection
-                  </h3>
-                  <p className="text-xs text-slate-600">
-                    Select an active premise from your registry to auto-fill statutory details, or type manually below.
-                  </p>
+            {/* Premise / Client Selector & Search Banner (ADMIN ONLY - Strictly hidden from remote QR and direct links) */}
+            {userIsAdmin && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">
+                      Target Premise & Licensee Selection
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      Select an active premise from your registry to auto-fill statutory details, or type manually below.
+                    </p>
+                  </div>
+                  {currentPremiseSigned ? (
+                    <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-full text-xs font-bold self-start sm:self-auto">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Signed on {currentPremiseSigned.signedDate}</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full text-xs font-bold self-start sm:self-auto">
+                      <Clock className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Not Signed for this Premise</span>
+                    </div>
+                  )}
                 </div>
-                {currentPremiseSigned ? (
-                  <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-full text-xs font-bold self-start sm:self-auto">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    <span>Signed on {currentPremiseSigned.signedDate}</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full text-xs font-bold self-start sm:self-auto">
-                    <Clock className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Not Signed for this Premise</span>
-                  </div>
-                )}
-              </div>
 
-              {/* Premise Selector Dropdown */}
-              <div className="relative mt-3">
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search premise name, DBO, or permit number..."
-                      value={searchQuery}
-                      onChange={(e) => {
-                        setSearchQuery(e.target.value);
-                        setIsDropdownOpen(true);
+                {/* Premise Selector Dropdown */}
+                <div className="relative mt-3">
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search premise name, DBO, or permit number..."
+                        value={searchQuery}
+                        onChange={(e) => {
+                          setSearchQuery(e.target.value);
+                          setIsDropdownOpen(true);
+                        }}
+                        onFocus={() => setIsDropdownOpen(true)}
+                        className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData({
+                          id: '',
+                          dboName: '',
+                          permitNo: '',
+                          premiseName: '',
+                          location: '',
+                          category: '',
+                          signerName: '',
+                          signerDesignation: '',
+                          signature: '',
+                          signedDate: new Date().toLocaleDateString('en-GB'),
+                          status: 'draft'
+                        });
                       }}
-                      onFocus={() => setIsDropdownOpen(true)}
-                      className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                    />
+                      className="px-3 py-2.5 text-xs text-slate-600 hover:text-slate-900 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+                    >
+                      Clear
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormData({
-                        id: '',
-                        dboName: '',
-                        permitNo: '',
-                        premiseName: '',
-                        location: '',
-                        category: '',
-                        signerName: '',
-                        signerDesignation: '',
-                        signature: '',
-                        signedDate: new Date().toLocaleDateString('en-GB'),
-                        status: 'draft'
-                      });
-                    }}
-                    className="px-3 py-2.5 text-xs text-slate-600 hover:text-slate-900 font-bold bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
-                  >
-                    Clear
-                  </button>
-                </div>
 
-                {isDropdownOpen && searchQuery && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl shadow-xl border border-slate-200 z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
-                    {filteredClients.length === 0 ? (
-                      <div className="p-3 text-xs text-slate-400 text-center">
-                        No matching premises found in registry.
-                      </div>
-                    ) : (
-                      filteredClients.map((client, idx) => (
-                        <div key={idx}>
-                          <button
-                            type="button"
-                            onClick={() => handleSelectPremise(client)}
-                            className="w-full px-3 py-2.5 text-left hover:bg-blue-50/70 transition-colors flex items-center justify-between"
-                          >
-                            <div>
-                              <p className="text-xs font-bold text-slate-900">
-                                {client.premiseName || (client as any).premisename || client.clientName}
-                              </p>
-                              <p className="text-[11px] text-slate-500">
-                                DBO: {client.clientName || (client as any).clientname} • Permit: {client.permitNumber || (client as any).permitnumber || 'N/A'} • {client.location || client.county}
-                              </p>
-                            </div>
-                            <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
-                              Primary
-                            </span>
-                          </button>
-
-                          {/* Branches if any */}
-                          {client.branches && client.branches.map((b, bIdx) => (
+                  {isDropdownOpen && searchQuery && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl shadow-xl border border-slate-200 z-50 max-h-60 overflow-y-auto divide-y divide-slate-100">
+                      {filteredClients.length === 0 ? (
+                        <div className="p-3 text-xs text-slate-400 text-center">
+                          No matching premises found in registry.
+                        </div>
+                      ) : (
+                        filteredClients.map((client, idx) => (
+                          <div key={idx}>
                             <button
-                              key={`b-${bIdx}`}
                               type="button"
-                              onClick={() => handleSelectPremise(client, b.premiseName || (b as any).name, b.location)}
-                              className="w-full pl-6 pr-3 py-2 text-left bg-slate-50/60 hover:bg-blue-50/70 transition-colors flex items-center justify-between border-t border-slate-100"
+                              onClick={() => handleSelectPremise(client)}
+                              className="w-full px-3 py-2.5 text-left hover:bg-blue-50/70 transition-colors flex items-center justify-between"
                             >
                               <div>
-                                <p className="text-xs font-bold text-slate-800">↳ Branch: {b.premiseName || (b as any).name}</p>
-                                <p className="text-[10px] text-slate-500">Loc: {b.location} • Permit: {b.permitNumber || client.permitNumber || 'N/A'}</p>
+                                <p className="text-xs font-bold text-slate-900">
+                                  {client.premiseName || (client as any).premisename || client.clientName}
+                                </p>
+                                <p className="text-[11px] text-slate-500">
+                                  DBO: {client.clientName || (client as any).clientname} • Permit: {client.permitNumber || (client as any).permitnumber || 'N/A'} • {client.location || client.county}
+                                </p>
                               </div>
-                              <span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded-sm">
-                                Branch
+                              <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md">
+                                Primary
                               </span>
                             </button>
-                          ))}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
+
+                            {/* Branches if any */}
+                            {client.branches && client.branches.map((b, bIdx) => (
+                              <button
+                                key={`b-${bIdx}`}
+                                type="button"
+                                onClick={() => handleSelectPremise(client, b.premiseName || (b as any).name, b.location)}
+                                className="w-full pl-6 pr-3 py-2 text-left bg-slate-50/60 hover:bg-blue-50/70 transition-colors flex items-center justify-between border-t border-slate-100"
+                              >
+                                <div>
+                                  <p className="text-xs font-bold text-slate-800">↳ Branch: {b.premiseName || (b as any).name}</p>
+                                  <p className="text-[10px] text-slate-500">Loc: {b.location} • Permit: {b.permitNumber || client.permitNumber || 'N/A'}</p>
+                                </div>
+                                <span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded-sm">
+                                  Branch
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* THE STATUTORY DOCUMENT CONTAINER */}
             <div className="bg-white rounded-2xl border border-slate-300 shadow-md p-6 sm:p-10 font-sans leading-relaxed text-slate-800">
@@ -804,25 +825,25 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
 
                   <div className="space-y-1">
                     <label className="font-bold text-slate-700 flex items-center justify-between">
-                      <span>• License / Permit Number: <span className="text-rose-600 font-bold">*</span></span>
-                      {attemptedSubmit && !formData.permitNo?.trim() && (
+                      <span>• License Category: <span className="text-rose-600 font-bold">*</span></span>
+                      {attemptedSubmit && !formData.category?.trim() && (
                         <span className="text-[10px] text-rose-600 font-semibold">Required</span>
                       )}
                     </label>
                     <input
                       type="text"
-                      placeholder="e.g. KDB/MB/00001/2025"
-                      value={formData.permitNo || ''}
-                      onChange={(e) => setFormData({ ...formData, permitNo: e.target.value })}
-                      className={`w-full px-3 py-1.5 rounded-lg text-xs font-semibold focus:bg-white focus:ring-1 focus:ring-blue-500 font-mono transition-colors ${
-                        attemptedSubmit && !formData.permitNo?.trim()
+                      placeholder="e.g. Cooling Plant, Processor, Milk Bar"
+                      value={formData.category || ''}
+                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      className={`w-full px-3 py-1.5 rounded-lg text-xs font-semibold focus:bg-white focus:ring-1 focus:ring-blue-500 transition-colors ${
+                        attemptedSubmit && !formData.category?.trim()
                           ? 'border-2 border-rose-400 bg-rose-50/50'
                           : 'bg-slate-50 border border-slate-200'
                       }`}
                     />
                   </div>
 
-                  <div className="space-y-1">
+                  <div className="space-y-1 sm:col-span-2">
                     <label className="font-bold text-slate-700 flex items-center justify-between">
                       <span>• Premise Name & Location: <span className="text-rose-600 font-bold">*</span></span>
                       {attemptedSubmit && (!formData.premiseName?.trim() || !formData.location?.trim()) && (
@@ -853,26 +874,6 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
                         }`}
                       />
                     </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 flex items-center justify-between">
-                      <span>• License Category: <span className="text-rose-600 font-bold">*</span></span>
-                      {attemptedSubmit && !formData.category?.trim() && (
-                        <span className="text-[10px] text-rose-600 font-semibold">Required</span>
-                      )}
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Cooling Plant, Processor, Milk Bar"
-                      value={formData.category || ''}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                      className={`w-full px-3 py-1.5 rounded-lg text-xs font-semibold focus:bg-white focus:ring-1 focus:ring-blue-500 transition-colors ${
-                        attemptedSubmit && !formData.category?.trim()
-                          ? 'border-2 border-rose-400 bg-rose-50/50'
-                          : 'bg-slate-50 border border-slate-200'
-                      }`}
-                    />
                   </div>
                 </div>
               </div>
@@ -1302,54 +1303,130 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
               </div>
             )}
 
-            {/* The QR Code Container */}
-            <div className="relative p-4 sm:p-5 bg-white rounded-2xl border-2 border-dashed border-slate-200 my-3.5 flex justify-center shadow-inner">
-              <QRCodeSVG
-                value={getQrUrl()}
-                size={190}
-                level="M"
-                includeMargin={true}
-              />
-
-              {qrTimerMode === '20min' && qrSecondsLeft <= 0 && (
-                <div className="absolute inset-0 bg-white/95 backdrop-blur-xs rounded-2xl flex flex-col items-center justify-center p-4">
-                  <AlertTriangle className="w-8 h-8 text-rose-500 mb-2" />
-                  <p className="text-xs font-black text-slate-900">QR Code Expired</p>
-                  <p className="text-[11px] text-slate-500 mb-3">20-minute validity elapsed</p>
-                  <button
-                    type="button"
-                    onClick={resetQrTimer}
-                    className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors shadow-xs"
-                  >
-                    Generate New QR Code
-                  </button>
+            {/* Scannable QR Code Card with Frosted Privacy Mask */}
+            <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-4 flex flex-col items-center text-center my-3">
+              <div className="w-full flex items-center justify-between pb-2 border-b border-slate-200/70">
+                <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-slate-700">
+                  <Smartphone className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Scannable QR Link</span>
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setIsQrMasked(!isQrMasked)}
+                  className="text-[11px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
+                  title={isQrMasked ? "Reveal QR Code" : "Mask QR Code for privacy"}
+                >
+                  {isQrMasked ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                  <span>{isQrMasked ? 'Reveal QR' : 'Mask QR'}</span>
+                </button>
+              </div>
+
+              {/* QR Code Container with Frosted Privacy Mask */}
+              <div className="relative my-3 p-3 bg-white rounded-2xl border border-slate-200 shadow-xs flex items-center justify-center overflow-hidden w-[210px] h-[210px] shrink-0">
+                <div className={`transition-all duration-300 ${isQrMasked ? 'filter blur-md opacity-25 select-none pointer-events-none' : 'opacity-100'}`}>
+                  <QRCodeSVG
+                    value={getQrUrl()}
+                    size={180}
+                    level="M"
+                    includeMargin={true}
+                  />
+                </div>
+
+                {/* Interactive Masking Overlay */}
+                {isQrMasked && (
+                  <div
+                    onClick={() => setIsQrMasked(false)}
+                    className="absolute inset-0 bg-slate-900/80 backdrop-blur-xs rounded-2xl flex flex-col items-center justify-center p-3 text-center cursor-pointer transition-all hover:bg-slate-900/85 group"
+                    title="Click to reveal QR Code"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center mb-1 group-hover:scale-105 transition-transform">
+                      <Lock className="w-5 h-5" />
+                    </div>
+                    <span className="text-xs font-black text-white tracking-tight">QR Link Masked</span>
+                    <span className="text-[10px] text-slate-300 mt-0.5">Click or tap to reveal</span>
+                    <span className="mt-2 px-2.5 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[10px] font-bold inline-flex items-center gap-1 shadow-xs">
+                      <Eye className="w-3 h-3" /> Reveal QR
+                    </span>
+                  </div>
+                )}
+
+                {/* Expired Overlay if 20-min elapsed */}
+                {qrTimerMode === '20min' && qrSecondsLeft <= 0 && (
+                  <div className="absolute inset-0 bg-white/95 backdrop-blur-xs rounded-2xl flex flex-col items-center justify-center p-4 z-10">
+                    <AlertTriangle className="w-8 h-8 text-rose-500 mb-2" />
+                    <p className="text-xs font-black text-slate-900">QR Code Expired</p>
+                    <p className="text-[11px] text-slate-500 mb-3">20-minute validity elapsed</p>
+                    <button
+                      type="button"
+                      onClick={resetQrTimer}
+                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors shadow-xs"
+                    >
+                      Generate New QR Code
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-[11px] text-slate-500 leading-relaxed max-w-[260px]">
+                Point smartphone or tablet camera to review statutory scope of inspection and sign on-screen.
+              </p>
             </div>
 
-            <div className="space-y-2">
+            {/* Masked Link Input Box with Privacy Toggle (App address hidden when masked) */}
+            <div className="space-y-1.5 text-left mb-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                  <Lock className="w-3 h-3 text-slate-400" />
+                  <span>Remote Disclosure URL</span>
+                  <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-medium border border-emerald-200">
+                    {isUrlMasked ? 'Masked for Security' : 'Visible'}
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsUrlMasked(!isUrlMasked)}
+                  className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 cursor-pointer"
+                  title={isUrlMasked ? "Show full URL" : "Mask URL for security"}
+                >
+                  {isUrlMasked ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                  <span>{isUrlMasked ? 'Reveal Link' : 'Mask Link'}</span>
+                </button>
+              </div>
+
               <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={
+                    isUrlMasked
+                      ? getMaskedScopeDisclosureUrl(getQrUrl())
+                      : getQrUrl()
+                  }
+                  className="w-full px-3 py-2 sm:px-3.5 sm:py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-mono select-all focus:outline-none focus:bg-white focus:border-blue-500 tracking-tight"
+                />
                 <button
                   type="button"
                   onClick={handleCopyLink}
                   disabled={qrTimerMode === '20min' && qrSecondsLeft <= 0}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all disabled:opacity-50 cursor-pointer"
+                  className="px-3 py-2 sm:px-4 sm:py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs disabled:opacity-50"
+                  title="Copy direct active link"
                 >
-                  {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedLink ? 'Copied Link!' : 'Copy Direct URL'}</span>
+                  {copiedLink ? <Check className="w-4 h-4 text-white" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedLink ? 'Copied!' : 'Copy'}</span>
                 </button>
-
                 <a
                   href={getQrUrl()}
                   target="_blank"
                   rel="noreferrer"
-                  className="p-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl transition-all"
+                  className="p-2 sm:p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-all shrink-0"
                   title="Open in new window"
                 >
                   <ExternalLink className="w-4 h-4" />
                 </a>
               </div>
+            </div>
 
+            <div className="space-y-2">
               {qrTimerMode === '20min' ? (
                 <button
                   type="button"
@@ -1359,7 +1436,7 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
                   ↻ Refresh / Reset 20-min window
                 </button>
               ) : (
-                <p className="text-[11px] text-emerald-700 font-semibold py-1">
+                <p className="text-[11px] text-emerald-700 font-semibold py-1 text-center">
                   ✓ Active link without expiry timestamp
                 </p>
               )}

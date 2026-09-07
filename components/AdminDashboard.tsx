@@ -2618,6 +2618,25 @@ CREATE TABLE IF NOT EXISTS closures (
   rejectionreason TEXT
 );
 
+CREATE TABLE IF NOT EXISTS scope_disclosures (
+  id TEXT PRIMARY KEY,
+  dboname TEXT,
+  permitno TEXT,
+  premisename TEXT,
+  location TEXT,
+  category TEXT,
+  signername TEXT,
+  signerdesignation TEXT,
+  signature TEXT,
+  signeddate TEXT,
+  status TEXT DEFAULT 'draft',
+  createdat TEXT,
+  updatedat TEXT,
+  signedat TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Enable RLS and add policies for anonymous access if needed
 ALTER TABLE agreements ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON agreements FOR ALL USING (true) WITH CHECK (true);
@@ -2626,7 +2645,9 @@ CREATE POLICY "Allow anonymous access" ON debtors FOR ALL USING (true) WITH CHEC
 ALTER TABLE staff_config ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE closures ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);`}
+CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);
+ALTER TABLE scope_disclosures ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true) WITH CHECK (true);`}
                               </pre>
                             </div>
                             <button 
@@ -2709,6 +2730,25 @@ CREATE TABLE IF NOT EXISTS closures (
   rejectionreason TEXT
 );
 
+CREATE TABLE IF NOT EXISTS scope_disclosures (
+  id TEXT PRIMARY KEY,
+  dboname TEXT,
+  permitno TEXT,
+  premisename TEXT,
+  location TEXT,
+  category TEXT,
+  signername TEXT,
+  signerdesignation TEXT,
+  signature TEXT,
+  signeddate TEXT,
+  status TEXT DEFAULT 'draft',
+  createdat TEXT,
+  updatedat TEXT,
+  signedat TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 ALTER TABLE agreements ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON agreements FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE debtors ENABLE ROW LEVEL SECURITY;
@@ -2716,7 +2756,9 @@ CREATE POLICY "Allow anonymous access" ON debtors FOR ALL USING (true) WITH CHEC
 ALTER TABLE staff_config ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);
 ALTER TABLE closures ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);`;
+CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);
+ALTER TABLE scope_disclosures ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true) WITH CHECK (true);`;
                                 navigator.clipboard.writeText(sql);
                                 alert("SQL copied to clipboard!");
                               }}

@@ -30,6 +30,8 @@ export interface ExceptionRegisterComponentProps {
   onAddPastException?: (item: ExceptionRegisterItem) => void;
   onDeletePreviousException?: (id: string) => void;
   onCarryForwardToCurrent?: (item: ExceptionRegisterItem) => void;
+  onAppendComment?: (type: string, observation: string) => void;
+  isObservationAppended?: (observation: string) => boolean;
   dboName?: string;
   premiseName?: string;
   actionOwner?: string;
@@ -58,6 +60,8 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
   onAddPastException,
   onDeletePreviousException,
   onCarryForwardToCurrent,
+  onAppendComment,
+  isObservationAppended,
   dboName = '',
   premiseName = '',
   actionOwner = '',
@@ -537,8 +541,28 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
                           {item.definition || item.example || '-'}
                         </div>
                         {item.example && item.example !== item.definition && (
-                          <div className="text-[10px] text-slate-600 mt-1 bg-slate-50 p-1.5 rounded border border-slate-200/80 leading-snug">
-                            <span className="font-bold text-slate-700">Obs:</span> {item.example}
+                          <div className="text-[10px] text-slate-600 mt-1 bg-slate-50 p-1.5 rounded border border-slate-200/80 leading-snug flex items-start justify-between gap-1.5">
+                            <div className="min-w-0 flex-1">
+                              <span className="font-bold text-slate-700">Obs:</span> {item.example}
+                            </div>
+                            {onAppendComment && (
+                              <button
+                                type="button"
+                                onClick={() => onAppendComment(item.type, item.example)}
+                                className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-colors cursor-pointer ${
+                                  isObservationAppended && isObservationAppended(item.example)
+                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                    : 'bg-white text-blue-600 hover:text-blue-800 border-slate-200 hover:border-blue-300'
+                                }`}
+                                title={
+                                  isObservationAppended && isObservationAppended(item.example)
+                                    ? 'Appended in Comments (click to remove)'
+                                    : 'Append this observation to General Comments'
+                                }
+                              >
+                                {isObservationAppended && isObservationAppended(item.example) ? '✓ Appended' : '+ Comment'}
+                              </button>
+                            )}
                           </div>
                         )}
                       </td>
@@ -944,8 +968,28 @@ export const ExceptionRegisterComponent: React.FC<ExceptionRegisterComponentProp
                         {item.definition || item.example || '-'}
                       </div>
                       {item.example && item.example !== item.definition && (
-                        <div className="text-[10px] text-slate-600 mt-1 bg-slate-50 p-1.5 rounded border border-slate-200/80 leading-snug">
-                          <span className="font-bold text-slate-700">Obs:</span> {item.example}
+                        <div className="text-[10px] text-slate-600 mt-1 bg-slate-50 p-1.5 rounded border border-slate-200/80 leading-snug flex items-start justify-between gap-1.5">
+                          <div className="min-w-0 flex-1">
+                            <span className="font-bold text-slate-700">Obs:</span> {item.example}
+                          </div>
+                          {onAppendComment && (
+                            <button
+                              type="button"
+                              onClick={() => onAppendComment(item.type, item.example)}
+                              className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-colors cursor-pointer ${
+                                isObservationAppended && isObservationAppended(item.example)
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : 'bg-white text-blue-600 hover:text-blue-800 border-slate-200 hover:border-blue-300'
+                              }`}
+                              title={
+                                isObservationAppended && isObservationAppended(item.example)
+                                  ? 'Appended in Comments (click to remove)'
+                                  : 'Append this observation to General Comments'
+                              }
+                            >
+                              {isObservationAppended && isObservationAppended(item.example) ? '✓ Appended' : '+ Comment'}
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>

@@ -512,6 +512,7 @@ export interface ExceptionRegisterItem {
   owner: string; // Owner
   dueDate: string; // Due Date
   correctiveAction?: string; // Corrective Action Required
+  actionRequired?: string; // Alias for Corrective Action Required
   resolutionEvidence?: string; // Resolution Evidence / Notes
   status: ExceptionStatus; // Status
   origin?: 'previous' | 'current';
