@@ -11,6 +11,8 @@ import { ClosureForm } from './components/ClosureForm.tsx';
 import { ComplaintForm } from './components/ComplaintForm.tsx';
 import { InquiryForm } from './components/InquiryForm.tsx';
 import { DboSigningPortal } from './components/DboSigningPortal.tsx';
+import { AdminLogin } from './components/AdminLogin.tsx';
+import { useAuth } from './src/contexts/AuthContext.tsx';
 import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient, ComplaintData, InquiryData } from './types.ts';
 import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp } from 'lucide-react';
 import { DBService } from './services/db.ts';
@@ -38,9 +40,7 @@ const App: React.FC = () => {
     }
   });
   const [currentAgreement, setCurrentAgreement] = useState<AgreementData | null>(null);
-  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState('');
-  const [loginError, setLoginError] = useState(false);
+  const { user, isAuthenticated: isAdminAuthenticated, signOut } = useAuth();
 
   useEffect(() => {
     loadDatabase();
@@ -50,21 +50,8 @@ const App: React.FC = () => {
     navigate('/admin');
   };
 
-  const handleAdminLogin = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (adminPasswordInput === 'KDB@2024') {
-      setIsAdminAuthenticated(true);
-      setLoginError(false);
-      setAdminPasswordInput('');
-      navigate('/admin');
-    } else {
-      setLoginError(true);
-      setTimeout(() => setLoginError(false), 2000);
-    }
-  };
-
-  const handleAdminLogout = () => {
-    setIsAdminAuthenticated(false);
+  const handleAdminLogout = async () => {
+    await signOut();
     navigate('/');
   };
 
@@ -612,28 +599,44 @@ const App: React.FC = () => {
                 </button>
 
 
-                {(isAdminAuthenticated || location.pathname === '/admin') && (
-                  <button 
-                    onClick={handleAdminAccess}
-                    className={`relative flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${location.pathname === '/admin' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
-                    Admin
-                    {unreadCount > 0 && location.pathname !== '/admin' && (
-                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white text-[9px] flex items-center justify-center rounded-full border border-white animate-bounce font-bold">
-                        {unreadCount}
+                {isAdminAuthenticated ? (
+                  <>
+                    <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700">
+                      <User className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="max-w-[140px] truncate" title={user?.email || 'Admin'}>
+                        {user?.user_metadata?.full_name || user?.email || 'Officer'}
                       </span>
-                    )}
-                  </button>
-                )}
+                    </div>
 
-                {isAdminAuthenticated && (
+                    <button 
+                      onClick={handleAdminAccess}
+                      className={`relative flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${location.pathname === '/admin' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                    >
+                      <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
+                      Admin
+                      {unreadCount > 0 && location.pathname !== '/admin' && (
+                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white text-[9px] flex items-center justify-center rounded-full border border-white animate-bounce font-bold">
+                          {unreadCount}
+                        </span>
+                      )}
+                    </button>
+
+                    <button 
+                      onClick={handleAdminLogout}
+                      className="flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                      title="Sign out of administrative session"
+                    >
+                      <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                      Logout
+                    </button>
+                  </>
+                ) : (
                   <button 
-                    onClick={handleAdminLogout}
-                    className="flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-all"
+                    onClick={() => navigate('/admin')}
+                    className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${location.pathname === '/admin' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
                   >
-                    <LogOut className="w-3.5 h-3.5 mr-1.5" />
-                    Logout
+                    <Lock className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
+                    Admin Login
                   </button>
                 )}
               </nav>
@@ -657,7 +660,9 @@ const App: React.FC = () => {
               enabledModules={staffConfig.enabledModules}
             />
           } />
-          <Route path="/data-validation" element={<DataValidationModule />} />
+          <Route path="/data-validation" element={
+            isAdminAuthenticated ? <DataValidationModule /> : <AdminLogin returnTo="/data-validation" />
+          } />
           <Route path="/scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
           <Route path="/sign-scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
           <Route path="/portal" element={
@@ -774,44 +779,7 @@ const App: React.FC = () => {
                 onStaffUpdate={handleStaffUpdate}
               />
             ) : (
-              <div className="max-w-md mx-auto mt-20 p-10 bg-white rounded-[40px] shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-300">
-                <div className="text-center mb-8">
-                  <div className="bg-slate-900 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-                    <Lock className="text-white w-8 h-8" />
-                  </div>
-                  <h2 className="text-2xl font-black text-slate-800">Admin Access</h2>
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Restricted Personnel Only</p>
-                </div>
-                <form onSubmit={handleAdminLogin} className="space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Security Password</label>
-                    <input 
-                      autoFocus
-                      type="password" 
-                      value={adminPasswordInput}
-                      onChange={e => setAdminPasswordInput(e.target.value)}
-                      placeholder="••••••••"
-                      className={`w-full px-6 py-4 rounded-2xl border bg-slate-50 focus:bg-white outline-none transition-all font-bold ${loginError ? 'border-rose-500 ring-4 ring-rose-500/10 animate-shake' : 'focus:ring-4 focus:ring-slate-900/10'}`}
-                    />
-                  </div>
-                  {loginError && (
-                    <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest text-center animate-pulse">Invalid Credentials</p>
-                  )}
-                  <button 
-                    type="submit"
-                    className="w-full py-5 bg-slate-900 text-white font-black rounded-3xl hover:bg-slate-800 shadow-xl transition-all uppercase tracking-widest text-xs"
-                  >
-                    Authenticate
-                  </button>
-                  <button 
-                    type="button"
-                    onClick={() => navigate('/')}
-                    className="w-full text-slate-400 font-bold text-[10px] uppercase tracking-widest hover:text-slate-600 transition-all"
-                  >
-                    Return to Portal
-                  </button>
-                </form>
-              </div>
+              <AdminLogin returnTo="/admin" />
             )
           } />
           <Route path="/success" element={

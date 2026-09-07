@@ -849,7 +849,7 @@ export const DboSigningPortal: React.FC = () => {
               )}
             </button>
             <p className="text-[11px] text-slate-400 text-center mt-2.5">
-              By submitting, you certify your identity under the Kenya Dairy Industry Act (Cap 336).
+              .
             </p>
           </div>
         </form>

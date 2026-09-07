@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
-import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3 } from 'lucide-react';
+import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User } from 'lucide-react';
+import { useAuth } from '../src/contexts/AuthContext';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
 import { ComplaintPDFPreview } from './ComplaintPDFPreview';
@@ -109,12 +110,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showComplaintPreview, setShowComplaintPreview] = useState(false);
   const [showInquiryPreview, setShowInquiryPreview] = useState(false);
 
+  const { user, signOut } = useAuth();
   const [rejectionReason, setRejectionReason] = useState('');
   const [closureRejectionReason, setClosureRejectionReason] = useState('');
-  const [adminName, setAdminName] = useState('');
+  const [adminName, setAdminName] = useState(() => user?.user_metadata?.full_name || user?.email?.split('@')[0] || '');
   const [adminTitle, setAdminTitle] = useState('Compliance Officer');
   const [closureOfficerTitle, setClosureOfficerTitle] = useState('');
   const [closureOfficerComments, setClosureOfficerComments] = useState('');
+
+  useEffect(() => {
+    if (user && !adminName) {
+      setAdminName(user.user_metadata?.full_name || user.email?.split('@')[0] || '');
+    }
+  }, [user]);
 
   // Complaint "Official Use Only" States
   const [complaintCategoryCode, setComplaintCategoryCode] = useState('');
@@ -1142,7 +1150,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {tab === 'settings' && <Check className="w-4 h-4 text-emerald-400" />}
             </button>
 
-            <div className="pt-2 border-t border-slate-100">
+            <div className="pt-2 border-t border-slate-100 space-y-2">
               <button 
                 onClick={() => { setIsMobileMenuOpen(false); navigate('/'); }} 
                 className="px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/60 w-full text-left"
@@ -1150,6 +1158,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <Globe className="w-4 h-4 mr-3 shrink-0" />
                 Return to Client Portal
               </button>
+
+              {user && (
+                <button 
+                  onClick={async () => {
+                    setIsMobileMenuOpen(false);
+                    await signOut();
+                    navigate('/');
+                  }} 
+                  className="px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/60 w-full text-left cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4 mr-3 shrink-0" />
+                  <span className="truncate">Sign Out ({user.user_metadata?.full_name || user.email})</span>
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1276,6 +1298,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {!isSidebarCollapsed && <span>Settings</span>}
             </button>
           </div>
+
+          {/* Admin User Profile Card in Sidebar */}
+          {user && (
+            <div className="pt-4 mt-auto border-t border-slate-100 flex flex-col gap-2">
+              {!isSidebarCollapsed ? (
+                <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-2xl">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                      {(user?.user_metadata?.full_name?.[0] || user?.email?.[0] || 'A').toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-bold text-slate-800 truncate" title={user?.email || ''}>
+                        {user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Admin'}
+                      </p>
+                      <p className="text-[9px] text-emerald-600 font-bold uppercase tracking-wider">
+                        Supabase Auth
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await signOut();
+                      navigate('/');
+                    }}
+                    className="w-full mt-2.5 py-1.5 px-2 bg-white hover:bg-rose-50 text-rose-600 border border-slate-200 hover:border-rose-200 rounded-xl text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <LogOut className="w-3 h-3" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={async () => {
+                    await signOut();
+                    navigate('/');
+                  }}
+                  className="p-2 text-rose-600 hover:bg-rose-50 rounded-xl flex items-center justify-center transition-all cursor-pointer mx-auto"
+                  title="Sign Out"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
         </aside>
 
         {/* RIGHT CONTENT AREA */}
