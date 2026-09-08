@@ -9862,7 +9862,7 @@ export function DataValidationModule() {
                       type="text"
                       value={newOfficerName}
                       onChange={(e) => setNewOfficerName(e.target.value)}
-                      placeholder="e.g. Officer John Doe / C. Korir"
+                      placeholder="e.g. John Doe "
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-sm"
                     />
                   </div>

@@ -1,14 +1,26 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, Session, SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase } from '../../components/lib/supabase';
+import { generateTotpSecret, generateTotpUri, verifyTotpCode, generateBackupCodes } from '../utils/totp';
+
+const MFA_SESSION_KEY = 'kdb_admin_mfa_verified';
 
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   isAuthenticated: boolean;
+  isMfaVerified: boolean;
+  mfaPending: boolean;
+  mfaMode: 'verify' | 'setup' | null;
+  mfaSecret: string | null;
+  mfaUri: string | null;
+  backupCodes: string[];
   isLoading: boolean;
   isConfigured: boolean;
-  signIn: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signIn: (email: string, password: string) => Promise<{ success: boolean; error?: string; requiresMfa?: boolean; mode?: 'verify' | 'setup' }>;
+  verifyMfa: (code: string) => Promise<{ success: boolean; error?: string }>;
+  setupNewMfa: () => Promise<{ success: boolean; secret: string; uri: string }>;
+  cancelMfa: () => Promise<void>;
   signUp: (email: string, password: string, fullName?: string) => Promise<{ success: boolean; error?: string; message?: string }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ success: boolean; error?: string }>;
@@ -21,6 +33,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConfigured, setIsConfigured] = useState(false);
+
+  // Multi-Factor Authentication (MFA) State
+  const [isMfaVerified, setIsMfaVerified] = useState<boolean>(false);
+  const [mfaPending, setMfaPending] = useState<boolean>(false);
+  const [mfaMode, setMfaMode] = useState<'verify' | 'setup' | null>(null);
+  const [mfaSecret, setMfaSecret] = useState<string | null>(null);
+  const [mfaUri, setMfaUri] = useState<string | null>(null);
+  const [backupCodes, setBackupCodes] = useState<string[]>([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -48,16 +68,36 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
 
         if (isMounted) {
+          const activeUser = data?.session?.user || null;
           setSession(data?.session || null);
-          setUser(data?.session?.user || null);
+          setUser(activeUser);
+
+          // Set user and session directly without MFA enforcement
+          if (activeUser) {
+            setIsMfaVerified(true);
+            setMfaPending(false);
+          } else {
+            setIsMfaVerified(false);
+            setMfaPending(false);
+          }
+
           setIsLoading(false);
         }
 
         // Listen for state changes (sign in, sign out, token refresh)
         const { data: authListener } = client.auth.onAuthStateChange((_event, currentSession) => {
           if (isMounted) {
+            const newUser = currentSession?.user || null;
             setSession(currentSession);
-            setUser(currentSession?.user || null);
+            setUser(newUser);
+
+            if (!newUser) {
+              setIsMfaVerified(false);
+              setMfaPending(false);
+              setMfaMode(null);
+              sessionStorage.removeItem(MFA_SESSION_KEY);
+            }
+
             setIsLoading(false);
           }
         });
@@ -81,7 +121,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
   }, []);
 
-  const signIn = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const signIn = async (email: string, password: string): Promise<{ success: boolean; error?: string; requiresMfa?: boolean; mode?: 'verify' | 'setup' }> => {
     try {
       const client = await getSupabase();
       if (!client) {
@@ -100,12 +140,114 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return { success: false, error: error.message };
       }
 
-      setUser(data.user);
+      const signedInUser = data.user;
+      setUser(signedInUser);
       setSession(data.session);
-      return { success: true };
+
+      if (!signedInUser) {
+        return { success: false, error: 'User profile not returned.' };
+      }
+
+      setIsMfaVerified(true);
+      setMfaPending(false);
+      return { success: true, requiresMfa: false };
     } catch (err: any) {
       return { success: false, error: err?.message || 'An unexpected error occurred during sign-in.' };
     }
+  };
+
+  const setupNewMfa = async (): Promise<{ success: boolean; secret: string; uri: string }> => {
+    const newSecret = generateTotpSecret();
+    const uri = generateTotpUri(newSecret, user?.email || 'admin');
+    const codes = generateBackupCodes();
+    setMfaSecret(newSecret);
+    setMfaUri(uri);
+    setBackupCodes(codes);
+    setMfaMode('setup');
+    setMfaPending(true);
+    return { success: true, secret: newSecret, uri };
+  };
+
+  const verifyMfa = async (code: string): Promise<{ success: boolean; error?: string }> => {
+    if (!user) {
+      return { success: false, error: 'No active authentication session found.' };
+    }
+
+    const cleanCode = code.trim();
+    if (!cleanCode) {
+      return { success: false, error: 'Please enter the 6-digit authentication code.' };
+    }
+
+    try {
+      if (mfaMode === 'setup') {
+        if (!mfaSecret) {
+          return { success: false, error: 'MFA setup secret not generated.' };
+        }
+
+        const isValid = await verifyTotpCode(cleanCode, mfaSecret);
+        if (!isValid) {
+          return { success: false, error: 'Invalid authenticator code. Please check your app clock and try again.' };
+        }
+
+        // Successfully enrolled: Persist secret and backup codes
+        localStorage.setItem(`kdb_mfa_secret_${user.id}`, mfaSecret);
+        localStorage.setItem(`kdb_mfa_backup_${user.id}`, JSON.stringify(backupCodes));
+        sessionStorage.setItem(MFA_SESSION_KEY, user.id);
+
+        setIsMfaVerified(true);
+        setMfaPending(false);
+        setMfaMode(null);
+        return { success: true };
+      }
+
+      // Mode: 'verify'
+      const storedSecret = mfaSecret || localStorage.getItem(`kdb_mfa_secret_${user.id}`);
+      if (!storedSecret) {
+        return { success: false, error: 'MFA configuration missing. Please re-enroll.' };
+      }
+
+      // 1. Try TOTP code
+      let isValid = await verifyTotpCode(cleanCode, storedSecret);
+
+      // 2. Try Emergency Backup Codes if not 6 digits
+      if (!isValid) {
+        const storedBackups = localStorage.getItem(`kdb_mfa_backup_${user.id}`);
+        if (storedBackups) {
+          try {
+            const codes: string[] = JSON.parse(storedBackups);
+            const normalizedInput = cleanCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const matchingIdx = codes.findIndex(c => c.replace(/[^A-Z0-9]/g, '') === normalizedInput);
+            if (matchingIdx !== -1) {
+              isValid = true;
+              // Remove used backup code
+              codes.splice(matchingIdx, 1);
+              localStorage.setItem(`kdb_mfa_backup_${user.id}`, JSON.stringify(codes));
+            }
+          } catch (e) {
+            console.warn('[MFA] Backup codes parse error:', e);
+          }
+        }
+      }
+
+      if (!isValid) {
+        return { success: false, error: 'Invalid authentication or backup recovery code.' };
+      }
+
+      sessionStorage.setItem(MFA_SESSION_KEY, user.id);
+      setIsMfaVerified(true);
+      setMfaPending(false);
+      setMfaMode(null);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'MFA validation failed.' };
+    }
+  };
+
+  const cancelMfa = async (): Promise<void> => {
+    setIsMfaVerified(false);
+    setMfaPending(false);
+    setMfaMode(null);
+    await signOut();
   };
 
   const signUp = async (email: string, password: string, fullName?: string): Promise<{ success: boolean; error?: string; message?: string }> => {
@@ -141,14 +283,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         };
       }
 
-      if (data.session) {
+      if (data.session && data.user) {
         setUser(data.user);
         setSession(data.session);
+        // Force MFA enrollment on new accounts
+        const newSecret = generateTotpSecret();
+        const uri = generateTotpUri(newSecret, data.user.email || 'admin');
+        const codes = generateBackupCodes();
+        setMfaSecret(newSecret);
+        setMfaUri(uri);
+        setBackupCodes(codes);
+        setMfaMode('setup');
+        setMfaPending(true);
+        setIsMfaVerified(false);
       }
 
       return {
         success: true,
-        message: 'Admin account registered and authenticated successfully.'
+        message: 'Admin account registered successfully. Please proceed with MFA enrollment.'
       };
     } catch (err: any) {
       return { success: false, error: err?.message || 'An unexpected error occurred during sign-up.' };
@@ -166,6 +318,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } finally {
       setUser(null);
       setSession(null);
+      setIsMfaVerified(false);
+      setMfaPending(false);
+      setMfaMode(null);
+      sessionStorage.removeItem(MFA_SESSION_KEY);
     }
   };
 
@@ -190,6 +346,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // User is authenticated when valid user and session are present
   const isAuthenticated = Boolean(user && session);
 
   return (
@@ -198,9 +355,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         user,
         session,
         isAuthenticated,
+        isMfaVerified,
+        mfaPending,
+        mfaMode,
+        mfaSecret,
+        mfaUri,
+        backupCodes,
         isLoading,
         isConfigured,
         signIn,
+        verifyMfa,
+        setupNewMfa,
+        cancelMfa,
         signUp,
         signOut,
         resetPassword

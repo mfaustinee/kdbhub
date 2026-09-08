@@ -1,7 +1,7 @@
 
 import DataValidationModule from './components/DataValidationModule';
 import { ScopeDisclosureModule } from './components/ScopeDisclosureModule';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { AgreementForm } from './components/AgreementForm.tsx';
 import { AdminDashboard } from './components/AdminDashboard.tsx';
@@ -28,7 +28,14 @@ const App: React.FC = () => {
   const [inquiries, setInquiries] = useState<InquiryData[]>([]);
   const [debtors, setDebtors] = useState<DebtorRecord[]>([]);
   const [clients, setClients] = useState<LicensedClient[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const unreadCount = useMemo(() => {
+    const unreadAgreements = agreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
+    const unreadClosures = closures.filter(c => c.status === 'submitted').length;
+    const unreadComplaints = complaints.filter(co => co.status === 'submitted').length;
+    const unreadInquiries = inquiries.filter(inq => inq.status === 'submitted').length;
+    return unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries;
+  }, [agreements, closures, complaints, inquiries]);
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [staffConfig, setStaffConfig] = useState<StaffConfig>({
     officialSignature: '',
@@ -46,6 +53,82 @@ const App: React.FC = () => {
     loadDatabase();
   }, []);
 
+  // Cross-device synchronization engine: Supabase Realtime channel + focus/visibility revalidation + heartbeat
+  useEffect(() => {
+    let channel: any = null;
+    let isSubscribed = true;
+
+    const setupRealtimeSync = async () => {
+      try {
+        const client = await DBService.getSupabaseClient();
+        if (!client || !isSubscribed) return;
+
+        channel = client.channel('kdb-cross-device-sync')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'agreements' }, () => {
+            loadDatabase(true);
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'closures' }, () => {
+            loadDatabase(true);
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints' }, () => {
+            loadDatabase(true);
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'inquiries' }, () => {
+            loadDatabase(true);
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_config' }, () => {
+            loadDatabase(true);
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'kdb_validations' }, () => {
+            loadDatabase(true);
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn("[App] Supabase realtime sync notice:", err);
+      }
+    };
+
+    setupRealtimeSync();
+
+    // Auto-sync when window regains focus or tab becomes visible (cross-device wake)
+    let lastFocusSync = 0;
+    const handleSyncTrigger = () => {
+      const now = Date.now();
+      if (document.visibilityState === 'visible' && (now - lastFocusSync > 5000)) {
+        lastFocusSync = now;
+        loadDatabase(true);
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleSyncTrigger);
+    window.addEventListener('focus', handleSyncTrigger);
+
+    // Periodic heartbeat to guarantee freshness across devices even without websocket
+    const heartbeatInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadDatabase(true);
+      }
+    }, 20000);
+
+    return () => {
+      isSubscribed = false;
+      if (channel) {
+        channel.unsubscribe();
+      }
+      window.removeEventListener('visibilitychange', handleSyncTrigger);
+      window.removeEventListener('focus', handleSyncTrigger);
+      clearInterval(heartbeatInterval);
+    };
+  }, [isAdminAuthenticated, location.pathname]);
+
+  // Lazy-load client & debtor data only when needed
+  useEffect(() => {
+    const needsAdminData = isAdminAuthenticated || location.pathname === '/admin' || location.pathname === '/payment-agreement';
+    if (needsAdminData && (debtors.length === 0 || clients.length === 0)) {
+      loadAdminData();
+    }
+  }, [location.pathname, isAdminAuthenticated]);
+
   const handleAdminAccess = () => {
     navigate('/admin');
   };
@@ -55,49 +138,14 @@ const App: React.FC = () => {
     navigate('/');
   };
 
-  const loadDatabase = async () => {
-    setIsSyncing(true);
+  const loadAdminData = async (forceFresh = false) => {
     try {
-      const [storedAgreements, storedDebtors, storedStaff, storedClosures, storedReturns, storedClients, storedComplaints, storedInquiries] = await Promise.all([
-        DBService.getAgreements(),
-        DBService.getDebtors(),
-        DBService.getStaffConfig(),
-        DBService.getClosures(),
-        DBService.getReturns(),
-        DBService.getClients(),
-        DBService.getComplaints(),
-        DBService.getInquiries()
+      const [storedDebtors, storedReturns, storedClients] = await Promise.all([
+        DBService.getDebtors(forceFresh),
+        DBService.getReturns(forceFresh),
+        DBService.getClients(forceFresh)
       ]);
 
-      const uniqueAgreements = Array.from(new Map(storedAgreements.map(a => [a.id, a])).values());
-      setAgreements(uniqueAgreements);
-
-      const uniqueClosures = Array.from(new Map(storedClosures.map(c => [c.id, c])).values());
-      setClosures(uniqueClosures);
-
-      const uniqueComplaints = Array.from(new Map(storedComplaints.map(co => [co.id, co])).values());
-      setComplaints(uniqueComplaints);
-
-      const uniqueInquiries = Array.from(new Map(storedInquiries.map(inq => [inq.id, inq])).values());
-      setInquiries(uniqueInquiries);
-      
-      // Check for direct link ID
-      const urlParams = new URLSearchParams(window.location.search);
-      const id = urlParams.get('id');
-      if (id) {
-        const found = uniqueAgreements.find(a => a.id === id);
-        if (found) {
-          setCurrentAgreement(found);
-          navigate('/success');
-        }
-      }
-      
-      const unreadAgreements = uniqueAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = uniqueClosures.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = uniqueComplaints.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = uniqueInquiries.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
-      setStaffConfig(storedStaff);
       setClients(storedClients || []);
 
       let baseDebtors = storedDebtors;
@@ -219,32 +267,71 @@ const App: React.FC = () => {
 
       const uniqueDebtors = Array.from(new Map(integrated.map(d => [d.id, d])).values());
       setDebtors(uniqueDebtors);
-    } catch (error) {
-      console.error("[App] Failed to load database:", error);
-    } finally {
-      setTimeout(() => setIsSyncing(false), 500);
+    } catch (err) {
+      console.error("[App] Failed to load admin debtor data:", err);
     }
   };
 
+  const loadDatabase = async (forceFresh = false) => {
+    if (forceFresh) {
+      DBService.clearMemoryCache();
+    }
+    setIsSyncing(true);
+    try {
+      const [storedAgreements, storedStaff, storedClosures, storedComplaints, storedInquiries] = await Promise.all([
+        DBService.getAgreements(forceFresh),
+        DBService.getStaffConfig(),
+        DBService.getClosures(forceFresh),
+        DBService.getComplaints(forceFresh),
+        DBService.getInquiries(forceFresh)
+      ]);
+
+      const uniqueAgreements = Array.from(new Map(storedAgreements.map(a => [a.id, a])).values());
+      setAgreements(uniqueAgreements);
+
+      const uniqueClosures = Array.from(new Map(storedClosures.map(c => [c.id, c])).values());
+      setClosures(uniqueClosures);
+
+      const uniqueComplaints = Array.from(new Map(storedComplaints.map(co => [co.id, co])).values());
+      setComplaints(uniqueComplaints);
+
+      const uniqueInquiries = Array.from(new Map(storedInquiries.map(inq => [inq.id, inq])).values());
+      setInquiries(uniqueInquiries);
+      
+      // Check for direct link ID
+      const urlParams = new URLSearchParams(window.location.search);
+      const id = urlParams.get('id');
+      if (id) {
+        const found = uniqueAgreements.find(a => a.id === id);
+        if (found) {
+          setCurrentAgreement(found);
+          navigate('/success');
+        }
+      }
+      
+      setStaffConfig(storedStaff);
+
+      const needsAdminData = isAdminAuthenticated || location.pathname === '/admin' || location.pathname === '/payment-agreement';
+      if (needsAdminData) {
+        await loadAdminData(forceFresh);
+      }
+    } catch (error) {
+      console.error("[App] Failed to load database:", error);
+    } finally {
+      setTimeout(() => setIsSyncing(false), 300);
+    }
+  };
 
   const handleClientSubmit = async (data: AgreementData) => {
     setIsSyncing(true);
     try {
       const submission = { ...data, submittedAt: new Date().toISOString() };
-      
-      // Save or update the agreement
       await DBService.saveAgreement(submission);
       
-      // Refresh local state
-      const updated = await DBService.getAgreements();
-      setAgreements(updated);
-      
-      const updatedClosures = await DBService.getClosures();
-      setClosures(updatedClosures);
-
-      const unreadAgreements = updated.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures);
+      setAgreements(prev => {
+        const filtered = prev.filter(a => a.id !== submission.id);
+        return [submission, ...filtered];
+      });
       
       setCurrentAgreement(submission);
       navigate('/success');
@@ -263,17 +350,10 @@ const App: React.FC = () => {
       const submission = { ...data, submittedAt: data.submittedAt || new Date().toISOString() };
       await DBService.saveClosure(submission);
       
-      const updated = await DBService.getClosures();
-      setClosures(updated);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const updatedComplaints = await DBService.getComplaints();
-      const updatedInquiries = await DBService.getInquiries();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updated.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = updatedComplaints.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = updatedInquiries.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
+      setClosures(prev => {
+        const filtered = prev.filter(c => c.id !== submission.id);
+        return [submission, ...filtered];
+      });
     } catch (error: any) {
       console.error("Closure submission failed:", error);
       alert(`Cessation notification submission failed: ${error.message || 'Please try again.'}`);
@@ -289,17 +369,10 @@ const App: React.FC = () => {
       const submission = { ...data, submittedAt: data.submittedAt || new Date().toISOString() };
       await DBService.saveComplaint(submission);
       
-      const updated = await DBService.getComplaints();
-      setComplaints(updated);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const updatedClosures = await DBService.getClosures();
-      const updatedInquiries = await DBService.getInquiries();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = updated.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = updatedInquiries.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
+      setComplaints(prev => {
+        const filtered = prev.filter(co => co.id !== submission.id);
+        return [submission, ...filtered];
+      });
     } catch (error: any) {
       console.error("Complaint submission failed:", error);
       alert(`Complaint submission failed: ${error.message || 'Please try again.'}`);
@@ -315,17 +388,10 @@ const App: React.FC = () => {
       const submission = { ...data, submittedAt: data.submittedAt || new Date().toISOString() };
       await DBService.saveInquiry(submission);
       
-      const updated = await DBService.getInquiries();
-      setInquiries(updated);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const updatedClosures = await DBService.getClosures();
-      const updatedComplaints = await DBService.getComplaints();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = updatedComplaints.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = updated.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
+      setInquiries(prev => {
+        const filtered = prev.filter(inq => inq.id !== submission.id);
+        return [submission, ...filtered];
+      });
     } catch (error: any) {
       console.error("Inquiry submission failed:", error);
       alert(`Inquiry submission failed: ${error.message || 'Please try again.'}`);
@@ -337,84 +403,80 @@ const App: React.FC = () => {
 
   const handleAdminAction = async (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string }) => {
     setIsSyncing(true);
-    const updates: Partial<AgreementData> = action === 'approve' 
-      ? { status: 'approved', officialSignature: adminData?.signature, officialName: adminData?.name, approvedAt: new Date().toISOString() }
-      : { status: 'rejected', rejectionReason: adminData?.reason };
+    try {
+      const updates: Partial<AgreementData> = action === 'approve' 
+        ? { status: 'approved', officialSignature: adminData?.signature, officialName: adminData?.name, approvedAt: new Date().toISOString() }
+        : { status: 'rejected', rejectionReason: adminData?.reason };
 
-    await DBService.updateAgreement(id, updates);
-    
-    const updated = await DBService.getAgreements();
-    setAgreements(updated);
-    
-    const updatedClosures = await DBService.getClosures();
-    
-    const unreadAgreements = updated.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-    const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-    setUnreadCount(unreadAgreements + unreadClosures);
-    setIsSyncing(false);
+      await DBService.updateAgreement(id, updates);
+      setAgreements(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
+    } catch (err) {
+      console.error("Admin action failed:", err);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleClosureAction = async (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string; title?: string; comments?: string }) => {
     setIsSyncing(true);
-    const updates: Partial<ClosureNotificationData> = action === 'approve'
-      ? { 
-          status: 'approved', 
-          officialSignature: adminData?.signature, 
-          officialName: adminData?.name, 
-          officialTitle: adminData?.title,
-          officialComments: adminData?.comments,
-          approvedAt: new Date().toISOString() 
-        }
-      : { status: 'rejected', rejectionReason: adminData?.reason };
+    try {
+      const updates: Partial<ClosureNotificationData> = action === 'approve'
+        ? { 
+            status: 'approved', 
+            officialSignature: adminData?.signature, 
+            officialName: adminData?.name, 
+            officialTitle: adminData?.title,
+            officialComments: adminData?.comments,
+            approvedAt: new Date().toISOString() 
+          }
+        : { status: 'rejected', rejectionReason: adminData?.reason };
 
-    await DBService.updateClosure(id, updates);
-    
-    // Automatically update relevant client's dates of cessation in the clients list
-    const closure = closures.find(c => c.id === id);
-    if (action === 'approve' && closure) {
-      try {
-        const clients = await DBService.getClients();
-        let clientId = '';
-        if (closure.permitNo && closure.permitNo.includes('KDB/LC/')) {
-          clientId = closure.permitNo.split('KDB/LC/')[1];
-        }
-        
-        const client = clients.find(c => c.id === clientId) || 
-                       clients.find(c => String(c.clientName || '').toLowerCase() === String(closure.dboName || '').toLowerCase()) ||
-                       clients.find(c => c.tel === closure.tel);
-                       
-        if (client) {
-          const dateObj = new Date(closure.closureDate);
-          const year = isNaN(dateObj.getTime()) ? null : dateObj.getFullYear();
-          const monthsList = [
-            'January', 'February', 'March', 'April', 'May', 'June',
-            'July', 'August', 'September', 'October', 'November', 'December'
-          ];
-          const month = isNaN(dateObj.getTime()) ? null : monthsList[dateObj.getMonth()];
+      await DBService.updateClosure(id, updates);
+      setClosures(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+      
+      // Automatically update relevant client's dates of cessation in the clients list
+      const closure = closures.find(c => c.id === id);
+      if (action === 'approve' && closure) {
+        try {
+          const clientList = clients.length > 0 ? clients : await DBService.getClients();
+          let clientId = '';
+          if (closure.permitNo && closure.permitNo.includes('KDB/LC/')) {
+            clientId = closure.permitNo.split('KDB/LC/')[1];
+          }
+          
+          const client = clientList.find(c => c.id === clientId) || 
+                         clientList.find(c => String(c.clientName || '').toLowerCase() === String(closure.dboName || '').toLowerCase()) ||
+                         clientList.find(c => c.tel === closure.tel);
+                         
+          if (client) {
+            const dateObj = new Date(closure.closureDate);
+            const year = isNaN(dateObj.getTime()) ? null : dateObj.getFullYear();
+            const monthsList = [
+              'January', 'February', 'March', 'April', 'May', 'June',
+              'July', 'August', 'September', 'October', 'November', 'December'
+            ];
+            const month = isNaN(dateObj.getTime()) ? null : monthsList[dateObj.getMonth()];
 
-          const updatedClient = {
-            ...client,
-            operationalStatus: 'closed' as const,
-            levyInfo: 'DNQ-R' as const,
-            endYear: year,
-            endMonth: month
-          };
-          await DBService.saveClient(updatedClient);
-          console.log(`[App] Automatically updated client ${client.clientName} status to closed with endYear=${year}, endMonth=${month}`);
+            const updatedClient = {
+              ...client,
+              operationalStatus: 'closed' as const,
+              levyInfo: 'DNQ-R' as const,
+              endYear: year,
+              endMonth: month
+            };
+            await DBService.saveClient(updatedClient);
+            setClients(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
+            console.log(`[App] Automatically updated client ${client.clientName} status to closed with endYear=${year}, endMonth=${month}`);
+          }
+        } catch (err) {
+          console.error("[App] Failed to auto-update client cessation status:", err);
         }
-      } catch (err) {
-        console.error("[App] Failed to auto-update client cessation status:", err);
       }
+    } catch (err) {
+      console.error("Closure action failed:", err);
+    } finally {
+      setIsSyncing(false);
     }
-    
-    const updatedClosures = await DBService.getClosures();
-    setClosures(updatedClosures);
-
-    const updatedAgreements = await DBService.getAgreements();
-    const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-    const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-    setUnreadCount(unreadAgreements + unreadClosures);
-    setIsSyncing(false);
   };
 
   const handleDeleteAgreement = async (id: string) => {
@@ -423,13 +485,7 @@ const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await DBService.deleteAgreement(id);
-      const updated = await DBService.getAgreements();
-      setAgreements(updated);
-      
-      const updatedClosures = await DBService.getClosures();
-      const unreadAgreements = updated.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures);
+      setAgreements(prev => prev.filter(a => a.id !== id));
     } catch (error) {
       console.error("Deletion failed:", error);
     } finally {
@@ -443,13 +499,7 @@ const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await DBService.deleteClosure(id);
-      const updatedClosures = await DBService.getClosures();
-      setClosures(updatedClosures);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures);
+      setClosures(prev => prev.filter(c => c.id !== id));
     } catch (error) {
       console.error("Cessation deletion failed:", error);
     } finally {
@@ -461,17 +511,7 @@ const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await DBService.updateComplaint(id, updates);
-      const updatedComplaints = await DBService.getComplaints();
-      setComplaints(updatedComplaints);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const updatedClosures = await DBService.getClosures();
-      const updatedInquiries = await DBService.getInquiries();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = updatedComplaints.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = updatedInquiries.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
+      setComplaints(prev => prev.map(co => co.id === id ? { ...co, ...updates } : co));
     } catch (error) {
       console.error("Complaint action failed:", error);
     } finally {
@@ -485,17 +525,7 @@ const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await DBService.deleteComplaint(id);
-      const updatedComplaints = await DBService.getComplaints();
-      setComplaints(updatedComplaints);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const updatedClosures = await DBService.getClosures();
-      const updatedInquiries = await DBService.getInquiries();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = updatedComplaints.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = updatedInquiries.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
+      setComplaints(prev => prev.filter(co => co.id !== id));
     } catch (error) {
       console.error("Complaint deletion failed:", error);
     } finally {
@@ -507,17 +537,7 @@ const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await DBService.updateInquiry(id, updates);
-      const updatedInquiries = await DBService.getInquiries();
-      setInquiries(updatedInquiries);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const updatedClosures = await DBService.getClosures();
-      const updatedComplaints = await DBService.getComplaints();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = updatedComplaints.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = updatedInquiries.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
+      setInquiries(prev => prev.map(inq => inq.id === id ? { ...inq, ...updates } : inq));
     } catch (error) {
       console.error("Inquiry action failed:", error);
     } finally {
@@ -531,17 +551,7 @@ const App: React.FC = () => {
     setIsSyncing(true);
     try {
       await DBService.deleteInquiry(id);
-      const updatedInquiries = await DBService.getInquiries();
-      setInquiries(updatedInquiries);
-
-      const updatedAgreements = await DBService.getAgreements();
-      const updatedClosures = await DBService.getClosures();
-      const updatedComplaints = await DBService.getComplaints();
-      const unreadAgreements = updatedAgreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
-      const unreadClosures = updatedClosures.filter(c => c.status === 'submitted').length;
-      const unreadComplaints = updatedComplaints.filter(co => co.status === 'submitted').length;
-      const unreadInquiries = updatedInquiries.filter(inq => inq.status === 'submitted').length;
-      setUnreadCount(unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries);
+      setInquiries(prev => prev.filter(inq => inq.id !== id));
     } catch (error) {
       console.error("Inquiry deletion failed:", error);
     } finally {
@@ -589,18 +599,17 @@ const App: React.FC = () => {
                 </div>
               </div>
               
-              <nav className="flex space-x-1">
-                <button 
-                  onClick={() => navigate('/')}
-                  className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${['/', '/portal'].includes(location.pathname) ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-                >
-                  <User className="w-3.5 h-3.5 mr-1.5" />
-                  Public Portals
-                </button>
-
-
-                {isAdminAuthenticated ? (
+              <nav className="flex items-center space-x-1">
+                {isAdminAuthenticated && (
                   <>
+                    <button 
+                      onClick={() => navigate('/')}
+                      className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${['/', '/portal'].includes(location.pathname) ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                    >
+                      <User className="w-3.5 h-3.5 mr-1.5" />
+                      Public Portals
+                    </button>
+
                     <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700">
                       <User className="w-3.5 h-3.5 text-emerald-600" />
                       <span className="max-w-[140px] truncate" title={user?.email || 'Admin'}>
@@ -630,14 +639,6 @@ const App: React.FC = () => {
                       Logout
                     </button>
                   </>
-                ) : (
-                  <button 
-                    onClick={() => navigate('/admin')}
-                    className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${location.pathname === '/admin' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    <Lock className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
-                    Admin Login
-                  </button>
                 )}
               </nav>
             </div>
@@ -766,7 +767,7 @@ const App: React.FC = () => {
                 debtors={debtors}
                 staffConfig={staffConfig}
                 isSyncing={isSyncing}
-                onRefresh={loadDatabase}
+                onRefresh={() => loadDatabase(true)}
                 onAction={handleAdminAction} 
                 onDeleteAgreement={handleDeleteAgreement}
                 onClosureAction={handleClosureAction}

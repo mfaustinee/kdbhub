@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
-import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User } from 'lucide-react';
+import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw } from 'lucide-react';
 import { useAuth } from '../src/contexts/AuthContext';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
@@ -16,6 +16,7 @@ import { ClientReturnsModule } from './ClientReturnsModule';
 import { ReportsModule } from './ReportsModule';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
+import { SecuritySettingsCard } from './SecuritySettingsCard';
 
 interface AdminDashboardProps {
   agreements: AgreementData[];
@@ -117,6 +118,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [adminTitle, setAdminTitle] = useState('Compliance Officer');
   const [closureOfficerTitle, setClosureOfficerTitle] = useState('');
   const [closureOfficerComments, setClosureOfficerComments] = useState('');
+  const [selectedSigningSigId, setSelectedSigningSigId] = useState<string>('');
+  const [isSyncingSigs, setIsSyncingSigs] = useState(false);
 
   useEffect(() => {
     if (user && !adminName) {
@@ -263,11 +266,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [tab]);
 
-  useEffect(() => {
-    const loadSignatures = async () => {
-      const sigs = await DBService.getAuthoritySignatures();
+  const loadSignatures = async (forceFresh = false) => {
+    if (forceFresh) setIsSyncingSigs(true);
+    try {
+      const sigs = await DBService.getAuthoritySignatures(forceFresh);
       setAuthoritySigs(sigs);
-    };
+      if (sigs.length > 0) {
+        setSelectedSigningSigId(prev => {
+          if (prev && sigs.some(s => s.id === prev)) return prev;
+          const def = sigs.find(s => s.isDefault) || sigs[0];
+          return def.id;
+        });
+      }
+    } finally {
+      if (forceFresh) setTimeout(() => setIsSyncingSigs(false), 300);
+    }
+  };
+
+  const handleSelectSigningOfficer = (sig: AuthoritySignature) => {
+    setSelectedSigningSigId(sig.id);
+    setAdminName(sig.name);
+    if (sig.title) {
+      setAdminTitle(sig.title);
+      setClosureOfficerTitle(sig.title);
+    }
+  };
+
+  useEffect(() => {
     loadSignatures();
 
     const handleSigUpdate = () => {
@@ -392,15 +417,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     if (onComplaintAction) {
+      const activeSig = authoritySigs.find(s => s.id === selectedSigningSigId) || authoritySigs.find(s => s.isDefault) || authoritySigs[0];
+      const signatureToUse = activeSig?.signature || staffConfig.officialSignature;
       const updates: Partial<ComplaintData> = {
         complaintCategoryCode,
         assignedTo: complaintAssignedTo,
         status: complaintStatus,
         investigationFindings,
         actionTaken: complaintActionTaken,
-        officialSignature: staffConfig.officialSignature,
-        officialName: adminName,
-        officialTitle: adminTitle || 'Compliance Officer',
+        officialSignature: signatureToUse,
+        officialName: adminName || activeSig?.name || 'Authorized Officer',
+        officialTitle: adminTitle || activeSig?.title || 'Compliance Officer',
         officialComments: complaintActionTaken || investigationFindings,
         actionDate: new Date().toISOString().split('T')[0],
         dateClosed: ['resolved', 'closed', 'rejected'].includes(complaintStatus) 
@@ -416,8 +443,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleProcessInquiry = async () => {
     if (!selectedInquiry) return;
-    if (!adminName) return alert("Please enter your name for authorization.");
-    if (!staffConfig.officialSignature) return alert("Please upload an official signature in Staff Setup first.");
+    const activeSig = authoritySigs.find(s => s.id === selectedSigningSigId) || authoritySigs.find(s => s.isDefault) || authoritySigs[0];
+    const signatureToUse = activeSig?.signature || staffConfig.officialSignature;
+    if (!adminName && !activeSig?.name) return alert("Please enter your name for authorization.");
+    if (!signatureToUse) return alert("Please select or upload an official signature in Staff Setup first.");
 
     setIsProcessingInquiry(true);
     const steps = [
@@ -439,9 +468,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         status: inquiryStatus,
         responseDetails: inquiryResponseDetails,
         officialComments: inquiryResponseDetails,
-        officialSignature: staffConfig.officialSignature,
-        officialName: adminName,
-        officialTitle: adminTitle || 'Compliance Officer',
+        officialSignature: signatureToUse,
+        officialName: adminName || activeSig?.name || 'Authorized Officer',
+        officialTitle: adminTitle || activeSig?.title || 'Compliance Officer',
         dateReplied: ['resolved', 'closed'].includes(inquiryStatus) 
           ? new Date().toISOString().split('T')[0] 
           : undefined,
@@ -454,9 +483,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleApproveClosure = async () => {
-    if (!adminName) return alert("Please enter your name for authorization.");
-    if (!closureOfficerTitle) return alert("Please enter your official title for authorization.");
-    if (!staffConfig.officialSignature) return alert("Please upload an official signature in Staff Setup first.");
+    const activeSig = authoritySigs.find(s => s.id === selectedSigningSigId) || authoritySigs.find(s => s.isDefault) || authoritySigs[0];
+    const signatureToUse = activeSig?.signature || staffConfig.officialSignature;
+    if (!adminName && !activeSig?.name) return alert("Please enter your name for authorization.");
+    if (!closureOfficerTitle && !activeSig?.title) return alert("Please enter your official title for authorization.");
+    if (!signatureToUse) return alert("Please select or upload an official signature in Staff Setup first.");
     
     setIsApprovingClosure(true);
     const steps = [
@@ -473,9 +504,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     if (!selectedClosure) return;
     onClosureAction(selectedClosure.id, 'approve', { 
-      signature: staffConfig.officialSignature, 
-      name: adminName,
-      title: closureOfficerTitle,
+      signature: signatureToUse, 
+      name: adminName || activeSig?.name || 'Authorized Officer',
+      title: closureOfficerTitle || activeSig?.title || 'Compliance Officer',
       comments: closureOfficerComments
     });
     setIsApprovingClosure(false);
@@ -790,8 +821,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleApprove = async () => {
-    if (!adminName) return alert("Please enter your name for authorization.");
-    if (!staffConfig.officialSignature) return alert("Please upload an official signature in Staff Setup first.");
+    const activeSig = authoritySigs.find(s => s.id === selectedSigningSigId) || authoritySigs.find(s => s.isDefault) || authoritySigs[0];
+    const signatureToUse = activeSig?.signature || staffConfig.officialSignature;
+    if (!adminName && !activeSig?.name) return alert("Please enter your name for authorization.");
+    if (!signatureToUse) return alert("Please select or upload an official signature in Staff Setup first.");
     
     setIsApproving(true);
     const steps = [
@@ -807,7 +840,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     if (!selectedReview) return;
-    onAction(selectedReview.id, 'approve', { signature: staffConfig.officialSignature, name: adminName });
+    onAction(selectedReview.id, 'approve', { signature: signatureToUse, name: adminName || activeSig?.name || 'Authorized Officer' });
     setIsApproving(false);
     setAdminName('');
   };
@@ -1540,13 +1573,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </div>
                             </div>
                           ) : (
-                            <>
+                            <div className="space-y-3">
+                              {authoritySigs.length > 0 && (
+                                <div className="space-y-1.5 mb-2">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                                      <ShieldCheck className="w-3 h-3 text-emerald-600" /> Saved Signatures (Supabase)
+                                    </span>
+                                    <span className="text-[9px] text-emerald-700 font-bold bg-emerald-100/90 px-2 py-0.5 rounded-full">
+                                      Cloud Synced
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                                    {authoritySigs.map((sig) => {
+                                      const isSelected = selectedSigningSigId === sig.id || (!selectedSigningSigId && (sig.isDefault || sig.signature === staffConfig.officialSignature));
+                                      return (
+                                        <button
+                                          key={sig.id}
+                                          type="button"
+                                          onClick={() => handleSelectSigningOfficer(sig)}
+                                          className={`w-full flex items-center justify-between p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                                            isSelected 
+                                              ? 'bg-emerald-50 border-emerald-400 text-emerald-950 font-bold shadow-xs ring-1 ring-emerald-300' 
+                                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-2.5 min-w-0">
+                                            <div className="w-10 h-7 bg-white rounded border border-slate-100 flex items-center justify-center p-0.5 shrink-0 overflow-hidden">
+                                              <img src={sig.signature} alt={sig.name} className="max-h-full max-w-full object-contain" />
+                                            </div>
+                                            <div className="min-w-0">
+                                              <p className="text-xs truncate">{sig.name}</p>
+                                              <p className="text-[10px] text-slate-500 truncate font-normal">{sig.title || 'Authorized Officer'}</p>
+                                            </div>
+                                          </div>
+                                          {isSelected && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                               <input placeholder="Enter Authorized Name *" className="w-full px-6 py-4 border rounded-2xl text-xs bg-white font-bold outline-none shadow-sm" value={adminName} onChange={e => setAdminName(e.target.value)} />
                               <div className="flex gap-3">
                                 <button onClick={() => setIsRejecting(true)} className="flex-1 py-4 text-rose-600 font-bold text-[10px] uppercase tracking-widest bg-white border border-rose-100 rounded-2xl hover:bg-rose-50 transition-all">Reject</button>
                                 <button onClick={handleApprove} className="flex-2 py-4 bg-emerald-600 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl shadow-lg hover:bg-emerald-700 transition-all">Sign & Approve</button>
                               </div>
-                            </>
+                            </div>
                           )}
                         </div>
                       ) : selectedReview.status === 'resubmission_requested' ? (
@@ -1722,6 +1795,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </div>
                           ) : (
                             <div className="space-y-3">
+                              {authoritySigs.length > 0 && (
+                                <div className="space-y-1.5 mb-2">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                                      <ShieldCheck className="w-3 h-3 text-emerald-600" /> Saved Signatures (Supabase)
+                                    </span>
+                                    <span className="text-[9px] text-emerald-700 font-bold bg-emerald-100/90 px-2 py-0.5 rounded-full">
+                                      Cloud Synced
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                                    {authoritySigs.map((sig) => {
+                                      const isSelected = selectedSigningSigId === sig.id || (!selectedSigningSigId && (sig.isDefault || sig.signature === staffConfig.officialSignature));
+                                      return (
+                                        <button
+                                          key={sig.id}
+                                          type="button"
+                                          onClick={() => handleSelectSigningOfficer(sig)}
+                                          className={`w-full flex items-center justify-between p-2 rounded-xl border text-left transition-all cursor-pointer ${
+                                            isSelected 
+                                              ? 'bg-emerald-50 border-emerald-400 text-emerald-950 font-bold shadow-xs ring-1 ring-emerald-300' 
+                                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-2.5 min-w-0">
+                                            <div className="w-10 h-7 bg-white rounded border border-slate-100 flex items-center justify-center p-0.5 shrink-0 overflow-hidden">
+                                              <img src={sig.signature} alt={sig.name} className="max-h-full max-w-full object-contain" />
+                                            </div>
+                                            <div className="min-w-0">
+                                              <p className="text-xs truncate">{sig.name}</p>
+                                              <p className="text-[10px] text-slate-500 truncate font-normal">{sig.title || 'Authorized Officer'}</p>
+                                            </div>
+                                          </div>
+                                          {isSelected && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                               <input 
                                 placeholder="Enter Authorized Name *" 
                                 className="w-full px-6 py-4 border rounded-2xl text-xs bg-white font-bold outline-none shadow-sm" 
@@ -2850,17 +2963,30 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
                 <div className="space-y-6 bg-slate-50 p-6 sm:p-8 rounded-[32px] border border-slate-100">
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div>
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex items-center gap-2.5 flex-wrap">
                         <h4 className="font-bold text-slate-800 text-base">Authority Signatures Registry</h4>
                         <span className="text-[10px] font-black text-blue-700 bg-blue-100/80 px-2.5 py-0.5 rounded-full">
                           {authoritySigs.length} Registered
                         </span>
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/90 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                          <ShieldCheck className="w-3 h-3 text-emerald-600" /> Supabase Cloud Synced
+                        </span>
                       </div>
                       <p className="text-xs text-slate-500 mt-1">
-                        Add as many authority signatures as needed, reorder their priority, assign officer names, set the active default stamp, or delete anytime.
+                        Signatures are stored directly in Supabase Cloud for easy multi-device signing retrieval and real-time synchronization.
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                      <button
+                        type="button"
+                        disabled={isSyncingSigs}
+                        onClick={() => loadSignatures(true)}
+                        className="px-3.5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-xs cursor-pointer disabled:opacity-50"
+                        title="Re-sync authority signatures from Supabase Cloud"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingSigs ? 'animate-spin' : ''}`} />
+                        <span>{isSyncingSigs ? 'Syncing...' : 'Sync Cloud'}</span>
+                      </button>
                       {authoritySigs.length > 1 && (
                         <button
                           type="button"
@@ -3036,7 +3162,7 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
                             type="text"
                             value={newSigName}
                             onChange={(e) => setNewSigName(e.target.value)}
-                            placeholder="e.g. Officer John Doe"
+                            placeholder="e.g. John Doe"
                             className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-blue-500 outline-none text-xs"
                           />
                         </div>
@@ -3320,6 +3446,9 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
                     </div>
                   )}
                 </div>
+
+                {/* Security & Access Controls Checklist (Bot Blocking, HTTP Headers, MFA, IP Whitelisting & Rate Limiting) */}
+                <SecuritySettingsCard />
 
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">

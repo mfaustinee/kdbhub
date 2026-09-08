@@ -1,0 +1,15 @@
+User-agent: *
+Disallow: /admin
+Disallow: /admin/*
+Disallow: /api/admin/*
+Disallow: /api/*
+Disallow: /secure-*
+Disallow: /*?*admin*
+Disallow: /kdb-admin*
+
+Allow: /
+Allow: /portal
+Allow: /agreements
+Allow: /cessations
+Allow: /complaints
+Allow: /inquiries

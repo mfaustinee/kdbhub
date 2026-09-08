@@ -25,7 +25,92 @@ const RETURNS_FILE = path.join(DATA_DIR, "returns.json");
 const VALIDATIONS_FILE = path.join(DATA_DIR, "validations.json");
 const VALIDATION_DRAFTS_FILE = path.join(DATA_DIR, "validation_drafts.json");
 const SCOPE_DISCLOSURES_FILE = path.join(DATA_DIR, "scope_disclosures.json");
+const SECURITY_CONFIG_FILE = path.join(DATA_DIR, "security_config.json");
 const LOG_FILE = path.join(DATA_DIR, "server.log");
+
+// Security & Access Control State
+interface SecurityConfig {
+  ipWhitelistEnabled: boolean;
+  allowedIps: string[];
+  maxLoginAttempts: number;
+  lockoutDurationMinutes: number;
+}
+
+const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
+  ipWhitelistEnabled: false,
+  allowedIps: ["127.0.0.1", "::1"],
+  maxLoginAttempts: 5,
+  lockoutDurationMinutes: 15
+};
+
+const readSecurityConfig = async (): Promise<SecurityConfig> => {
+  try {
+    if (fs.existsSync(SECURITY_CONFIG_FILE)) {
+      const content = await fs.promises.readFile(SECURITY_CONFIG_FILE, "utf-8");
+      if (content && content.trim()) {
+        const parsed = JSON.parse(content);
+        return { ...DEFAULT_SECURITY_CONFIG, ...parsed };
+      }
+    }
+  } catch (e) {
+    console.warn("[Security] Could not read security config, using defaults:", e);
+  }
+  return { ...DEFAULT_SECURITY_CONFIG };
+};
+
+const saveSecurityConfig = async (config: Partial<SecurityConfig>): Promise<SecurityConfig> => {
+  const current = await readSecurityConfig();
+  const updated: SecurityConfig = { ...current, ...config };
+  try {
+    if (fs.existsSync(DATA_DIR)) {
+      await fs.promises.writeFile(SECURITY_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf-8");
+    }
+  } catch (e) {
+    console.warn("[Security] Could not persist security config:", e);
+  }
+  return updated;
+};
+
+// In-Memory Rate Limiting Tracker
+interface LoginAttemptInfo {
+  failedAttempts: number;
+  firstFailedAt: number;
+  lockedUntil: number | null;
+}
+const loginAttemptsTracker = new Map<string, LoginAttemptInfo>();
+
+const getClientIp = (req: express.Request): string => {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string') {
+    return forwarded.split(',')[0].trim();
+  }
+  if (Array.isArray(forwarded) && forwarded.length > 0) {
+    return forwarded[0].trim();
+  }
+  return req.socket.remoteAddress || req.ip || '127.0.0.1';
+};
+
+const isIpAuthorized = (clientIp: string, allowedIps: string[]): boolean => {
+  if (!allowedIps || allowedIps.length === 0) return true;
+  const cleanClient = clientIp.replace(/^::ffff:/, '').trim();
+
+  return allowedIps.some(allowed => {
+    const cleanAllowed = allowed.replace(/^::ffff:/, '').trim();
+    if (cleanAllowed === '*' || cleanAllowed === '0.0.0.0/0') return true;
+    if (cleanAllowed === cleanClient) return true;
+    // Localhost matches
+    if ((cleanClient === '127.0.0.1' || cleanClient === '::1') && 
+        (cleanAllowed === '127.0.0.1' || cleanAllowed === '::1' || cleanAllowed === 'localhost')) {
+      return true;
+    }
+    // Subnet wildcard (e.g. 192.168.1.*)
+    if (cleanAllowed.endsWith('.*')) {
+      const prefix = cleanAllowed.slice(0, -2);
+      if (cleanClient.startsWith(prefix)) return true;
+    }
+    return false;
+  });
+};
 
 // Ensure data directory exists early for logging
 try {
@@ -132,7 +217,185 @@ async function startServer() {
       next();
     });
 
+    // HTTP Header Controls & Bot Blocking Middleware
+    app.use((req, res, next) => {
+      const url = req.originalUrl || req.url;
+      const isAdminRoute = 
+        url.startsWith('/admin') ||
+        url.startsWith('/api/admin') ||
+        url.startsWith('/secure') ||
+        url.includes('admin=true') ||
+        url.includes('/admin/');
+
+      if (isAdminRoute) {
+        // HTTP Header Controls: Include X-Robots-Tag: noindex, nofollow on all admin routes
+        res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive, nosnippet, noimageindex');
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+
+      // Hardened Security Headers
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+      next();
+    });
+
     logToFile("[Server] Registering API routes...");
+
+    // Robots.txt Bot Blocking Endpoint
+    app.get('/robots.txt', (req, res) => {
+      res.type('text/plain');
+      res.send(`User-agent: *
+Disallow: /admin
+Disallow: /admin/*
+Disallow: /api/admin/*
+Disallow: /api/*
+Disallow: /secure-*
+Disallow: /*?*admin*
+Disallow: /kdb-admin*
+
+Allow: /
+Allow: /portal
+Allow: /agreements
+Allow: /cessations
+Allow: /complaints
+Allow: /inquiries
+`);
+    });
+
+    // Security & IP Whitelisting / Rate Limiting Endpoints
+    app.get('/api/security/status', async (req, res) => {
+      const clientIp = getClientIp(req);
+      const config = await readSecurityConfig();
+      const isAllowed = isIpAuthorized(clientIp, config.allowedIps);
+      res.json({
+        clientIp,
+        ipWhitelistEnabled: config.ipWhitelistEnabled,
+        allowedIps: config.allowedIps,
+        isAllowed,
+        maxLoginAttempts: config.maxLoginAttempts,
+        lockoutDurationMinutes: config.lockoutDurationMinutes
+      });
+    });
+
+    app.get('/api/security/config', async (req, res) => {
+      const config = await readSecurityConfig();
+      const clientIp = getClientIp(req);
+      res.json({
+        ...config,
+        detectedClientIp: clientIp,
+        isCurrentIpAllowed: isIpAuthorized(clientIp, config.allowedIps)
+      });
+    });
+
+    app.post('/api/security/config', async (req, res) => {
+      try {
+        const { ipWhitelistEnabled, allowedIps, maxLoginAttempts, lockoutDurationMinutes } = req.body;
+        const updated = await saveSecurityConfig({
+          ...(typeof ipWhitelistEnabled === 'boolean' ? { ipWhitelistEnabled } : {}),
+          ...(Array.isArray(allowedIps) ? { allowedIps } : {}),
+          ...(typeof maxLoginAttempts === 'number' ? { maxLoginAttempts } : {}),
+          ...(typeof lockoutDurationMinutes === 'number' ? { lockoutDurationMinutes } : {})
+        });
+        res.json({ success: true, config: updated });
+      } catch (e: any) {
+        res.status(500).json({ error: "Failed to update security configuration", details: e.message });
+      }
+    });
+
+    app.post('/api/security/check-login-rate', async (req, res) => {
+      const clientIp = getClientIp(req);
+      const email = (req.body.email || '').toLowerCase().trim();
+      const config = await readSecurityConfig();
+
+      // Check IP Whitelisting first
+      if (config.ipWhitelistEnabled && !isIpAuthorized(clientIp, config.allowedIps)) {
+        return res.status(403).json({
+          allowed: false,
+          ipBlocked: true,
+          clientIp,
+          message: `Access Denied: Your IP address (${clientIp}) is not on the administrator whitelist.`
+        });
+      }
+
+      // Check Rate Limiting
+      const key = `${clientIp}:${email || 'unknown'}`;
+      const record = loginAttemptsTracker.get(key);
+      const now = Date.now();
+
+      if (record && record.lockedUntil && record.lockedUntil > now) {
+        const remainingSeconds = Math.ceil((record.lockedUntil - now) / 1000);
+        return res.json({
+          allowed: false,
+          rateLimited: true,
+          lockedUntil: record.lockedUntil,
+          remainingSeconds,
+          remainingAttempts: 0,
+          clientIp,
+          message: `Too many failed login attempts. Access is locked for ${Math.ceil(remainingSeconds / 60)} minutes.`
+        });
+      }
+
+      const failedCount = record ? record.failedAttempts : 0;
+      const remainingAttempts = Math.max(0, config.maxLoginAttempts - failedCount);
+
+      res.json({
+        allowed: true,
+        clientIp,
+        remainingAttempts,
+        ipBlocked: false,
+        rateLimited: false
+      });
+    });
+
+    app.post('/api/security/record-login-attempt', async (req, res) => {
+      const clientIp = getClientIp(req);
+      const email = (req.body.email || '').toLowerCase().trim();
+      const success = !!req.body.success;
+      const config = await readSecurityConfig();
+
+      const key = `${clientIp}:${email || 'unknown'}`;
+      const now = Date.now();
+
+      if (success) {
+        // Reset on successful login
+        loginAttemptsTracker.delete(key);
+        return res.json({ success: true, remainingAttempts: config.maxLoginAttempts });
+      }
+
+      // Failed attempt
+      let record = loginAttemptsTracker.get(key);
+      if (!record || (record.firstFailedAt && (now - record.firstFailedAt > config.lockoutDurationMinutes * 60 * 1000))) {
+        record = { failedAttempts: 1, firstFailedAt: now, lockedUntil: null };
+      } else {
+        record.failedAttempts += 1;
+      }
+
+      if (record.failedAttempts >= config.maxLoginAttempts) {
+        record.lockedUntil = now + (config.lockoutDurationMinutes * 60 * 1000);
+        loginAttemptsTracker.set(key, record);
+        logToFile(`[Security ALERT] IP ${clientIp} (${email}) locked out for ${config.lockoutDurationMinutes}m due to ${record.failedAttempts} failed attempts.`);
+        return res.json({
+          success: false,
+          locked: true,
+          lockedUntil: record.lockedUntil,
+          remainingAttempts: 0,
+          remainingSeconds: config.lockoutDurationMinutes * 60,
+          message: `Maximum login attempts exceeded. Account is locked for ${config.lockoutDurationMinutes} minutes.`
+        });
+      }
+
+      loginAttemptsTracker.set(key, record);
+      const remainingAttempts = config.maxLoginAttempts - record.failedAttempts;
+      return res.json({
+        success: false,
+        locked: false,
+        remainingAttempts,
+        message: `Invalid credentials. ${remainingAttempts} attempts remaining before temporary lockout.`
+      });
+    });
     
     app.get("/api/debug-env", (req, res) => {
       logToFile("[API] Serving /api/debug-env");

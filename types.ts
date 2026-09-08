@@ -37,7 +37,7 @@ export interface EnabledModules {
 
 export interface AuthoritySignature {
   id: string;
-  name: string; // Assigned name of the authority/officer (e.g., "Officer John Doe", "Enock Langat")
+  name: string; // Assigned name of the authority/officer (e.g., "John Doe")
   title?: string; // Optional designation (e.g., "Compliance Officer", "Regional Compliance Lead")
   signature: string; // Base64 data URL
   createdAt?: string;

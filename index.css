@@ -90,3 +90,8 @@ body {
   break-inside: avoid;
   page-break-inside: avoid;
 }
+
+html, body, input, textarea, select, button {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+}
