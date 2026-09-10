@@ -1,6 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import SignatureCanvas from 'react-signature-canvas';
 import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
 import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw } from 'lucide-react';
@@ -148,11 +149,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newSigName, setNewSigName] = useState('');
   const [newSigTitle, setNewSigTitle] = useState('');
   const [newSigImage, setNewSigImage] = useState('');
+  const [newSigMode, setNewSigMode] = useState<'upload' | 'draw'>('upload');
+  const newSigCanvasRef = useRef<SignatureCanvas | null>(null);
   const [isSavingSig, setIsSavingSig] = useState(false);
   const [editingSig, setEditingSig] = useState<AuthoritySignature | null>(null);
   const [editSigName, setEditSigName] = useState('');
   const [editSigTitle, setEditSigTitle] = useState('');
   const [editSigImage, setEditSigImage] = useState('');
+  const [editSigMode, setEditSigMode] = useState<'upload' | 'draw'>('upload');
+  const editSigCanvasRef = useRef<SignatureCanvas | null>(null);
   const [editSigIsDefault, setEditSigIsDefault] = useState(false);
   const [isSavingEditSig, setIsSavingEditSig] = useState(false);
   const [systemHealth, setSystemHealth] = useState<any>({
@@ -580,12 +585,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleAddAuthoritySignature = async () => {
+    let sigData = newSigImage;
+    if (newSigMode === 'draw' && newSigCanvasRef.current) {
+      if (newSigCanvasRef.current.isEmpty()) {
+        alert('Please draw an authority signature on the canvas or switch to upload mode.');
+        return;
+      }
+      sigData = newSigCanvasRef.current.toDataURL('image/png');
+    }
+
     if (!newSigName.trim()) {
       alert('Please enter the officer name for this signature.');
       return;
     }
-    if (!newSigImage) {
-      alert('Please upload a signature image file.');
+    if (!sigData) {
+      alert('Please provide a signature (either draw live or upload an image file).');
       return;
     }
 
@@ -594,7 +608,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const updated = await DBService.addAuthoritySignature({
         name: newSigName.trim(),
         title: newSigTitle.trim() || undefined,
-        signature: newSigImage,
+        signature: sigData,
         isDefault: authoritySigs.length === 0
       });
       setAuthoritySigs(updated);
@@ -602,7 +616,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onStaffUpdate({
           ...staffConfig,
           authoritySignatures: updated,
-          officialSignature: newSigImage,
+          officialSignature: sigData,
           officialName: newSigName.trim(),
           officialTitle: newSigTitle.trim() || staffConfig.officialTitle
         });
@@ -738,6 +752,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setEditSigTitle(sig.title || '');
     setEditSigImage(sig.signature);
     setEditSigIsDefault(!!sig.isDefault);
+    setEditSigMode('upload');
   };
 
   const handleFileChangeForEditSig = (file: File | null) => {
@@ -780,7 +795,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       alert('Please provide the officer name.');
       return;
     }
-    if (!editSigImage) {
+
+    let sigData = editSigImage;
+    if (editSigMode === 'draw' && editSigCanvasRef.current) {
+      if (!editSigCanvasRef.current.isEmpty()) {
+        sigData = editSigCanvasRef.current.toDataURL('image/png');
+      }
+    }
+
+    if (!sigData) {
       alert('Signature image cannot be empty.');
       return;
     }
@@ -791,7 +814,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         ...editingSig,
         name: editSigName.trim(),
         title: editSigTitle.trim() || undefined,
-        signature: editSigImage,
+        signature: sigData,
         isDefault: editSigIsDefault
       };
       const updated = await DBService.updateAuthoritySignature(updatedItem);
@@ -801,7 +824,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onStaffUpdate({
           ...staffConfig,
           authoritySignatures: updated,
-          officialSignature: editSigImage,
+          officialSignature: sigData,
           officialName: editSigName.trim(),
           officialTitle: editSigTitle.trim() || staffConfig.officialTitle
         });
@@ -3179,25 +3202,71 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
                       </div>
 
                       <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signature File *</label>
-                        <div className="flex flex-col sm:flex-row items-center gap-4">
-                          <div className="w-36 h-20 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden p-1">
-                            {newSigImage ? (
-                              <img src={newSigImage} alt="Preview" className="max-h-full max-w-full object-contain" />
-                            ) : (
-                              <Upload className="w-5 h-5 text-slate-300" />
-                            )}
-                          </div>
-                          <div className="flex-1">
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => handleFileChangeForNewSig(e.target.files?.[0] || null)}
-                              className="text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                            />
-                            <p className="text-[10px] text-slate-400 mt-1">PNG or JPEG format with transparent or white background.</p>
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signature Input *</label>
+                          <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+                            <button
+                              type="button"
+                              onClick={() => setNewSigMode('upload')}
+                              className={`px-3 py-1 rounded-md transition-all cursor-pointer ${
+                                newSigMode === 'upload' ? 'bg-white text-blue-600 shadow-xs font-bold' : 'text-slate-500'
+                              }`}
+                            >
+                              Upload File
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNewSigMode('draw')}
+                              className={`px-3 py-1 rounded-md transition-all cursor-pointer ${
+                                newSigMode === 'draw' ? 'bg-white text-blue-600 shadow-xs font-bold' : 'text-slate-500'
+                              }`}
+                            >
+                              Draw Live
+                            </button>
                           </div>
                         </div>
+
+                        {newSigMode === 'upload' ? (
+                          <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-50/60 p-3 rounded-xl border border-slate-200">
+                            <div className="w-36 h-20 bg-white rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden p-1 shrink-0">
+                              {newSigImage ? (
+                                <img src={newSigImage} alt="Preview" className="max-h-full max-w-full object-contain" />
+                              ) : (
+                                <Upload className="w-5 h-5 text-slate-300" />
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => handleFileChangeForNewSig(e.target.files?.[0] || null)}
+                                className="text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+                              />
+                              <p className="text-[10px] text-slate-400 mt-1">PNG or JPEG format with transparent or white background.</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="border-2 border-dashed border-slate-200 rounded-xl p-1 bg-slate-50">
+                              <SignatureCanvas
+                                ref={newSigCanvasRef}
+                                penColor="#0f172a"
+                                canvasProps={{
+                                  className: 'w-full h-28 bg-white rounded-lg border border-slate-100 cursor-crosshair'
+                                }}
+                              />
+                            </div>
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => newSigCanvasRef.current?.clear()}
+                                className="text-xs text-slate-500 hover:text-slate-800 font-semibold px-2 py-1 cursor-pointer"
+                              >
+                                Clear Canvas
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
@@ -3268,25 +3337,72 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
                         </div>
 
                         <div className="space-y-2">
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signature File (Replace or Keep)</label>
-                          <div className="flex flex-col sm:flex-row items-center gap-4">
-                            <div className="w-36 h-20 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden p-1">
-                              {editSigImage ? (
-                                <img src={editSigImage} alt="Preview" className="max-h-full max-w-full object-contain" />
-                              ) : (
-                                <Upload className="w-5 h-5 text-slate-300" />
-                              )}
-                            </div>
-                            <div className="flex-1">
-                              <input
-                                type="file"
-                                accept="image/*"
-                                onChange={(e) => handleFileChangeForEditSig(e.target.files?.[0] || null)}
-                                className="text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                              />
-                              <p className="text-[10px] text-slate-400 mt-1">Upload to replace existing signature image, or keep as-is.</p>
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Signature (Replace or Keep)</label>
+                            <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+                              <button
+                                type="button"
+                                onClick={() => setEditSigMode('upload')}
+                                className={`px-3 py-1 rounded-md transition-all cursor-pointer ${
+                                  editSigMode === 'upload' ? 'bg-white text-blue-600 shadow-xs font-bold' : 'text-slate-500'
+                                }`}
+                              >
+                                Upload File
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditSigMode('draw')}
+                                className={`px-3 py-1 rounded-md transition-all cursor-pointer ${
+                                  editSigMode === 'draw' ? 'bg-white text-blue-600 shadow-xs font-bold' : 'text-slate-500'
+                                }`}
+                              >
+                                Draw Live
+                              </button>
                             </div>
                           </div>
+
+                          {editSigMode === 'upload' ? (
+                            <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-50/60 p-3 rounded-xl border border-slate-200">
+                              <div className="w-36 h-20 bg-white rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden p-1 shrink-0">
+                                {editSigImage ? (
+                                  <img src={editSigImage} alt="Preview" className="max-h-full max-w-full object-contain" />
+                                ) : (
+                                  <Upload className="w-5 h-5 text-slate-300" />
+                                )}
+                              </div>
+                              <div className="flex-1">
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => handleFileChangeForEditSig(e.target.files?.[0] || null)}
+                                  className="text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+                                />
+                                <p className="text-[10px] text-slate-400 mt-1">Upload to replace existing signature image, or keep as-is.</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="border-2 border-dashed border-slate-200 rounded-xl p-1 bg-slate-50">
+                                <SignatureCanvas
+                                  ref={editSigCanvasRef}
+                                  penColor="#0f172a"
+                                  canvasProps={{
+                                    className: 'w-full h-28 bg-white rounded-lg border border-slate-100 cursor-crosshair'
+                                  }}
+                                />
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-slate-400">Leave blank to keep existing signature image</span>
+                                <button
+                                  type="button"
+                                  onClick={() => editSigCanvasRef.current?.clear()}
+                                  className="text-xs text-slate-500 hover:text-slate-800 font-semibold px-2 py-1 cursor-pointer"
+                                >
+                                  Clear Canvas
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-2 pt-2">

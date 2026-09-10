@@ -286,17 +286,27 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
     return `${base}/scope-disclosure?${params.toString()}`;
   };
 
-  // Helper to mask Scope Disclosure signing link for officer security and privacy (app address hidden)
+  // Helper to mask Scope Disclosure signing link (clean route with expiration param, real origin)
   const getMaskedScopeDisclosureUrl = (url: string) => {
     if (!url) return '';
     try {
       const parsed = new URL(url);
-      const maskedPath = parsed.pathname.includes('/sign-scope-disclosure')
-        ? '/sign-scope-disclosure/••••••••'
-        : '/scope-disclosure/••••••••';
-      return `https://••••••••${maskedPath}?token=••••••••••••••••`;
+      const exp = parsed.searchParams.get('exp');
+      const timer = parsed.searchParams.get('timer');
+      const pathname = parsed.pathname.includes('/sign-scope-disclosure')
+        ? '/sign-scope-disclosure'
+        : '/scope-disclosure';
+
+      if (exp) {
+        return `${parsed.origin}${pathname}?exp=${exp}`;
+      }
+      if (timer) {
+        return `${parsed.origin}${pathname}?timer=${timer}`;
+      }
+      return `${parsed.origin}${pathname}`;
     } catch {
-      return 'https://••••••••/sign-scope-disclosure/••••••••?token=••••••••••••••••';
+      const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://ais-dev-zlwayvxgrumdy6a2ldbvpr-24052486787.europe-west2.run.app';
+      return `${origin}/scope-disclosure`;
     }
   };
 
