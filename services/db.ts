@@ -1986,23 +1986,23 @@ export const DBService = {
     if (!client) return;
 
     try {
-      const dbConfig = toDb(fullConfig);
       const payload: any = {
         id: 1,
-        ...dbConfig,
-        enabledmodules: fullConfig.enabledModules ? JSON.stringify(fullConfig.enabledModules) : null
+        officialsignature: fullConfig.officialSignature || ''
       };
+      if (fullConfig.officialName) payload.officialname = fullConfig.officialName;
+      if (fullConfig.officialTitle) payload.officialtitle = fullConfig.officialTitle;
+      if (fullConfig.enabledModules) payload.enabledmodules = JSON.stringify(fullConfig.enabledModules);
 
       const { error } = await client
         .from('staff_config')
         .upsert(payload);
       
       if (error) {
-        console.warn("[DBService] saveStaffConfig Supabase upsert with enabledmodules failed, retrying without it:", error.message);
-        const { enabledmodules, enabledModules, authoritySignatures, authority_signatures, ...fallbackConfig } = payload;
+        console.warn("[DBService] saveStaffConfig detailed upsert notice, falling back to basic columns:", error.message);
         await client
           .from('staff_config')
-          .upsert({ id: 1, ...fallbackConfig });
+          .upsert({ id: 1, officialsignature: fullConfig.officialSignature || '' });
       }
     } catch (error) {
       console.error("[DBService] saveStaffConfig error:", error);
@@ -2012,24 +2012,45 @@ export const DBService = {
   async getAuthoritySignatures(forceFresh: boolean = false): Promise<AuthoritySignature[]> {
     let signatures: AuthoritySignature[] = [];
     
-    // 1. PRIMARY SOURCE OF TRUTH: Direct Supabase query (guarantees cross-device sync)
+    // 1. PRIMARY SOURCE OF TRUTH: Direct query to authority_signatures table in Supabase
     try {
       const client = await getSupabase();
       if (client) {
         const { data, error } = await client
+          .from('authority_signatures')
+          .select('*')
+          .order('display_order', { ascending: true });
+        
+        if (!error && Array.isArray(data) && data.length > 0) {
+          signatures = data.map((row: any) => ({
+            id: String(row.id),
+            name: String(row.name || 'Authorized Officer'),
+            title: row.title ? String(row.title) : undefined,
+            signature: String(row.signature || ''),
+            isDefault: Boolean(row.is_default ?? row.isdefault),
+            createdAt: row.created_at || row.createdat || undefined
+          })).filter(s => !!s.signature);
+
+          if (signatures.length > 0) {
+            safeSetLocalStorage('kdb_authority_signatures', JSON.stringify(signatures));
+            return signatures;
+          }
+        }
+
+        // 2. FALLBACK A: Check kdb_validations system row
+        const { data: valData, error: valErr } = await client
           .from('kdb_validations')
           .select('raw_data')
           .eq('id', 'system_authority_signatures')
           .maybeSingle();
         
-        if (!error && data?.raw_data?.signatures && Array.isArray(data.raw_data.signatures) && data.raw_data.signatures.length > 0) {
-          signatures = data.raw_data.signatures;
-          // Synchronize local cache with latest Supabase authority signatures
+        if (!valErr && valData?.raw_data?.signatures && Array.isArray(valData.raw_data.signatures) && valData.raw_data.signatures.length > 0) {
+          signatures = valData.raw_data.signatures;
           safeSetLocalStorage('kdb_authority_signatures', JSON.stringify(signatures));
           return signatures;
         }
 
-        // If no multi-officer array exists yet in kdb_validations, check staff_config table in Supabase
+        // 3. FALLBACK B: Check staff_config table in Supabase
         const { data: staffRow } = await client
           .from('staff_config')
           .select('*')
@@ -2037,6 +2058,27 @@ export const DBService = {
           .maybeSingle();
 
         if (staffRow && staffRow.officialsignature) {
+          let rawAuthSigs = staffRow.authority_signatures || staffRow.authoritysignatures;
+          if (typeof rawAuthSigs === 'string') {
+            try { rawAuthSigs = JSON.parse(rawAuthSigs); } catch (_) { rawAuthSigs = null; }
+          }
+          if (Array.isArray(rawAuthSigs) && rawAuthSigs.length > 0) {
+            signatures = rawAuthSigs;
+            safeSetLocalStorage('kdb_authority_signatures', JSON.stringify(signatures));
+            return signatures;
+          }
+
+          // If local cache already has multi-officer signatures, do not discard them for a single staffRow
+          const localStored = localStorage.getItem('kdb_authority_signatures');
+          if (localStored) {
+            try {
+              const parsed = JSON.parse(localStored);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed;
+              }
+            } catch (_) {}
+          }
+
           signatures = [{
             id: 'sig-supabase-official',
             name: (staffRow as any).officialname || 'Compliance Officer',
@@ -2129,24 +2171,87 @@ export const DBService = {
     try {
       const client = await getSupabase();
       if (client) {
-        // A. Upsert full authority signature list to kdb_validations system row
-        await client.from('kdb_validations').upsert({
-          id: 'system_authority_signatures',
-          dbo_name: 'SYSTEM_AUTHORITY_SIGNATURES',
-          premise_name: 'SYSTEM',
-          permit_no: 'SYS-AUTH-SIG',
-          validation_period: 'CONFIG',
-          date: new Date().toISOString(),
-          raw_data: { signatures, updatedAt: new Date().toISOString() }
-        });
+        // A. Primary table: authority_signatures
+        try {
+          if (signatures.length > 0) {
+            const rows = signatures.map((sig, idx) => ({
+              id: String(sig.id),
+              name: String(sig.name || 'Authorized Officer'),
+              title: sig.title ? String(sig.title) : null,
+              signature: String(sig.signature || ''),
+              is_default: Boolean(sig.isDefault),
+              display_order: idx,
+              updated_at: new Date().toISOString()
+            }));
 
-        // B. Also keep staff_config table officialsignature updated with default signature
+            // Upsert all current signatures into authority_signatures table
+            const { error: upsertErr } = await client
+              .from('authority_signatures')
+              .upsert(rows);
+
+            if (!upsertErr) {
+              console.log(`[DBService] Successfully upserted ${rows.length} signatures into Supabase authority_signatures table.`);
+              // Remove any deleted signatures from authority_signatures table
+              const activeIds = signatures.map(s => String(s.id));
+              const { data: existingRows } = await client
+                .from('authority_signatures')
+                .select('id');
+
+              if (Array.isArray(existingRows)) {
+                const toDelete = existingRows
+                  .map(r => String(r.id))
+                  .filter(id => !activeIds.includes(id));
+                if (toDelete.length > 0) {
+                  await client.from('authority_signatures').delete().in('id', toDelete);
+                }
+              }
+            } else {
+              console.warn("[DBService] authority_signatures table upsert notice:", upsertErr.message);
+            }
+          } else {
+            // If empty signatures array, clean table
+            await client.from('authority_signatures').delete().neq('id', '');
+          }
+        } catch (tableErr: any) {
+          console.warn("[DBService] authority_signatures table operation skipped/unsupported:", tableErr?.message);
+        }
+
+        // B. Upsert full authority signature list to kdb_validations system row
+        try {
+          await client.from('kdb_validations').upsert({
+            id: 'system_authority_signatures',
+            dbo_name: 'SYSTEM_AUTHORITY_SIGNATURES',
+            premise_name: 'SYSTEM',
+            permit_no: 'SYS-AUTH-SIG',
+            validation_period: 'CONFIG',
+            date: new Date().toISOString(),
+            raw_data: { signatures, updatedAt: new Date().toISOString() }
+          });
+        } catch (valErr: any) {
+          console.warn("[DBService] kdb_validations system row upsert notice:", valErr?.message);
+        }
+
+        // C. Keep staff_config table updated with default signature and authority_signatures json
         if (signatures.length > 0) {
           const defaultSig = signatures.find(s => s.isDefault) || signatures[0];
-          await client.from('staff_config').upsert({
-            id: 1,
-            officialsignature: defaultSig.signature
-          });
+          try {
+            await client.from('staff_config').upsert({
+              id: 1,
+              officialsignature: defaultSig.signature,
+              officialname: defaultSig.name,
+              officialtitle: defaultSig.title || '',
+              authority_signatures: signatures
+            });
+          } catch (_) {
+            try {
+              await client.from('staff_config').upsert({
+                id: 1,
+                officialsignature: defaultSig.signature
+              });
+            } catch (err: any) {
+              console.warn("[DBService] staff_config fallback save notice:", err?.message);
+            }
+          }
         }
       }
     } catch (supabaseErr) {

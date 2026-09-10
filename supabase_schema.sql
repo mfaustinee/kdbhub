@@ -311,6 +311,27 @@ CREATE INDEX IF NOT EXISTS idx_validation_drafts_permit_no ON validation_drafts(
 CREATE INDEX IF NOT EXISTS idx_validation_drafts_status ON validation_drafts(status);
 CREATE INDEX IF NOT EXISTS idx_validation_drafts_updated_at ON validation_drafts(updated_at DESC);
 
+-- 12. AUTHORITY SIGNATURES TABLE (Multi-Officer Compliance Signatures Registry)
+CREATE TABLE IF NOT EXISTS authority_signatures (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    title TEXT,
+    signature TEXT NOT NULL, -- Base64 data URL
+    is_default BOOLEAN DEFAULT FALSE,
+    display_order INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_authority_signatures_default ON authority_signatures(is_default);
+CREATE INDEX IF NOT EXISTS idx_authority_signatures_order ON authority_signatures(display_order);
+
+-- Staff Config Migration (Ensure officialname, officialtitle, authority_signatures, enabledmodules exist)
+ALTER TABLE staff_config ADD COLUMN IF NOT EXISTS officialname TEXT;
+ALTER TABLE staff_config ADD COLUMN IF NOT EXISTS officialtitle TEXT;
+ALTER TABLE staff_config ADD COLUMN IF NOT EXISTS authority_signatures JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE staff_config ADD COLUMN IF NOT EXISTS enabledmodules JSONB DEFAULT '{}'::jsonb;
+
 -- ============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- Enable full read/write access for application usage via Supabase Anon API
@@ -327,7 +348,8 @@ BEGIN
           AND table_name IN (
             'licensed_clients', 'client_returns', 'data_validations', 
             'kdb_validations', 'agreements', 'closures', 'debtors', 
-            'staff_config', 'complaints', 'inquiries', 'validation_drafts'
+            'staff_config', 'complaints', 'inquiries', 'validation_drafts',
+            'authority_signatures'
           )
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
@@ -342,7 +364,7 @@ BEGIN
     END LOOP;
 END $$;
 
--- 12. ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
+-- 13. ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
 -- Enables public API access (via Supabase anon/authenticated roles) for all application tables
 
 DO $$ 
@@ -351,7 +373,8 @@ DECLARE
     tables TEXT[] := ARRAY[
         'licensed_clients', 'client_returns', 'data_validations', 
         'kdb_validations', 'agreements', 'closures', 'debtors', 
-        'staff_config', 'complaints', 'inquiries', 'validation_drafts'
+        'staff_config', 'complaints', 'inquiries', 'validation_drafts',
+        'authority_signatures'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP

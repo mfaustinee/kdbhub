@@ -987,16 +987,19 @@ export function DataValidationModule() {
     signedAt: string;
   } | null>(null);
 
-  // Helper to mask remote DBO signing link for officer security and privacy (app address hidden)
+  // Helper to mask remote DBO signing link (clean route with expiration param, real origin matching disclosure format)
   const getMaskedSigningUrl = (url: string) => {
     if (!url) return '';
     try {
       const parsed = new URL(url);
-      const maskedPath = parsed.pathname.replace(/\/sign-validation\/[^/?#]+/, '/sign-validation/••••••••');
-      // Ensure the app address is NOT exposed in the masked URL
-      return `https://••••••••${maskedPath}?token=••••••••••••••••`;
+      const exp = parsed.searchParams.get('exp');
+      if (exp) {
+        return `${parsed.origin}/sign-validation?exp=${exp}`;
+      }
+      return `${parsed.origin}/sign-validation`;
     } catch {
-      return url.replace(/https?:\/\/[^/]+/, 'https://••••••••').replace(/token=([^&]{4})[^&]+([^&]{3})/, 'token=$1••••••••$2');
+      const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://ais-dev-zlwayvxgrumdy6a2ldbvpr-24052486787.europe-west2.run.app';
+      return `${origin}/sign-validation`;
     }
   };
 
