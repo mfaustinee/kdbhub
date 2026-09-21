@@ -45,8 +45,7 @@ export const isSupabaseDisabled = (): boolean => {
   }
   const envDisabled = import.meta.env.VITE_DISABLE_SUPABASE;
   if (envDisabled === 'true' || envDisabled === true) return true;
-  // In AI Studio container/preview environment, default to disabled to stop egress
-  return true;
+  return false;
 };
 
 export const initSupabase = async (): Promise<SupabaseClient | null> => {

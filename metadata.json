@@ -1,6 +1,6 @@
 {
   "name": "KDB Hub",
-  "description": "",
+  "description": "Integrated regulatory compliance, licensed client management, returns reporting, and data validation system.",
   "requestFramePermissions": [
     "camera"
   ],

@@ -24,20 +24,47 @@ const fetchConfig = async () => {
           });
           return config;
         } catch (jsonErr) {
-          console.error("[DBService] Failed to parse config JSON:", jsonErr);
+          console.warn("[DBService] Notice parsing config JSON:", jsonErr);
           throw jsonErr;
         }
       } else {
-        console.error(`[DBService] Failed to fetch config (${response.status})`);
+        console.warn(`[DBService] Notice fetching config (${response.status})`);
       }
     } catch (e) {
-      console.error("[DBService] Network error fetching config:", e);
+      console.warn("[DBService] Network notice fetching config:", e);
     } finally {
       isFetchingConfig = false;
     }
     return null;
   })();
   return configPromise;
+};
+
+export const safeFetchJson = async <T = any>(
+  url: string,
+  options?: RequestInit,
+  timeoutMs: number = 4000
+): Promise<T | null> => {
+  let timeoutId: any;
+  try {
+    const controller = new AbortController();
+    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (!response.ok) {
+      console.warn(`[DBService] Local API response notice (${response.status}) for ${url}`);
+      return null;
+    }
+    const data = await response.json();
+    return data as T;
+  } catch (err: any) {
+    if (timeoutId) clearTimeout(timeoutId);
+    console.warn(`[DBService] Local API notice for ${url} (using cache):`, err?.message || err);
+    return null;
+  }
 };
 
 const getSupabase = async () => {
@@ -481,17 +508,12 @@ export const DBService = {
       const client = await getSupabase();
       if (!client) {
         console.warn("[DBService] Supabase not initialized, trying local API");
-        try {
-          const response = await fetch('/api/agreements');
-          if (response.ok) {
-            const data = await response.json();
-            agreementsMemoryCache = data;
-            agreementsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_agreements_cache', JSON.stringify(data));
-            return data;
-          }
-        } catch (e) {
-          console.error("[DBService] Local API error:", e);
+        const data = await safeFetchJson<AgreementData[]>('/api/agreements');
+        if (data && Array.isArray(data)) {
+          agreementsMemoryCache = data;
+          agreementsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_agreements_cache', JSON.stringify(data));
+          return data;
         }
         
         const local = getArrayFromLocalStorage<AgreementData>('kdb_agreements_cache');
@@ -528,17 +550,12 @@ export const DBService = {
         return agreements;
       } catch (error) {
         console.warn("[DBService] Supabase getAgreements exception, trying local API fallback. Error:", error);
-        try {
-          const response = await fetch('/api/agreements');
-          if (response.ok) {
-            const data = await response.json();
-            agreementsMemoryCache = data;
-            agreementsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_agreements_cache', JSON.stringify(data));
-            return data;
-          }
-        } catch (localErr) {
-          console.error("[DBService] Local API fallback error during getAgreements:", localErr);
+        const data = await safeFetchJson<AgreementData[]>('/api/agreements');
+        if (data && Array.isArray(data)) {
+          agreementsMemoryCache = data;
+          agreementsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_agreements_cache', JSON.stringify(data));
+          return data;
         }
         const local = localStorage.getItem('kdb_agreements_cache');
         const parsed = local ? JSON.parse(local) : [];
@@ -834,18 +851,13 @@ export const DBService = {
       const client = await getSupabase();
       if (!client) {
         console.warn("[DBService] Supabase not initialized, trying local API for closures");
-        try {
-          const response = await fetch('/api/closures');
-          if (response.ok) {
-            const data = await response.json();
-            const decoded = decodeClosures(data);
-            closuresMemoryCache = decoded;
-            closuresCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_closures_cache', JSON.stringify(decoded));
-            return decoded;
-          }
-        } catch (e) {
-          console.error("[DBService] Local API error:", e);
+        const data = await safeFetchJson<any[]>('/api/closures');
+        if (data && Array.isArray(data)) {
+          const decoded = decodeClosures(data);
+          closuresMemoryCache = decoded;
+          closuresCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_closures_cache', JSON.stringify(decoded));
+          return decoded;
         }
         
         const local = getArrayFromLocalStorage<ClosureNotificationData>('kdb_closures_cache');
@@ -882,18 +894,13 @@ export const DBService = {
         return decoded;
       } catch (error) {
         console.warn("[DBService] Supabase getClosures exception, trying local API. Error:", error);
-        try {
-          const response = await fetch('/api/closures');
-          if (response.ok) {
-            const data = await response.json();
-            const decoded = decodeClosures(data);
-            closuresMemoryCache = decoded;
-            closuresCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_closures_cache', JSON.stringify(decoded));
-            return decoded;
-          }
-        } catch (localErr) {
-          console.error("[DBService] Local API fallback error during getClosures:", localErr);
+        const data = await safeFetchJson<any[]>('/api/closures');
+        if (data && Array.isArray(data)) {
+          const decoded = decodeClosures(data);
+          closuresMemoryCache = decoded;
+          closuresCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_closures_cache', JSON.stringify(decoded));
+          return decoded;
         }
         const local = localStorage.getItem('kdb_closures_cache');
         const decoded = local ? decodeClosures(JSON.parse(local)) : [];
@@ -1168,17 +1175,12 @@ export const DBService = {
       const client = await getSupabase();
       if (!client) {
         console.warn("[DBService] Supabase not initialized, trying local API for complaints");
-        try {
-          const response = await fetch('/api/complaints');
-          if (response.ok) {
-            const data = await response.json();
-            complaintsMemoryCache = data;
-            complaintsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(data));
-            return data;
-          }
-        } catch (e) {
-          console.error("[DBService] Local API error:", e);
+        const data = await safeFetchJson<ComplaintData[]>('/api/complaints');
+        if (data && Array.isArray(data)) {
+          complaintsMemoryCache = data;
+          complaintsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(data));
+          return data;
         }
         const local = getArrayFromLocalStorage<ComplaintData>('kdb_complaints_cache');
         complaintsMemoryCache = local;
@@ -1218,17 +1220,12 @@ export const DBService = {
         return complaints;
       } catch (error) {
         console.warn("[DBService] Supabase getComplaints exception, trying local API. Error:", error);
-        try {
-          const response = await fetch('/api/complaints');
-          if (response.ok) {
-            const data = await response.json();
-            complaintsMemoryCache = data;
-            complaintsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(data));
-            return data;
-          }
-        } catch (localErr) {
-          console.error("[DBService] Local API fallback error during getComplaints:", localErr);
+        const data = await safeFetchJson<ComplaintData[]>('/api/complaints');
+        if (data && Array.isArray(data)) {
+          complaintsMemoryCache = data;
+          complaintsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(data));
+          return data;
         }
         const local = localStorage.getItem('kdb_complaints_cache');
         const parsed = local ? JSON.parse(local) : [];
@@ -1457,17 +1454,12 @@ export const DBService = {
       const client = await getSupabase();
       if (!client) {
         console.warn("[DBService] Supabase not initialized, trying local API for inquiries");
-        try {
-          const response = await fetch('/api/inquiries');
-          if (response.ok) {
-            const data = await response.json();
-            inquiriesMemoryCache = data;
-            inquiriesCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(data));
-            return data;
-          }
-        } catch (e) {
-          console.error("[DBService] Local API error:", e);
+        const data = await safeFetchJson<InquiryData[]>('/api/inquiries');
+        if (data && Array.isArray(data)) {
+          inquiriesMemoryCache = data;
+          inquiriesCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(data));
+          return data;
         }
         const local = getArrayFromLocalStorage<InquiryData>('kdb_inquiries_cache');
         inquiriesMemoryCache = local;
@@ -1506,17 +1498,12 @@ export const DBService = {
         return inquiries;
       } catch (error) {
         console.warn("[DBService] Supabase getInquiries exception, trying local API. Error:", error);
-        try {
-          const response = await fetch('/api/inquiries');
-          if (response.ok) {
-            const data = await response.json();
-            inquiriesMemoryCache = data;
-            inquiriesCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(data));
-            return data;
-          }
-        } catch (localErr) {
-          console.error("[DBService] Local API fallback error during getInquiries:", localErr);
+        const data = await safeFetchJson<InquiryData[]>('/api/inquiries');
+        if (data && Array.isArray(data)) {
+          inquiriesMemoryCache = data;
+          inquiriesCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(data));
+          return data;
         }
         const local = localStorage.getItem('kdb_inquiries_cache');
         const parsed = local ? JSON.parse(local) : [];
@@ -1744,17 +1731,12 @@ export const DBService = {
 
     const fetchDebtorsPromise = (async (): Promise<DebtorRecord[]> => {
       const fetchLocal = async () => {
-        try {
-          const response = await fetch('/api/debtors');
-          if (response.ok) {
-            const data = await response.json();
-            debtorsMemoryCache = data;
-            debtorsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_debtors_cache', JSON.stringify(data));
-            return data;
-          }
-        } catch (e) {
-          console.error("[DBService] Local API error:", e);
+        const data = await safeFetchJson<DebtorRecord[]>('/api/debtors');
+        if (data && Array.isArray(data)) {
+          debtorsMemoryCache = data;
+          debtorsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_debtors_cache', JSON.stringify(data));
+          return data;
         }
         const local = getArrayFromLocalStorage<DebtorRecord>('kdb_debtors_cache');
         debtorsMemoryCache = local;
@@ -1790,7 +1772,7 @@ export const DBService = {
         debtorsCacheTimestamp = Date.now();
         return [];
       } catch (error) {
-        console.error("[DBService] getDebtors error:", error);
+        console.warn("[DBService] getDebtors error:", error);
         return await fetchLocal();
       } finally {
         debtorsInFlightPromise = null;
@@ -1816,7 +1798,7 @@ export const DBService = {
           body: JSON.stringify(debtors)
         });
       } catch (e) {
-        console.error("[DBService] Local API error:", e);
+        console.warn("[DBService] Local API notice for saveDebtors:", e);
       }
       return;
     }
@@ -2722,20 +2704,13 @@ export const DBService = {
 
     const fetchReturnsPromise = (async (): Promise<ClientReturn[]> => {
       const fetchLocal = async () => {
-        try {
-          const response = await fetch('/api/returns');
-          if (response.ok) {
-            const data = await response.json();
-            if (Array.isArray(data)) {
-              const mapped = data.map(r => returnFromDb(r));
-              returnsMemoryCache = mapped;
-              returnsCacheTimestamp = Date.now();
-              safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
-              return mapped;
-            }
-          }
-        } catch (e) {
-          console.error("[DBService] Local API getReturns error:", e);
+        const data = await safeFetchJson<any[]>('/api/returns');
+        if (data && Array.isArray(data)) {
+          const mapped = data.map(r => returnFromDb(r));
+          returnsMemoryCache = mapped;
+          returnsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
+          return mapped;
         }
         const local = getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
         const mapped = local.map(r => returnFromDb(r));
@@ -2980,19 +2955,12 @@ export const DBService = {
     };
 
     const fetchLocal = async (): Promise<DataValidation[]> => {
-      try {
-        const response = await fetch('/api/validations');
-        if (response.ok) {
-          const data = await response.json();
-          if (Array.isArray(data)) {
-            validationsMemoryCache = data;
-            validationsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_validations_cache', JSON.stringify(data));
-            return data;
-          }
-        }
-      } catch (e) {
-        console.error("[DBService] Local validations API error:", e);
+      const data = await safeFetchJson<any[]>('/api/validations');
+      if (data && Array.isArray(data)) {
+        validationsMemoryCache = data;
+        validationsCacheTimestamp = Date.now();
+        safeSetLocalStorage('kdb_validations_cache', JSON.stringify(data));
+        return data;
       }
       const local = getArrayFromLocalStorage<DataValidation>('kdb_validations_cache');
       const safe = Array.isArray(local) ? local : [];
