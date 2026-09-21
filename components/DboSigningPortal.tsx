@@ -101,19 +101,21 @@ export const DboSigningPortal: React.FC = () => {
     let isMounted = true;
 
     async function fetchDraft() {
-      if (!draftId) {
-        setErrorMessage("No validation draft ID was provided in the signing link.");
-        setIsLoading(false);
-        return;
-      }
-
       setIsLoading(true);
       try {
-        const data = await DBService.getValidationDraftById(draftId);
+        let data: ValidationDraft | null = null;
+        if (draftId) {
+          data = await DBService.getValidationDraftById(draftId);
+        } else {
+          // If masked link or direct route without draftId, retrieve latest pending DBO signature draft
+          const drafts = await DBService.getValidationDrafts(true);
+          data = drafts.find(d => d.status === 'pending_dbo_signature') || drafts[0] || null;
+        }
+
         if (!isMounted) return;
 
         if (!data) {
-          setErrorMessage("Validation draft document could not be found. It may have already been finalized or deleted.");
+          setErrorMessage("Validation draft document could not be found or has already been finalized.");
           setIsLoading(false);
           return;
         }
@@ -786,7 +788,7 @@ export const DboSigningPortal: React.FC = () => {
                     penColor="#0f172a"
                     onEnd={handleSaveDrawnSignature}
                     canvasProps={{
-                      className: "w-full h-36 rounded-xl cursor-crosshair touch-none",
+                      className: "w-full h-64 rounded-xl cursor-crosshair touch-none",
                       style: { background: '#fafafa' }
                     }}
                   />

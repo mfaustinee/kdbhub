@@ -821,16 +821,7 @@ const initialData: FormData = {
   distOutlets: [{ location: '', volPerDay: '', permitStatus: 'None', levyInfo: 'Does not Qualify' }],
   distNatureOfProduce: [],
   distPrice: '',
-  distributors: [{
-    name: '',
-    contacts: '',
-    volPerDay: '',
-    permitNo: '',
-    areaOfSale: '',
-    outlets: [{ location: '', volPerDay: '', permitStatus: 'None', levyInfo: 'Does not Qualify' }],
-    natureOfProduce: [],
-    prices: {}
-  }],
+  distributors: [],
   fieldChecklist: {},
   transactionReconciliation: [],
   exceptionRegister: [],
@@ -992,14 +983,11 @@ export function DataValidationModule() {
     if (!url) return '';
     try {
       const parsed = new URL(url);
-      const exp = parsed.searchParams.get('exp');
-      if (exp) {
-        return `${parsed.origin}/sign-validation?exp=${exp}`;
-      }
-      return `${parsed.origin}/sign-validation`;
+      const exp = parsed.searchParams.get('exp') || String(Date.now() + 10 * 60 * 1000);
+      return `${parsed.origin}/sign-validation?exp=${exp}`;
     } catch {
       const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://ais-dev-zlwayvxgrumdy6a2ldbvpr-24052486787.europe-west2.run.app';
-      return `${origin}/sign-validation`;
+      return `${origin}/sign-validation?exp=${Date.now() + 10 * 60 * 1000}`;
     }
   };
 
@@ -1196,8 +1184,7 @@ export function DataValidationModule() {
         return {
           ...sale,
           qtyDeclared: '',
-          underDeclared: '',
-          projectedQty: ''
+          underDeclared: ''
         };
       }
 
@@ -1781,6 +1768,7 @@ export function DataValidationModule() {
       declarations,
       selectedClient,
       validationPremiseMode,
+      dboHasBranches,
       globalUnit,
       isAmendment,
       isValidationPeriodEdited,
@@ -1983,14 +1971,15 @@ export function DataValidationModule() {
 
   const handleCopySigningLink = async () => {
     if (!currentSigningLink) return;
+    const textToCopy = isSigningUrlMasked ? getMaskedSigningUrl(currentSigningLink) : currentSigningLink;
     try {
-      await navigator.clipboard.writeText(currentSigningLink);
+      await navigator.clipboard.writeText(textToCopy);
       setLinkCopied(true);
       setTimeout(() => setLinkCopied(false), 3000);
       setStatus({ type: 'success', message: 'Signing link copied to clipboard!' });
     } catch (e) {
       const textArea = document.createElement('textarea');
-      textArea.value = currentSigningLink;
+      textArea.value = textToCopy;
       document.body.appendChild(textArea);
       textArea.select();
       document.execCommand('copy');
@@ -2369,6 +2358,7 @@ export function DataValidationModule() {
         if (parsed.declarations) setDeclarations(parsed.declarations);
         if (parsed.selectedClient) setSelectedClient(parsed.selectedClient);
         if (parsed.validationPremiseMode) setValidationPremiseMode(parsed.validationPremiseMode);
+        if (parsed.dboHasBranches !== undefined) setDboHasBranches(parsed.dboHasBranches);
         if (parsed.globalUnit) setGlobalUnit(parsed.globalUnit);
         if (parsed.isAmendment !== undefined) setIsAmendment(parsed.isAmendment);
         if (parsed.isValidationPeriodEdited !== undefined) setIsValidationPeriodEdited(parsed.isValidationPeriodEdited);
@@ -2586,7 +2576,7 @@ export function DataValidationModule() {
           location: branch.location,
           county: toSentenceCase(branch.county || 'Kericho'),
           expiryDate: formatToYYYYMMDD(branch.expiryDate || ''),
-          sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '', projectedQty: '' })),
+          sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '' })),
           nonCompliance: []
         }));
       }
@@ -2597,7 +2587,7 @@ export function DataValidationModule() {
       // It's a new branch, clear fields or keep them so they can edit
       setFormData(prev => ({
         ...prev,
-        sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '', projectedQty: '' })),
+        sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '' })),
         nonCompliance: []
       }));
       setShowReconciliation(false);
@@ -3120,15 +3110,14 @@ export function DataValidationModule() {
     }
   }, [formData.distributors, formData.sales, formData.category]);
 
-  // Fetch previous validations by Distributor Name (Debounced)
+  // Fetch previous validations/clients by Distributor Name (Debounced with local fallback)
   useEffect(() => {
-    if (!supabase) return;
-
     const timers: NodeJS.Timeout[] = [];
 
     formData.distributors.forEach((dist, idx) => {
       const name = dist.name || '';
-      if (name.trim().length < 3) {
+      const cleanSearch = name.trim().toLowerCase();
+      if (cleanSearch.length < 3) {
         setDistributorRecords(prev => {
           if (prev[idx] && prev[idx].length > 0) {
             return { ...prev, [idx]: [] };
@@ -3147,31 +3136,90 @@ export function DataValidationModule() {
 
       const timer = setTimeout(async () => {
         try {
-          const searchTerm = name.trim();
-          const { data, error } = await supabase
-            .from('kdb_validations')
-            .select('dbo_name, premise_name, permit_no, contacts, raw_data, date')
-            .or(`dbo_name.ilike.%${searchTerm}%,premise_name.ilike.%${searchTerm}%`)
-            .order('date', { ascending: false })
-            .limit(10);
+          const uniqueMap: Record<string, any> = {};
 
-          if (error) throw error;
-
-          if (data) {
-            const uniqueMap: Record<string, any> = {};
-            data.forEach(item => {
-              const key = `${item.premise_name || ''}-${item.permit_no || ''}`.toLowerCase().trim();
-              if (!uniqueMap[key]) {
-                uniqueMap[key] = item;
+          // 1. Search in local clients registry (instant 0ms offline/sandboxed lookup)
+          if (Array.isArray(clients)) {
+            clients.forEach(c => {
+              const cName = (c.clientName || '').toLowerCase();
+              const pName = (c.premiseName || '').toLowerCase();
+              const pNo = (c.permitNumber || '').toLowerCase();
+              if (cName.includes(cleanSearch) || pName.includes(cleanSearch) || pNo.includes(cleanSearch)) {
+                const key = `${c.premiseName || c.clientName || ''}-${c.permitNumber || ''}`.toLowerCase().trim();
+                if (!uniqueMap[key]) {
+                  uniqueMap[key] = {
+                    dbo_name: c.clientName,
+                    premise_name: c.premiseName,
+                    permit_no: c.permitNumber,
+                    contacts: c.tel || c.contactPerson || '',
+                    date: c.expiryDate || new Date().toISOString(),
+                    raw_data: {
+                      permitNo: c.permitNumber,
+                      contacts: c.tel || c.contactPerson || '',
+                      premiseName: c.premiseName
+                    }
+                  };
+                }
               }
             });
-            const results = Object.values(uniqueMap).slice(0, 5);
-            setDistributorRecords(prev => ({ ...prev, [idx]: results }));
-          } else {
-            setDistributorRecords(prev => ({ ...prev, [idx]: [] }));
           }
+
+          // 2. Search in cached validations
+          const cached = DBService.getCachedValidations();
+          if (Array.isArray(cached)) {
+            cached.forEach(v => {
+              const itemAny = v as any;
+              const dName = (v.clientName || itemAny.dbo_name || '').toLowerCase();
+              const pName = (v.premiseName || itemAny.premise_name || '').toLowerCase();
+              const pNo = (v.permitNo || itemAny.permit_no || itemAny.permitNumber || '').toLowerCase();
+              if (dName.includes(cleanSearch) || pName.includes(cleanSearch) || pNo.includes(cleanSearch)) {
+                const key = `${v.premiseName || itemAny.premise_name || dName}-${v.permitNo || itemAny.permit_no || ''}`.toLowerCase().trim();
+                if (!uniqueMap[key]) {
+                  uniqueMap[key] = {
+                    dbo_name: v.clientName || itemAny.dbo_name,
+                    premise_name: v.premiseName || itemAny.premise_name,
+                    permit_no: v.permitNo || itemAny.permit_no,
+                    contacts: v.contacts || itemAny.contacts || v.rawData?.contacts || '',
+                    date: itemAny.date || v.validatedAt || new Date().toISOString(),
+                    raw_data: itemAny.raw_data || v.rawData || {
+                      permitNo: v.permitNo || itemAny.permit_no,
+                      contacts: itemAny.contacts || '',
+                      premiseName: v.premiseName || itemAny.premise_name
+                    }
+                  };
+                }
+              }
+            });
+          }
+
+          // 3. Gracefully query Supabase if available without throwing errors
+          if (supabase) {
+            try {
+              const { data, error } = await supabase
+                .from('kdb_validations')
+                .select('dbo_name, premise_name, permit_no, contacts, raw_data, date')
+                .or(`dbo_name.ilike.%${cleanSearch}%,premise_name.ilike.%${cleanSearch}%`)
+                .order('date', { ascending: false })
+                .limit(10);
+
+              if (!error && Array.isArray(data)) {
+                data.forEach(item => {
+                  const key = `${item.premise_name || ''}-${item.permit_no || ''}`.toLowerCase().trim();
+                  if (!uniqueMap[key]) {
+                    uniqueMap[key] = item;
+                  }
+                });
+              }
+            } catch (spErr) {
+              console.warn('[DistributorLookup] Supabase query notice:', spErr);
+            }
+          }
+
+          const results = Object.values(uniqueMap).slice(0, 5);
+          setDistributorRecords(prev => ({ ...prev, [idx]: results }));
         } catch (err) {
-          console.error('Error fetching distributor lookup:', err);
+          console.warn('[DistributorLookup] Lookup search notice:', err);
+          setDistributorRecords(prev => ({ ...prev, [idx]: [] }));
         } finally {
           setIsCheckingDist(prev => ({ ...prev, [idx]: false }));
         }
@@ -3183,7 +3231,7 @@ export function DataValidationModule() {
     return () => {
       timers.forEach(clearTimeout);
     };
-  }, [formData.distributors.map(d => d.name).join(',')]);
+  }, [formData.distributors.map(d => d.name).join(','), clients]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -3253,7 +3301,7 @@ export function DataValidationModule() {
         });
       }
       if (formData.hasLocalSales) {
-        const isBranchValidation = isBranchFacility;
+        const isBranchValidation = dboHasBranches === true && validationPremiseMode !== 'main';
         formData.sales.forEach((sale, idx) => {
           if (!sale.month) missing.push(`sale-${idx}-month`);
           if (!sale.year) missing.push(`sale-${idx}-year`);
@@ -3265,7 +3313,7 @@ export function DataValidationModule() {
           }
           
           const isLastMonth = idx === formData.sales.length - 1;
-          if (!isBranchValidation && isLastMonth) {
+          if (isLastMonth) {
             if (!sale.projectedQty || sale.projectedQty.trim() === '') missing.push(`sale-${idx}-projectedQty`);
           }
           
@@ -3503,8 +3551,8 @@ export function DataValidationModule() {
         // For branches, only witnessed quantity, selling price, and avg volume are recorded
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['Month/Year', `Witnessed Quantity (${globalUnit})`, 'Selling Price', `Avg Vol/Day (${globalUnit}/Day)`]],
-          body: data.sales.map(s => [`${s.month} ${s.year}`, s.verifiedQty, s.sellingPrice, s.avgVolPerDay]),
+          head: [['Month/Year', `Witnessed Quantity (${globalUnit})`, 'Selling Price', `Projected (${globalUnit})`, `Avg Vol/Day (${globalUnit}/Day)`]],
+          body: data.sales.map(s => [`${s.month} ${s.year}`, s.verifiedQty, s.sellingPrice, s.projectedQty, s.avgVolPerDay]),
           styles: { fontSize: 8 }
         });
         currentY = (doc as any).lastAutoTable.finalY + 6;
@@ -3523,9 +3571,9 @@ export function DataValidationModule() {
 
     // Distribution Details Table (for Mini Dairy & Cottage Industry)
     if (data.category === 'Mini Dairy' || data.category === 'Cottage Industry') {
-      const distributors = Array.isArray((data as any).distributors) && (data as any).distributors.length > 0
+      const rawDistributors = Array.isArray((data as any).distributors) && (data as any).distributors.length > 0
         ? (data as any).distributors
-        : [{
+        : (data.distName ? [{
             name: data.distName,
             contacts: data.distContacts,
             volPerDay: data.distVolPerDay,
@@ -3534,13 +3582,15 @@ export function DataValidationModule() {
             outlets: data.distOutlets,
             natureOfProduce: data.distNatureOfProduce,
             prices: { [data.distNatureOfProduce?.[0] || 'Produce']: data.distPrice }
-          }];
+          }] : []);
+
+      const distributors = rawDistributors.filter((d: any) => d && (d.name || d.contacts || d.volPerDay || d.permitNo || d.areaOfSale));
 
       distributors.forEach((dist: any, dIdx: number) => {
         checkPageBreak(55);
         doc.setFontSize(11);
         doc.setFont("helvetica", "bold");
-        doc.text(`Distributor Details #${dIdx + 1}: ${dist.name || 'Unnamed'}`, 20, currentY);
+        doc.text(`Distributor Details #${dIdx + 1}${dist.name ? `: ${dist.name}` : ''}`, 20, currentY);
         doc.setFont("helvetica", "normal");
         
         const outletsText = Array.isArray(dist.outlets) && dist.outlets.length > 0
@@ -4005,7 +4055,7 @@ export function DataValidationModule() {
         isBranch: isBranchFacility,
         validationPremiseMode,
         sales: isBranchFacility 
-          ? formData.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '', projectedQty: '' }))
+          ? formData.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '' }))
           : formData.sales,
         nonCompliance: isBranchFacility ? [] : formData.nonCompliance
       };
@@ -7200,13 +7250,11 @@ export function DataValidationModule() {
                       </div>
                     ) : (
                       formData.sales.map((sale, idx) => {
-                        const isBranchValidation = dboHasBranches === true && (
-                          validationPremiseMode.startsWith('branch-') ||
-                          validationPremiseMode === 'new'
-                        );
+                        const isBranchValidation = dboHasBranches === true && validationPremiseMode !== 'main';
                         const rowsToDisplay = isBranchValidation ? [
                           { label: 'Witnessed Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
                           { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
+                          { label: 'Projected Quantity', name: 'projectedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
                           { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
                         ] : [
                           { label: 'Quantity Declared', name: 'qtyDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
@@ -7429,27 +7477,30 @@ export function DataValidationModule() {
                       </div>
 
                       <div className="space-y-8">
+                        {formData.distributors.length === 0 && (
+                          <div className="p-6 bg-slate-50/60 border border-dashed border-slate-200 rounded-2xl text-center space-y-1">
+                            <p className="text-xs text-slate-500 font-medium">No distributors added. Click below to add a distributor if applicable.</p>
+                          </div>
+                        )}
                         {formData.distributors.map((dist, dIdx) => {
                           return (
                             <div key={dIdx} className="p-4 sm:p-6 bg-slate-50/40 border border-slate-100 rounded-2xl sm:rounded-3xl relative space-y-5 w-full">
                               <div className="flex justify-between items-center border-b border-slate-100/60 pb-3">
                                 <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wide">
-                                  Distributor #{dIdx + 1}: {dist.name || 'Unnamed'}
+                                  Distributor #{dIdx + 1}{dist.name ? `: ${dist.name}` : ''}
                                 </h4>
-                                {formData.distributors.length > 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setFormData(prev => ({
-                                        ...prev,
-                                        distributors: prev.distributors.filter((_, i) => i !== dIdx)
-                                      }));
-                                    }}
-                                    className="text-red-500 hover:text-red-600 bg-red-50 hover:bg-red-100/50 px-3 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
-                                  >
-                                    Remove Distributor
-                                  </button>
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      distributors: prev.distributors.filter((_, i) => i !== dIdx)
+                                    }));
+                                  }}
+                                  className="text-red-500 hover:text-red-600 bg-red-50 hover:bg-red-100/50 px-3 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
+                                >
+                                  Remove Distributor
+                                </button>
                               </div>
 
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -8189,10 +8240,7 @@ export function DataValidationModule() {
                     onChange={(updatedFields) => {
                       setFormData(prev => ({
                         ...prev,
-                        ...updatedFields,
-                        confirmationName: (prev.confirmationName && prev.confirmationName !== prev.actionOwner)
-                          ? prev.confirmationName
-                          : (updatedFields.actionOwner !== undefined ? updatedFields.actionOwner : prev.confirmationName)
+                        ...updatedFields
                       }));
                     }}
                   />
@@ -8706,20 +8754,13 @@ export function DataValidationModule() {
                         )}
 
                         <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name (Representative)</label>
-                            {formData.actionOwner && (
-                              <span className="text-[10px] text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100">
-                                Pre-filled from Step 5
-                              </span>
-                            )}
-                          </div>
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name (Representative)</label>
                           <input
                             type="text"
                             name="confirmationName"
-                            value={formData.confirmationName || formData.actionOwner || ''}
+                            value={formData.confirmationName || ''}
                             onChange={handleChange}
-                            placeholder={formData.actionOwner || "Representative / DBO Name"}
+                            placeholder="Representative / DBO Name"
                             className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 outline-none"
                           />
                         </div>
@@ -8746,7 +8787,7 @@ export function DataValidationModule() {
                                     ref={dboSigPad}
                                     penColor="black"
                                     canvasProps={{
-                                      className: "w-full h-32 rounded-lg cursor-crosshair",
+                                      className: "w-full h-64 rounded-lg cursor-crosshair",
                                       style: { background: 'white' }
                                     }}
                                   />
@@ -9947,7 +9988,7 @@ export function DataValidationModule() {
                             ref={authSigCanvasRef}
                             penColor="#0f172a"
                             canvasProps={{
-                              className: 'w-full h-28 bg-white rounded-xl border border-slate-100 cursor-crosshair'
+                              className: 'w-full h-56 bg-white rounded-xl border border-slate-100 cursor-crosshair'
                             }}
                           />
                         </div>

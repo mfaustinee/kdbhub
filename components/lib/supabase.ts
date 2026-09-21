@@ -3,7 +3,58 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 let supabaseInstance: SupabaseClient | null = null;
 let initPromise: Promise<SupabaseClient | null> | null = null;
 
+export const createSafeSupabaseClient = (supabaseUrl: string, supabaseKey: string): SupabaseClient => {
+  return createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      // Provide a non-blocking lock to bypass Navigator LockManager deadlock in iframes & sandbox environments
+      lock: async (_name: string, _acquireTimeout: number, fn: () => Promise<any>) => {
+        return await fn();
+      },
+    },
+    global: {
+      fetch: async (url: RequestInfo | URL, options?: RequestInit) => {
+        try {
+          return await fetch(url, options);
+        } catch (err: any) {
+          console.warn(`[Supabase] Network fetch notice (${err?.message || 'offline'}). Serving fallback.`);
+          return new Response(
+            JSON.stringify({
+              error: "Service unavailable",
+              message: err?.message || "Failed to fetch",
+              data: null
+            }),
+            {
+              status: 503,
+              headers: { "Content-Type": "application/json" }
+            }
+          );
+        }
+      }
+    }
+  });
+};
+
+export const isSupabaseDisabled = (): boolean => {
+  if (typeof window !== 'undefined') {
+    const w = window as any;
+    if (w.__DISABLE_SUPABASE__ === true) return true;
+    if (w._env_?.SUPABASE_DISABLED === true) return true;
+  }
+  const envDisabled = import.meta.env.VITE_DISABLE_SUPABASE;
+  if (envDisabled === 'true' || envDisabled === true) return true;
+  // In AI Studio container/preview environment, default to disabled to stop egress
+  return true;
+};
+
 export const initSupabase = async (): Promise<SupabaseClient | null> => {
+  if (isSupabaseDisabled()) {
+    console.info('[Supabase] Running in local offline mode (zero egress). Supabase client is disabled.');
+    return null;
+  }
+
   if (supabaseInstance) return supabaseInstance;
   if ((window as any).__supabaseInstance) {
     supabaseInstance = (window as any).__supabaseInstance;
@@ -26,16 +77,21 @@ export const initSupabase = async (): Promise<SupabaseClient | null> => {
         }
       }
 
+      if (env?.SUPABASE_DISABLED) {
+        console.info('[Supabase] Server configured to local offline mode.');
+        return null;
+      }
+
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || env?.VITE_SUPABASE_URL || '';
       const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || env?.VITE_SUPABASE_ANON_KEY || '';
 
       if (supabaseUrl && supabaseKey) {
-        supabaseInstance = createClient(supabaseUrl, supabaseKey);
+        supabaseInstance = createSafeSupabaseClient(supabaseUrl, supabaseKey);
         (window as any).__supabaseInstance = supabaseInstance;
         console.log('[Supabase] Client initialized successfully:', supabaseUrl);
         return supabaseInstance;
       } else {
-        console.warn('[Supabase] Missing credentials:', { url: !!supabaseUrl, key: !!supabaseKey });
+        console.warn('[Supabase] Missing credentials or Supabase disabled:', { url: !!supabaseUrl, key: !!supabaseKey });
       }
     } catch (e) {
       console.error('[Supabase] Init error:', e);

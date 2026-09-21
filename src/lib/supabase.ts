@@ -1,14 +1,14 @@
-import { createClient } from '@supabase/supabase-js';
+import { createSafeSupabaseClient, isSupabaseDisabled } from '../../components/lib/supabase';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-export const supabase = (supabaseUrl && supabaseAnonKey) 
-  ? createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = (!isSupabaseDisabled() && supabaseUrl && supabaseAnonKey) 
+  ? createSafeSupabaseClient(supabaseUrl, supabaseAnonKey)
   : null;
 
 if (!supabase) {
-  console.warn('Supabase URL or Anon Key is missing. Supabase features will be disabled.');
+  console.info('[Supabase] Supabase client is disabled or unconfigured in this environment (zero egress mode).');
 }
 
 export default supabase;

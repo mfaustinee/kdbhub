@@ -18,6 +18,7 @@ import { ReportsModule } from './ReportsModule';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
 import { SecuritySettingsCard } from './SecuritySettingsCard';
+import { GeneralAccessQrCard } from './GeneralAccessQrCard';
 
 interface AdminDashboardProps {
   agreements: AgreementData[];
@@ -3562,6 +3563,9 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
                     </div>
                   )}
                 </div>
+
+                {/* General System Access QR Code (Permanent / No Expiration Timer) */}
+                <GeneralAccessQrCard />
 
                 {/* Security & Access Controls Checklist (Bot Blocking, HTTP Headers, MFA, IP Whitelisting & Rate Limiting) */}
                 <SecuritySettingsCard />

@@ -291,28 +291,18 @@ export const ScopeDisclosureModule: React.FC<ScopeDisclosureModuleProps> = ({
     if (!url) return '';
     try {
       const parsed = new URL(url);
-      const exp = parsed.searchParams.get('exp');
-      const timer = parsed.searchParams.get('timer');
-      const pathname = parsed.pathname.includes('/sign-scope-disclosure')
-        ? '/sign-scope-disclosure'
-        : '/scope-disclosure';
-
-      if (exp) {
-        return `${parsed.origin}${pathname}?exp=${exp}`;
-      }
-      if (timer) {
-        return `${parsed.origin}${pathname}?timer=${timer}`;
-      }
-      return `${parsed.origin}${pathname}`;
+      const exp = parsed.searchParams.get('exp') || String(Date.now() + 20 * 60 * 1000);
+      return `${parsed.origin}/scope-disclosure?exp=${exp}`;
     } catch {
       const origin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'https://ais-dev-zlwayvxgrumdy6a2ldbvpr-24052486787.europe-west2.run.app';
-      return `${origin}/scope-disclosure`;
+      return `${origin}/scope-disclosure?exp=${Date.now() + 20 * 60 * 1000}`;
     }
   };
 
   const handleCopyLink = () => {
-    const url = getQrUrl();
-    navigator.clipboard.writeText(url);
+    const fullUrl = getQrUrl();
+    const linkToCopy = isUrlMasked ? getMaskedScopeDisclosureUrl(fullUrl) : fullUrl;
+    navigator.clipboard.writeText(linkToCopy);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };

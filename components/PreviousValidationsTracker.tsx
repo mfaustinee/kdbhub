@@ -9,7 +9,7 @@ import {
   CheckCircle2, 
   Loader2 
 } from 'lucide-react';
-import { supabase, viewPdf as sharedViewPdf } from './lib/supabase';
+import { supabase, viewPdf as sharedViewPdf, isSupabaseDisabled } from './lib/supabase';
 import { DBService } from '../services/db';
 
 // Standalone Helper Functions
@@ -191,9 +191,9 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
           console.warn('[PreviousValidationsTracker] Local cache check:', localErr);
         }
 
-        // 2. Query Supabase kdb_validations
+        // 2. Query Supabase kdb_validations (if not disabled)
         try {
-          if (supabase) {
+          if (!isSupabaseDisabled() && supabase) {
             const { data, error } = await supabase
               .from('kdb_validations')
               .select('validation_period, date, premise_name, raw_data, pdf_path')
@@ -315,9 +315,9 @@ export const PreviousValidationsTracker: React.FC<PreviousValidationsTrackerProp
           console.warn('[PreviousValidationsTracker] Local DBO check:', lErr);
         }
 
-        // 2. Query Supabase kdb_validations
+        // 2. Query Supabase kdb_validations (if not disabled)
         try {
-          if (supabase) {
+          if (!isSupabaseDisabled() && supabase) {
             const { data, error } = await supabase
               .from('kdb_validations')
               .select('dbo_name, premise_name, category, permit_no, location, county, raw_data, date')
