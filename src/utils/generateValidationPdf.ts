@@ -225,11 +225,12 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
     if (isBranchFacility) {
       autoTable(doc, {
         startY: currentY + 5,
-        head: [['Month/Year', `Witnessed Quantity (${globalUnit})`, 'Selling Price (Kshs)', `Avg Vol/Day (${globalUnit}/Day)`]],
+        head: [['Month/Year', `Witnessed Quantity (${globalUnit})`, 'Selling Price (Kshs)', `Projected (${globalUnit})`, `Avg Vol/Day (${globalUnit}/Day)`]],
         body: sales.map((s: any) => [
           `${s.month} ${s.year}`, 
           formatNum(s.verifiedQty || '0'), 
           formatNum(s.sellingPrice || '0'), 
+          formatNum(s.projectedQty || '0'), 
           formatNum(s.avgVolPerDay || '0')
         ]),
         styles: { fontSize: 8 },
@@ -258,9 +259,9 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
 
   // Distribution Details Table
   if ((data.category === 'Mini Dairy' || data.category === 'Cottage Industry') && (Array.isArray(data.distributors) || data.distName)) {
-    const distributors = Array.isArray(data.distributors) && data.distributors.length > 0
+    const rawDistributors = Array.isArray(data.distributors) && data.distributors.length > 0
       ? data.distributors
-      : [{
+      : (data.distName ? [{
           name: data.distName,
           contacts: data.distContacts,
           volPerDay: data.distVolPerDay,
@@ -269,13 +270,15 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
           outlets: data.distOutlets,
           natureOfProduce: data.distNatureOfProduce,
           prices: { [data.distNatureOfProduce?.[0] || 'Produce']: data.distPrice }
-        }];
+        }] : []);
+
+    const distributors = rawDistributors.filter((d: any) => d && (d.name || d.contacts || d.volPerDay || d.permitNo || d.areaOfSale));
 
     distributors.forEach((dist: any, dIdx: number) => {
       checkPageBreak(55);
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
-      doc.text(`Distributor Details #${dIdx + 1}: ${dist.name || 'Unnamed'}`, 20, currentY + 2);
+      doc.text(`Distributor Details #${dIdx + 1}${dist.name ? `: ${dist.name}` : ''}`, 20, currentY + 2);
       doc.setFont("helvetica", "normal");
 
       const outletsText = Array.isArray(dist.outlets) && dist.outlets.length > 0

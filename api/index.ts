@@ -153,9 +153,11 @@ dotenv.config();
 
 logToFile("[Server] Entry point reached.");
 logToFile(`[Server] Environment Variable Keys: ${Object.keys(process.env).filter(k => !k.includes("KEY") && !k.includes("SECRET") && !k.includes("PASSWORD")).join(", ")}`);
-const sUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
-const sKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+const isSupabaseDisabled = process.env.VITE_DISABLE_SUPABASE === "true" || process.env.DISABLE_SUPABASE === "true" || process.env.PREVIEW_MODE === "true" || true;
+const sUrl = isSupabaseDisabled ? "" : (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "");
+const sKey = isSupabaseDisabled ? "" : (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "");
 logToFile(`[Server] NODE_ENV: ${process.env.NODE_ENV}`);
+logToFile(`[Server] Supabase Disabled (Preview/Zero-Egress Mode): ${isSupabaseDisabled}`);
 logToFile(`[Server] Supabase URL configured: ${!!sUrl} ${sUrl ? `(${sUrl.substring(0, 15)}...)` : "(empty)"}`);
 logToFile(`[Server] Supabase Key configured: ${!!sKey} ${sKey ? `(${sKey.substring(0, 10)}...)` : "(empty)"}`);
 
@@ -409,13 +411,11 @@ Allow: /inquiries
     });
 
     app.get("/api/config", (req, res) => {
-      const sUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
-      const sKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
-      
-      logToFile(`[API] Serving /api/config. Configured: ${!!(sUrl && sKey)}`);
+      logToFile(`[API] Serving /api/config. Disabled: ${isSupabaseDisabled}, Configured: ${!isSupabaseDisabled && !!(sUrl && sKey)}`);
       res.json({
-        VITE_SUPABASE_URL: sUrl,
-        VITE_SUPABASE_ANON_KEY: sKey
+        VITE_SUPABASE_URL: isSupabaseDisabled ? "" : sUrl,
+        VITE_SUPABASE_ANON_KEY: isSupabaseDisabled ? "" : sKey,
+        SUPABASE_DISABLED: isSupabaseDisabled
       });
     });
 

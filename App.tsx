@@ -16,6 +16,7 @@ import { useAuth } from './src/contexts/AuthContext.tsx';
 import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient, ComplaintData, InquiryData } from './types.ts';
 import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp } from 'lucide-react';
 import { DBService } from './services/db.ts';
+import { isSupabaseDisabled } from './components/lib/supabase.ts';
 import { numberToWords } from './utils/numberToWords.ts';
 import { ScrollToTopButton } from './components/ScrollToTopButton.tsx';
 
@@ -60,6 +61,9 @@ const App: React.FC = () => {
 
     const setupRealtimeSync = async () => {
       try {
+        if (isSupabaseDisabled()) {
+          return;
+        }
         const client = await DBService.getSupabaseClient();
         if (!client || !isSubscribed) return;
 
@@ -82,7 +86,11 @@ const App: React.FC = () => {
           .on('postgres_changes', { event: '*', schema: 'public', table: 'kdb_validations' }, () => {
             loadDatabase(true);
           })
-          .subscribe();
+          .subscribe((status: string) => {
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+              console.warn(`[App] Realtime channel status: ${status} (syncing via heartbeat and local cache)`);
+            }
+          });
       } catch (err) {
         console.warn("[App] Supabase realtime sync notice:", err);
       }
@@ -679,7 +687,7 @@ const App: React.FC = () => {
           } />
           <Route path="/payment-agreement" element={
             staffConfig.enabledModules?.levyAgreement !== false ? (
-              <AgreementForm agreements={agreements} debtors={debtors} clients={clients} onSubmit={handleClientSubmit} />
+              <AgreementForm agreements={agreements} debtors={debtors} clients={clients} onSubmit={handleClientSubmit} onBack={() => navigate('/')} />
             ) : (
               <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 shadow-xl text-center space-y-6">
                 <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600 border border-amber-100">

@@ -1,5 +1,6 @@
 import { AgreementData, DebtorRecord, StaffConfig, ClosureNotificationData, LicensedClient, ClientReturn, DataValidation, ComplaintData, InquiryData, getIndividualValidationsCount, ValidationDraft, AuthoritySignature, ScopeDisclosureRecord } from '../types';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createSafeSupabaseClient, isSupabaseDisabled } from '../components/lib/supabase';
 
 let supabase: SupabaseClient | null = null;
 let supabasePromise: Promise<SupabaseClient | null> | null = null;
@@ -40,6 +41,9 @@ const fetchConfig = async () => {
 };
 
 const getSupabase = async () => {
+  if (isSupabaseDisabled()) {
+    return null;
+  }
   if (supabase) return supabase;
   if (supabasePromise) return supabasePromise;
 
@@ -58,7 +62,7 @@ const getSupabase = async () => {
         if ((window as any).__supabaseInstance) {
           supabase = (window as any).__supabaseInstance;
         } else {
-          const client = createClient(supabaseUrl, supabaseKey);
+          const client = createSafeSupabaseClient(supabaseUrl, supabaseKey);
           supabase = client;
           (window as any).__supabaseInstance = client;
         }

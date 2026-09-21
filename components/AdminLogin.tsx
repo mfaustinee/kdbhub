@@ -319,13 +319,12 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ returnTo = '/admin', onS
 
           {/* Status / Notice if Supabase not configured */}
           {!isConfigured && (
-            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-900">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-bold">Supabase Credentials Notice</p>
-                <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
-                  Configure <code className="font-mono bg-amber-100/70 px-1 py-0.5 rounded">VITE_SUPABASE_URL</code> and{' '}
-                  <code className="font-mono bg-amber-100/70 px-1 py-0.5 rounded">VITE_SUPABASE_ANON_KEY</code> in environment settings.
+                <p className="font-bold">Preview Environment Mode (Zero Egress)</p>
+                <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
+                  Supabase network queries are disabled to prevent egress. System is running securely via local data storage and offline authentication.
                 </p>
               </div>
             </div>

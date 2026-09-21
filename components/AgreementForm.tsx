@@ -2,16 +2,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AgreementData, DebtorRecord, LicensedClient } from '../types';
 import { SignaturePad } from './SignaturePad';
-import { Building2, Calendar, CreditCard, ChevronRight, CheckCircle2, ShieldCheck, Mail, AlertCircle, FileText, Lock, MapPin, Phone, Check, Camera, PenTool, Upload, Loader2, Send } from 'lucide-react';
+import { Building2, Calendar, CreditCard, ChevronRight, CheckCircle2, ShieldCheck, Mail, AlertCircle, FileText, Lock, MapPin, Phone, Check, Camera, PenTool, Upload, Loader2, Send, ArrowLeft } from 'lucide-react';
 
 interface AgreementFormProps {
   agreements: AgreementData[];
   debtors: DebtorRecord[];
   clients?: LicensedClient[];
   onSubmit: (data: AgreementData) => Promise<void>;
+  onBack?: () => void;
 }
 
-export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtors, clients, onSubmit }) => {
+export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtors, clients, onSubmit, onBack }) => {
   const [isAdminBypass, setIsAdminBypass] = useState<boolean>(() => {
     const urlParams = new URLSearchParams(window.location.search);
     return !!urlParams.get('bypassPermit');
@@ -268,6 +269,13 @@ export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtor
                 </div>
                 {verifyError && <p className="text-xs text-rose-600 bg-rose-50 p-3 rounded-xl flex items-center font-semibold animate-pulse"><AlertCircle className="w-4 h-4 mr-1.5 shrink-0" /> {verifyError}</p>}
                 <button className="w-full py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-md shadow-emerald-100 transition-all flex items-center justify-center uppercase tracking-wider text-xs">Access Portal <ChevronRight className="ml-1.5 w-4 h-4" /></button>
+                <button
+                  type="button"
+                  onClick={() => onBack ? onBack() : (window.history.length > 1 ? window.history.back() : window.location.assign('/'))}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all flex items-center justify-center uppercase tracking-wider text-xs cursor-pointer"
+                >
+                  <ArrowLeft className="mr-1.5 w-4 h-4" /> Back to Portals Hub
+                </button>
               </form>
             </div>
           )}
@@ -306,7 +314,10 @@ export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtor
                 <div className="space-y-1.5"><label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Signatory Contact Email *</label><input required type="email" value={formData.clientEmail || ''} onChange={e => updateField('clientEmail', e.target.value)} className="w-full px-5 py-3 rounded-2xl border bg-white focus:ring-4 focus:ring-emerald-500/5 font-bold outline-none" placeholder="manager@business.com" /></div>
                 <div className="md:col-span-2 space-y-1.5"><label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4">Authorized Phone No *</label><input required value={formData.tel || ''} onChange={e => updateField('tel', e.target.value)} className="w-full px-5 py-3 rounded-2xl border bg-white focus:ring-4 focus:ring-emerald-500/5 font-bold outline-none" placeholder="0712 345 678" /></div>
               </div>
-              <div className="flex pt-4"><button disabled={!isStep1Valid} onClick={() => setStep(2)} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black disabled:opacity-30 flex items-center justify-center shadow-lg hover:bg-emerald-700 transition-all uppercase tracking-widest text-xs">Verify Arrears Balance <ChevronRight className="ml-2 w-4 h-4" /></button></div>
+              <div className="flex gap-4 pt-4">
+                <button type="button" onClick={() => setStep(0)} className="w-1/3 py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl font-black uppercase text-xs tracking-widest transition-all cursor-pointer">Back</button>
+                <button disabled={!isStep1Valid} onClick={() => setStep(2)} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black disabled:opacity-30 flex items-center justify-center shadow-lg hover:bg-emerald-700 transition-all uppercase tracking-widest text-xs">Verify Arrears Balance <ChevronRight className="ml-2 w-4 h-4" /></button>
+              </div>
             </div>
           )}
 
