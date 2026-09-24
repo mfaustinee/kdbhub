@@ -31,8 +31,15 @@ export interface DebtorRecord {
 export interface EnabledModules {
   levyAgreement: boolean;
   businessClosure: boolean;
-  clientInquiry: boolean;
-  stakeholderComplaint: boolean;
+}
+
+export interface PaginatedResult<T> {
+  data: T[];
+  count: number;
+  totalCount?: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 
 export interface AuthoritySignature {
@@ -95,125 +102,6 @@ export interface ClosureNotificationData {
   officialTitle?: string;
   officialComments?: string;
   rejectionReason?: string;
-}
-
-export interface ComplaintData {
-  id: string; // Reference No.
-  status: 'submitted' | 'resolved' | 'pending' | 'referred' | 'closed' | 'investigating' | 'rejected';
-  submittedAt: string;
-  dateReceived?: string;
-  receivedBy?: string;
-  
-  // 1. Complainant Details
-  clientName: string; // Full Name / Company Name
-  idNumber: string; // ID Number / Registration Number
-  stakeholderCategory: string; // Farmer, Milk Trader, Processor, Transporter, Cooperative Society, Input Supplier, Distributor, Consumer, Other
-  otherStakeholderCategory?: string;
-  postalAddress: string;
-  tel: string;
-  email: string;
-  county: string;
-  
-  // 2. Complaint Details
-  natureOfComplaint: string; // Licensing Issues, Delayed Services, Quality/Standards Concerns, Inspection/Compliance Issues, Milk Pricing Disputes, Staff Conduct, Corruption or Misconduct, Regulatory Enforcement Concern, Other
-  otherNatureOfComplaint?: string;
-  location: string; // Location Where Issue Occurred (County/Sub-County)
-  incidentDate: string; // Date Incident Occurred
-  complaintDescription: string; // Detailed Description of Complaint
-  
-  // 3. Supporting Documents
-  attachments: string[]; // License Copy, Payment Receipt, Correspondence, Inspection Report, Photos, Other
-  otherAttachment?: string;
-  numAttachments: number;
-  
-  // 4. Desired Resolution
-  desiredResolution: string;
-  
-  // 5. Declaration
-  declarationAgreed: boolean;
-  clientSignature: string; // Base64
-  clientNameDeclaration: string;
-  
-  // 6. For Official Use Only
-  complaintCategoryCode?: string;
-  assignedTo?: string;
-  investigationFindings?: string;
-  actionTaken?: string;
-  officialStatus?: 'Resolved' | 'Pending' | 'Referred' | 'Closed';
-  dateClosed?: string;
-  officialSignature?: string; // Base64
-  officialName?: string;
-  officialTitle?: string;
-  officialComments?: string;
-  rejectionReason?: string;
-  complainantName?: string;
-  complainantCategory?: string;
-  telephone?: string;
-  complaintDetails?: string;
-  actionDate?: string;
-  dateReplied?: string;
-  referenceNumber?: string;
-}
-
-export interface InquiryData {
-  id: string; // Inquiry Reference Number
-  status: 'submitted' | 'resolved' | 'closed' | 'pending' | 'referred';
-  submittedAt: string;
-  
-  // 1. CLIENT INFORMATION
-  clientName: string; // Full Name / Company Name
-  contactPerson?: string; // Contact Person (if company)
-  idPassportNo?: string; // ID/Passport No. (if applicable)
-  kdbLicenseNo?: string; // KDB License Number (if applicable)
-  postalAddress: string;
-  cityTown: string;
-  tel: string;
-  mobileNumber: string;
-  email: string;
-  
-  // 2. TYPE OF CLIENT
-  clientType: string; // Dairy Farmer, Milk Transporter, Milk Processor, Milk Vendor/Trader, Cooperative Society, Equipment Supplier, Exporter/Importer, Prospective Investor, Member of Public, Other
-  otherClientType?: string;
-  
-  // 3. NATURE OF INQUIRY
-  natureOfInquiry: string; // Licensing & Registration, License Renewal, Compliance Requirements, Inspection & Certification, Dairy Imports/Exports, Market Information, Training & Capacity Building, Complaint Submission, Product Standards, Other
-  otherNatureOfInquiry?: string;
-  
-  // 4. DETAILS OF INQUIRY
-  inquiryDetails: string;
-  
-  // 5. SUPPORTING DOCUMENTS
-  supportingDocsStatus: 'Attached' | 'To be submitted later' | 'None';
-  attachedDocsList?: string;
-  
-  // 6. PREFERRED MODE OF RESPONSE
-  preferredResponseMode: string; // Email, Phone Call, In-person Appointment, Written Letter
-  
-  // 7. DECLARATION
-  declarationAgreed: boolean;
-  clientSignature: string; // Base64
-  
-  // OFFICIAL USE ONLY (Kenya Dairy Board)
-  receivedBy?: string;
-  dateReceived?: string;
-  departmentAssigned?: string;
-  actionTaken?: string;
-  dateClosed?: string;
-  officialSignature?: string; // Base64
-  officialName?: string;
-  officialTitle?: string;
-  officialComments?: string;
-  rejectionReason?: string;
-  county?: string;
-  clientCategory?: string;
-  telephone?: string;
-  location?: string;
-  message?: string;
-  referredTo?: string;
-  actionDate?: string;
-  responseDetails?: string;
-  dateReplied?: string;
-  referenceNumber?: string;
 }
 
 // Helper to resolve environment variables in various browser environments
@@ -376,7 +264,8 @@ export const formatDDMMYYYYToYYYYMMDD = (dateStr: string | undefined | null): st
 };
 
 export interface ClientBranch {
-  id: string; // unique ID or permit number
+  id: string; // unique ID
+  customerNumber?: string; // Branch customer/account identifier
   premiseName: string;
   permitNumber: string;
   premiseCategory: 'Milk Bar' | 'Dispenser' | 'Cooling Plant' | 'Mini Dairy' | 'Cottage Industry' | 'Processor' | string;
@@ -392,6 +281,7 @@ export interface ClientBranch {
 
 export interface LicensedClient {
   id: string;
+  customerNumber?: string; // Unique primary customer number (prevents permit number collisions)
   clientName: string;
   premiseName: string;
   startYear: number;
@@ -431,6 +321,23 @@ export interface ClientReturn {
   agingDays: number;
   paymentStatus: 'Fully Paid' | 'Partially Paid' | 'Unpaid';
   comments: string;
+}
+
+export interface IntegratedClientAccount {
+  client: LicensedClient;
+  branches: ClientBranch[];
+  returns: ClientReturn[];
+  summary: {
+    totalVolumeDeclared: number;
+    totalInvoiceAmount: number;
+    totalPaidAmount: number;
+    totalOutstandingBalance: number;
+    complianceStatus: 'compliant' | 'non_filer' | 'in_arrears';
+    latestFilingPeriod: string;
+    returnsCount: number;
+    unpaidReturnsCount: number;
+    averageMonthlyVolume: number;
+  };
 }
 
 export interface DataValidation {
@@ -518,6 +425,7 @@ export interface ExceptionRegisterItem {
   origin?: 'previous' | 'current';
   previousPeriod?: string;
   dateLogged?: string;
+  arrearsClassification?: 'under-declaration' | 'non-declaration';
 }
 
 export const STANDARD_EXCEPTION_TYPES: Array<{
@@ -730,5 +638,38 @@ export interface ScopeDisclosureRecord {
   createdAt?: string;
   updatedAt?: string;
   signedAt?: string;
+}
+
+export interface ClientQueryParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  category?: string;
+  levyInfo?: string;
+  status?: string; // 'all' | 'operating' | 'closed' | 'active' | 'expired'
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface ReturnQueryParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  year?: string;
+  month?: string;
+  status?: string;
+  clientId?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface PaginatedReturnsResult extends PaginatedResult<ClientReturn> {
+  summary?: {
+    totalQty: number;
+    totalInvoicedAmt: number;
+    totalPaidAmt: number;
+    totalLessCFAmt: number;
+    totalOutstanding: number;
+  };
 }
 

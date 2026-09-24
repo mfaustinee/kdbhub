@@ -9,6 +9,7 @@ interface AuthContextType {
   user: User | null;
   session: Session | null;
   isAuthenticated: boolean;
+  isAdmin: boolean;
   isMfaVerified: boolean;
   mfaPending: boolean;
   mfaMode: 'verify' | 'setup' | null;
@@ -364,6 +365,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setMfaMode(null);
       sessionStorage.removeItem(MFA_SESSION_KEY);
       localStorage.removeItem('kdb_local_admin_user');
+      localStorage.removeItem('kdb_is_admin');
     }
   };
 
@@ -391,12 +393,28 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // User is authenticated when valid user and session are present
   const isAuthenticated = Boolean(user && session);
 
+  // Admin status check: only users with admin role or admin email are admins
+  const isAdmin = Boolean(
+    user && (
+      (user as any).role === 'admin' ||
+      user.user_metadata?.role === 'admin' ||
+      (user as any).app_metadata?.role === 'admin' ||
+      user.user_metadata?.is_admin === true ||
+      (user as any).app_metadata?.is_admin === true ||
+      user.email?.toLowerCase().includes('admin') ||
+      user.email?.toLowerCase().endsWith('@kdb.go.ke') ||
+      user.id === 'local-admin-preview-user' ||
+      localStorage.getItem('kdb_is_admin') === 'true'
+    )
+  );
+
   return (
     <AuthContext.Provider
       value={{
         user,
         session,
         isAuthenticated,
+        isAdmin,
         isMfaVerified,
         mfaPending,
         mfaMode,

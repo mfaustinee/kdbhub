@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber, isSameCategory, getClientCategory, parseDDMMYYYY } from '../types';
 import { DBService } from '../services/db';
+import { areNamesMatching, searchMatches, normalizeAlphanumeric, cleanPermitNumber } from './lib/nameMatching';
 import { 
   Plus, 
   Search, 
@@ -25,16 +26,45 @@ import {
   Download,
   AlertCircle,
   Check,
-  Database
+  Database,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
-export const LicensedClientsModule: React.FC = () => {
-  const [clients, setClients] = useState<LicensedClient[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+export interface LicensedClientsModuleProps {
+  clients?: LicensedClient[];
+  loading?: boolean;
+  onClientsChange?: (clients: LicensedClient[]) => void;
+  onRefresh?: () => void;
+  standalone?: boolean;
+}
+
+export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
+  clients: propClients,
+  loading: propLoading,
+  onClientsChange,
+  onRefresh,
+  standalone = true
+}) => {
+  const [clients, setClients] = useState<LicensedClient[]>(propClients || []);
+  const [loading, setLoading] = useState<boolean>(propLoading !== undefined ? propLoading : (standalone || !propClients));
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [levyFilter, setLevyFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+
+  // Synchronize with parent props when passed
+  useEffect(() => {
+    if (propClients !== undefined) {
+      setClients(propClients);
+    }
+  }, [propClients]);
+
+  useEffect(() => {
+    if (propLoading !== undefined) {
+      setLoading(propLoading);
+    }
+  }, [propLoading]);
   
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -100,23 +130,58 @@ export const LicensedClientsModule: React.FC = () => {
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
 
-  useEffect(() => {
-    fetchClients();
-  }, []);
+  // Batching & Pagination states (10, 25, 50 & 100 batch options)
+  const [batchSize, setBatchSize] = useState<10 | 25 | 50 | 100>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalRecords, setTotalRecords] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
 
-  const fetchClients = async () => {
+  const fetchClientsBatch = useCallback(async (page: number = currentPage, size: 10 | 25 | 50 | 100 = batchSize) => {
     setLoading(true);
     try {
-      const data = await DBService.getClients();
-      const sorted = [...data].sort((a, b) => 
-        (a.clientName || '').localeCompare(b.clientName || '', undefined, { sensitivity: 'base' })
-      );
-      setClients(sorted);
+      const res = await DBService.getClientsPaginated({
+        page,
+        pageSize: size,
+        search: searchTerm,
+        category: categoryFilter,
+        status: statusFilter,
+        levyInfo: levyFilter
+      });
+      setClients(res.data);
+      const total = res.count ?? res.totalCount ?? res.data.length;
+      setTotalRecords(total);
+      setTotalPages(res.totalPages || Math.ceil(total / size) || 1);
+      setCurrentPage(page);
+      onClientsChange?.(res.data);
     } catch (error) {
-      console.error('Error fetching clients:', error);
+      console.error('Error fetching clients batch:', error);
     } finally {
       setLoading(false);
     }
+  }, [currentPage, batchSize, searchTerm, categoryFilter, statusFilter, levyFilter, onClientsChange]);
+
+  // Fetch only the selected batch when filters or batch size change
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchClientsBatch(1, batchSize);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchTerm, categoryFilter, levyFilter, statusFilter, batchSize]);
+
+  const handleBatchSizeChange = (newSize: 10 | 25 | 50 | 100) => {
+    setBatchSize(newSize);
+    setCurrentPage(1);
+    fetchClientsBatch(1, newSize);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    const validPage = Math.max(1, Math.min(newPage, totalPages));
+    setCurrentPage(validPage);
+    fetchClientsBatch(validPage, batchSize);
+  };
+
+  const fetchClients = async () => {
+    await fetchClientsBatch(currentPage, batchSize);
   };
 
   const openAddModal = () => {
@@ -726,11 +791,14 @@ export const LicensedClientsModule: React.FC = () => {
           }
         }
 
-        const clientKey = cName.toLowerCase();
+        const clientKey = normalizeAlphanumeric(cName);
 
         // METHOD 1: Check if client already captured in this CSV run or existing in DB
         if (!clientRecordsMap.has(clientKey)) {
-          const existingDbClient = clients.find(c => (c.clientName || '').trim().toLowerCase() === clientKey);
+          const existingDbClient = clients.find(c => 
+            areNamesMatching(c.clientName, cName) ||
+            (formattedPermitNo && cleanPermitNumber(c.permitNumber) === cleanPermitNumber(formattedPermitNo) && areNamesMatching(c.premiseName, pName))
+          );
 
           if (existingDbClient) {
             const updatedClient: LicensedClient = {
@@ -738,15 +806,15 @@ export const LicensedClientsModule: React.FC = () => {
               branches: existingDbClient.branches ? [...existingDbClient.branches] : []
             };
 
-            if (existingDbClient.premiseName.trim().toLowerCase() === pName.toLowerCase()) {
+            if (areNamesMatching(existingDbClient.premiseName, pName)) {
               updatedClient.permitStatus = status;
               updatedClient.operationalStatus = opStatus;
               updatedClient.levyInfo = opStatus === 'closed' ? 'DNQ-R' : (levy || existingDbClient.levyInfo || 'QFR');
               if (formattedExpiryDate) updatedClient.expiryDate = formattedExpiryDate;
               if (colBranches.length > 0) {
-                const existingBranchNames = new Set((updatedClient.branches || []).map(b => b.premiseName.trim().toLowerCase()));
+                const existingBranchNames = new Set((updatedClient.branches || []).map(b => normalizeAlphanumeric(b.premiseName)));
                 colBranches.forEach(cb => {
-                  if (!existingBranchNames.has(cb.premiseName.trim().toLowerCase())) {
+                  if (!existingBranchNames.has(normalizeAlphanumeric(cb.premiseName))) {
                     updatedClient.branches!.push(cb);
                   }
                 });
@@ -766,7 +834,7 @@ export const LicensedClientsModule: React.FC = () => {
                 contactPerson: contact,
                 coolingCapacity: cap
               };
-              const branchExists = updatedClient.branches?.some(b => b.premiseName.trim().toLowerCase() === pName.toLowerCase());
+              const branchExists = updatedClient.branches?.some(b => areNamesMatching(b.premiseName, pName));
               if (!branchExists) {
                 updatedClient.branches = [...(updatedClient.branches || []), newBranch];
               }
@@ -806,14 +874,15 @@ export const LicensedClientsModule: React.FC = () => {
           // Method 1: Subsequent CSV row for same clientName -> Added as ClientBranch
           const existingParsedClient = clientRecordsMap.get(clientKey)!;
 
-          if (existingParsedClient.premiseName.trim().toLowerCase() === pName.toLowerCase()) {
-            errors.push(`Row ${rowNum}: Duplicate primary premise "${pName}" for client "${cName}".`);
+          if (areNamesMatching(existingParsedClient.premiseName, pName)) {
+            // If subsequent row has updated permit or status for same primary premise, update it
+            if (formattedPermitNo) existingParsedClient.permitNumber = formattedPermitNo;
+            if (formattedExpiryDate) existingParsedClient.expiryDate = formattedExpiryDate;
             continue;
           }
 
-          const branchExists = existingParsedClient.branches?.some(b => b.premiseName.trim().toLowerCase() === pName.toLowerCase());
+          const branchExists = existingParsedClient.branches?.some(b => areNamesMatching(b.premiseName, pName));
           if (branchExists) {
-            errors.push(`Row ${rowNum}: Duplicate branch premise "${pName}" for client "${cName}".`);
             continue;
           }
 
@@ -865,54 +934,11 @@ export const LicensedClientsModule: React.FC = () => {
     }
   };
 
-  // Filter clients based on search & filters
-  const filteredClients = clients.filter(client => {
-    if (!client) return false;
-    const qLower = String(searchTerm || '').trim().toLowerCase();
-    const matchesSearch = !qLower ||
-      String(client.clientName || '').toLowerCase().includes(qLower) ||
-      String(client.premiseName || '').toLowerCase().includes(qLower) ||
-      String(client.contactPerson || '').toLowerCase().includes(qLower) ||
-      String(client.location || '').toLowerCase().includes(qLower) ||
-      String(client.id || '').toLowerCase().includes(qLower) ||
-      String(client.permitNumber || '').toLowerCase().includes(qLower) ||
-      String(client.tel || '').toLowerCase().includes(qLower) ||
-      String(client.county || '').toLowerCase().includes(qLower);
-    
-    const matchesCategory = categoryFilter === 'All' || isSameCategory(getClientCategory(client), categoryFilter);
-    const matchesLevy = levyFilter === 'All' || client.levyInfo === levyFilter;
-    
-    // Dynamic Permit Status
-    const clientPermitStatus = (() => {
-      if (!client.expiryDate) {
-        return client.permitStatus || 'active';
-      }
-      const exp = parseDDMMYYYY(client.expiryDate);
-      if (!exp) {
-        return client.permitStatus || 'active';
-      }
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      exp.setHours(23, 59, 59, 999);
-      return exp >= today ? 'active' : 'inactive';
-    })();
-
-    let matchesStatus = true;
-    if (statusFilter === 'active') {
-      matchesStatus = clientPermitStatus === 'active';
-    } else if (statusFilter === 'expired') {
-      matchesStatus = clientPermitStatus === 'inactive';
-    } else if (statusFilter === 'operating') {
-      matchesStatus = client.operationalStatus === 'operating';
-    } else if (statusFilter === 'closed') {
-      matchesStatus = client.operationalStatus === 'closed';
-    }
-
-    return matchesSearch && matchesCategory && matchesLevy && matchesStatus;
-  }).sort((a, b) => (a.clientName || '').localeCompare(b.clientName || '', undefined, { sensitivity: 'base' }));
+  // Clients are queried, filtered, and batched server-side to limit egress
+  const filteredClients = clients;
 
   // Calculate high-level stats
-  const totalCount = clients.length;
+  const totalCount = totalRecords || clients.length;
   const totalQFR = clients.filter(c => c.levyInfo === 'QFR').length;
   const totalDNQR = clients.filter(c => c.levyInfo === 'DNQ-R').length;
 
@@ -1167,6 +1193,61 @@ export const LicensedClientsModule: React.FC = () => {
           </div>
         </div>
 
+        {/* Batch Options & Egress Limitation Bar (Dropdown Format: Show ___ entries) */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 p-3 rounded-xl border border-slate-200/70 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 font-medium text-slate-700">
+              <span className="text-slate-600 font-semibold text-xs">Show</span>
+              <select
+                value={batchSize}
+                onChange={(e) => handleBatchSizeChange(Number(e.target.value) as 10 | 25 | 50 | 100)}
+                className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-100 shadow-2xs cursor-pointer"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+              <span className="text-slate-600 font-semibold text-xs">entries</span>
+            </div>
+
+            <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200/60 font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>Batch {currentPage} of {totalPages} (records {totalRecords === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, totalRecords)})</span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between sm:justify-end gap-3">
+            <span className="text-[11px] text-slate-500 font-semibold">
+              Showing <span className="font-bold text-slate-900">{totalRecords === 0 ? 0 : (currentPage - 1) * batchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(currentPage * batchSize, totalRecords)}</span> of <span className="font-bold text-slate-900">{totalRecords.toLocaleString()}</span>
+            </span>
+
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage <= 1 || loading}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                title="Previous batch"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span className="text-[11px] font-bold text-slate-700 px-2">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage >= totalPages || loading}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                title="Next batch"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Data List or Loading */}
         {loading ? (
           <div className="py-20 text-center space-y-3">
@@ -1197,9 +1278,19 @@ export const LicensedClientsModule: React.FC = () => {
                   <React.Fragment key={client.id}>
                     <tr className="hover:bg-slate-50/30 transition-colors">
                       <td className="px-6 py-4 space-y-1">
-                        <div className="text-slate-900 font-black text-sm">{client.clientName}</div>
-                        <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-1 font-bold">
-                          <Building size={10} /> {client.premiseName}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-slate-900 font-black text-sm">{client.clientName}</span>
+                          {client.customerNumber && (
+                            <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 font-mono text-[10px] font-bold" title="Customer Identification Number">
+                              Cust #{client.customerNumber}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 uppercase tracking-wider flex items-center gap-2 font-bold flex-wrap">
+                          <span className="flex items-center gap-1 text-slate-600"><Building size={10} /> {client.premiseName}</span>
+                          {client.permitNumber && (
+                            <span className="font-mono text-slate-400 font-normal">Permit: {client.permitNumber}</span>
+                          )}
                         </div>
                         {client.branches && client.branches.length > 0 && (
                           <button
@@ -1320,8 +1411,9 @@ export const LicensedClientsModule: React.FC = () => {
                                     </span>
                                   </div>
                                   <div className="grid grid-cols-2 gap-x-2 text-[10px] text-slate-500 font-bold leading-relaxed pt-1 border-t border-slate-50 mt-1">
+                                    <div>Cust #: <span className="font-mono text-blue-700 font-bold">{br.customerNumber || client.customerNumber || '—'}</span></div>
                                     <div>Permit: <span className="font-mono text-slate-700">{br.permitNumber}</span></div>
-                                    <div>Category: <span className="text-slate-700">{br.premiseCategory}</span></div>
+                                    <div className="col-span-2">Category: <span className="text-slate-700">{br.premiseCategory}</span></div>
                                     <div className="col-span-2">Loc: <span className="text-slate-700">{br.location}, {br.county}</span></div>
                                     {br.expiryDate && <div className="col-span-2 text-[9px] text-slate-400">Expiry Date: <span className="font-bold text-slate-600">{br.expiryDate}</span></div>}
                                   </div>
@@ -1336,6 +1428,67 @@ export const LicensedClientsModule: React.FC = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Bottom Pagination & Batch Range Controls */}
+        {totalRecords > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-600 font-semibold text-xs">Show</span>
+              <select
+                value={batchSize}
+                onChange={(e) => handleBatchSizeChange(Number(e.target.value) as 10 | 25 | 50 | 100)}
+                className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+              <span className="text-slate-600 font-semibold text-xs">entries</span>
+              <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
+                (Showing {totalRecords === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, totalRecords)} of {totalRecords.toLocaleString()} clients)
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handlePageChange(1)}
+                disabled={currentPage <= 1 || loading}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+              >
+                First
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage <= 1 || loading}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+              >
+                <ChevronLeft size={13} /> Prev
+              </button>
+              <span className="px-3 py-1 rounded-lg bg-slate-100 text-slate-900 text-[11px] font-black">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage >= totalPages || loading}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+              >
+                Next <ChevronRight size={13} />
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePageChange(totalPages)}
+                disabled={currentPage >= totalPages || loading}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+              >
+                Last
+              </button>
+            </div>
           </div>
         )}
       </div>

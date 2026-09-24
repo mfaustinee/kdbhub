@@ -2,18 +2,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
-import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, ComplaintData, InquiryData, EnabledModules, AuthoritySignature } from '../types';
+import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
 import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw } from 'lucide-react';
 import { useAuth } from '../src/contexts/AuthContext';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
-import { ComplaintPDFPreview } from './ComplaintPDFPreview';
-import { InquiryPDFPreview } from './InquiryPDFPreview';
-import { downloadAgreementPDF, downloadClosurePDF, downloadComplaintPDF, downloadInquiryPDF } from '../services/pdf';
+import { downloadAgreementPDF, downloadClosurePDF } from '../services/pdf';
 import { numberToWords } from '../utils/numberToWords';
 import { LicensedClientsModule } from './LicensedClientsModule';
 import { ClientReturnsModule } from './ClientReturnsModule';
+import { ClientsAndReturnsHub } from './ClientsAndReturnsHub';
 import { ReportsModule } from './ReportsModule';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
@@ -23,8 +22,6 @@ import { GeneralAccessQrCard } from './GeneralAccessQrCard';
 interface AdminDashboardProps {
   agreements: AgreementData[];
   closures: ClosureNotificationData[];
-  complaints?: ComplaintData[];
-  inquiries?: InquiryData[];
   debtors: DebtorRecord[];
   staffConfig: StaffConfig;
   isSyncing?: boolean;
@@ -33,10 +30,6 @@ interface AdminDashboardProps {
   onDeleteAgreement?: (id: string) => void;
   onClosureAction: (id: string, action: 'approve' | 'reject', adminData?: { signature: string; name: string; reason?: string; title?: string; comments?: string }) => void;
   onDeleteClosure?: (id: string) => void;
-  onComplaintAction?: (id: string, updates: Partial<ComplaintData>) => void;
-  onDeleteComplaint?: (id: string) => void;
-  onInquiryAction?: (id: string, updates: Partial<InquiryData>) => void;
-  onDeleteInquiry?: (id: string) => void;
   onDebtorUpdate: (updated: DebtorRecord[]) => void;
   onStaffUpdate: (config: StaffConfig) => void;
 }
@@ -44,8 +37,6 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
   agreements = [], 
   closures = [], 
-  complaints = [],
-  inquiries = [],
   debtors, 
   staffConfig, 
   isSyncing, 
@@ -54,32 +45,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onDeleteAgreement, 
   onClosureAction,
   onDeleteClosure,
-  onComplaintAction,
-  onDeleteComplaint,
-  onInquiryAction,
-  onDeleteInquiry,
   onDebtorUpdate, 
   onStaffUpdate 
 }) => {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'requests_to_approve' | 'clients' | 'returns' | 'reports' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
-  const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations' | 'complaints' | 'inquiries'>('agreements');
+  const [tab, setTab] = useState<'requests_to_approve' | 'clients_returns' | 'clients' | 'returns' | 'reports' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
+  const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations'>('agreements');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   const pendingRequestsCount = 
     agreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length + 
-    closures.filter(c => c.status === 'submitted').length + 
-    (complaints?.filter(co => co.status === 'submitted').length || 0) + 
-    (inquiries?.filter(inq => inq.status === 'submitted').length || 0);
+    closures.filter(c => c.status === 'submitted').length;
 
   const getTabLabel = (currentTab: typeof tab) => {
     switch (currentTab) {
       case 'data_validation': return 'Data Validation Form';
       case 'scope_disclosure': return 'Scope Disclosure Form';
       case 'requests_to_approve': return 'Requests to Approve';
-      case 'clients': return 'Clients Registry';
-      case 'returns': return 'Client Returns';
+      case 'clients_returns':
+      case 'clients':
+      case 'returns': return 'Clients & Returns Hub';
       case 'reports': return 'Compliance Reports';
       case 'settings': return 'System Settings';
       default: return 'Admin Workspace';
@@ -89,29 +75,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const changeTab = (newTab: typeof tab) => {
     setTab(newTab);
     setIsMobileMenuOpen(false);
-    onRefresh?.();
   };
   const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
   const [selectedClosureId, setSelectedClosureId] = useState<string | null>(null);
-  const [selectedComplaintId, setSelectedComplaintId] = useState<string | null>(null);
-  const [selectedInquiryId, setSelectedInquiryId] = useState<string | null>(null);
 
   const [isRejecting, setIsRejecting] = useState(false);
   const [isRejectingClosure, setIsRejectingClosure] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isApprovingClosure, setIsApprovingClosure] = useState(false);
-  
-  const [isProcessingComplaint, setIsProcessingComplaint] = useState(false);
-  const [complaintProcessingStatus, setComplaintProcessingStatus] = useState('');
-  const [isProcessingInquiry, setIsProcessingInquiry] = useState(false);
-  const [inquiryProcessingStatus, setInquiryProcessingStatus] = useState('');
 
   const [approvalStatus, setApprovalStatus] = useState('');
   const [closureApprovalStatus, setClosureApprovalStatus] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const [showClosurePreview, setShowClosurePreview] = useState(false);
-  const [showComplaintPreview, setShowComplaintPreview] = useState(false);
-  const [showInquiryPreview, setShowInquiryPreview] = useState(false);
 
   const { user, signOut } = useAuth();
   const [rejectionReason, setRejectionReason] = useState('');
@@ -128,18 +104,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setAdminName(user.user_metadata?.full_name || user.email?.split('@')[0] || '');
     }
   }, [user]);
-
-  // Complaint "Official Use Only" States
-  const [complaintCategoryCode, setComplaintCategoryCode] = useState('');
-  const [complaintAssignedTo, setComplaintAssignedTo] = useState('');
-  const [complaintStatus, setComplaintStatus] = useState<'submitted' | 'investigating' | 'resolved' | 'closed' | 'rejected'>('submitted');
-  const [investigationFindings, setInvestigationFindings] = useState('');
-  const [complaintActionTaken, setComplaintActionTaken] = useState('');
-
-  // Inquiry "Official Use Only" States
-  const [inquiryReferredTo, setInquiryReferredTo] = useState('');
-  const [inquiryStatus, setInquiryStatus] = useState<'submitted' | 'referred' | 'resolved' | 'closed'>('submitted');
-  const [inquiryResponseDetails, setInquiryResponseDetails] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddingDebtor, setIsAddingDebtor] = useState(false);
@@ -314,8 +278,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const currentModules = staffConfig.enabledModules || {
       levyAgreement: true,
       businessClosure: true,
-      clientInquiry: true,
-      stakeholderComplaint: true,
     };
 
     const updatedConfig: StaffConfig = {
@@ -335,8 +297,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       enabledModules: {
         levyAgreement: enable,
         businessClosure: enable,
-        clientInquiry: enable,
-        stakeholderComplaint: enable,
       },
     };
 
@@ -383,110 +343,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   const selectedReview = agreements.find(a => a.id === selectedReviewId);
   const selectedClosure = closures.find(c => c.id === selectedClosureId);
-  const selectedComplaint = complaints.find(co => co.id === selectedComplaintId);
-  const selectedInquiry = inquiries.find(inq => inq.id === selectedInquiryId);
-
-  useEffect(() => {
-    if (selectedComplaint) {
-      setComplaintCategoryCode(selectedComplaint.complaintCategoryCode || '');
-      setComplaintAssignedTo(selectedComplaint.assignedTo || '');
-      setComplaintStatus((selectedComplaint.status as any) || 'submitted');
-      setInvestigationFindings(selectedComplaint.investigationFindings || '');
-      setComplaintActionTaken(selectedComplaint.actionTaken || '');
-    }
-  }, [selectedComplaintId, selectedComplaint]);
-
-  useEffect(() => {
-    if (selectedInquiry) {
-      setInquiryReferredTo(selectedInquiry.referredTo || '');
-      setInquiryStatus((selectedInquiry.status as any) || 'submitted');
-      setInquiryResponseDetails(selectedInquiry.responseDetails || '');
-    }
-  }, [selectedInquiryId, selectedInquiry]);
-
-  const handleProcessComplaint = async () => {
-    if (!selectedComplaint) return;
-    if (!adminName) return alert("Please enter your name for authorization.");
-    if (!staffConfig.officialSignature) return alert("Please upload an official signature in Staff Setup first.");
-
-    setIsProcessingComplaint(true);
-    const steps = [
-      'Registering complaint review...',
-      'Assigning investigator...',
-      'Validating county location...',
-      'Publishing official findings...'
-    ];
-
-    for (const s of steps) {
-      setComplaintProcessingStatus(s);
-      await new Promise(r => setTimeout(r, 600));
-    }
-
-    if (onComplaintAction) {
-      const activeSig = authoritySigs.find(s => s.id === selectedSigningSigId) || authoritySigs.find(s => s.isDefault) || authoritySigs[0];
-      const signatureToUse = activeSig?.signature || staffConfig.officialSignature;
-      const updates: Partial<ComplaintData> = {
-        complaintCategoryCode,
-        assignedTo: complaintAssignedTo,
-        status: complaintStatus,
-        investigationFindings,
-        actionTaken: complaintActionTaken,
-        officialSignature: signatureToUse,
-        officialName: adminName || activeSig?.name || 'Authorized Officer',
-        officialTitle: adminTitle || activeSig?.title || 'Compliance Officer',
-        officialComments: complaintActionTaken || investigationFindings,
-        actionDate: new Date().toISOString().split('T')[0],
-        dateClosed: ['resolved', 'closed', 'rejected'].includes(complaintStatus) 
-          ? new Date().toISOString().split('T')[0] 
-          : undefined,
-        dateReceived: selectedComplaint.dateReceived || new Date(selectedComplaint.submittedAt || '').toISOString().split('T')[0],
-        receivedBy: selectedComplaint.receivedBy || adminName
-      };
-      await onComplaintAction(selectedComplaint.id, updates);
-    }
-    setIsProcessingComplaint(false);
-  };
-
-  const handleProcessInquiry = async () => {
-    if (!selectedInquiry) return;
-    const activeSig = authoritySigs.find(s => s.id === selectedSigningSigId) || authoritySigs.find(s => s.isDefault) || authoritySigs[0];
-    const signatureToUse = activeSig?.signature || staffConfig.officialSignature;
-    if (!adminName && !activeSig?.name) return alert("Please enter your name for authorization.");
-    if (!signatureToUse) return alert("Please select or upload an official signature in Staff Setup first.");
-
-    setIsProcessingInquiry(true);
-    const steps = [
-      'Retrieving inquiry record...',
-      'Routing inquiry to department...',
-      'Composing official response...',
-      'Filing response dossier...'
-    ];
-
-    for (const s of steps) {
-      setInquiryProcessingStatus(s);
-      await new Promise(r => setTimeout(r, 600));
-    }
-
-    if (onInquiryAction) {
-      const updates: Partial<InquiryData> = {
-        referredTo: inquiryReferredTo,
-        departmentAssigned: inquiryReferredTo,
-        status: inquiryStatus,
-        responseDetails: inquiryResponseDetails,
-        officialComments: inquiryResponseDetails,
-        officialSignature: signatureToUse,
-        officialName: adminName || activeSig?.name || 'Authorized Officer',
-        officialTitle: adminTitle || activeSig?.title || 'Compliance Officer',
-        dateReplied: ['resolved', 'closed'].includes(inquiryStatus) 
-          ? new Date().toISOString().split('T')[0] 
-          : undefined,
-        actionDate: new Date().toISOString().split('T')[0],
-        dateReceived: selectedInquiry.dateReceived || new Date(selectedInquiry.submittedAt || '').toISOString().split('T')[0]
-      };
-      await onInquiryAction(selectedInquiry.id, updates);
-    }
-    setIsProcessingInquiry(false);
-  };
 
   const handleApproveClosure = async () => {
     const activeSig = authoritySigs.find(s => s.id === selectedSigningSigId) || authoritySigs.find(s => s.isDefault) || authoritySigs[0];
@@ -1164,25 +1020,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button 
-              onClick={() => changeTab('clients')} 
-              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'clients' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
+              onClick={() => changeTab('clients_returns')} 
+              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
             >
               <div className="flex items-center">
                 <Building className="w-4 h-4 mr-3 shrink-0" />
-                Clients Registry
+                Clients & Returns Hub
               </div>
-              {tab === 'clients' && <Check className="w-4 h-4 text-emerald-400" />}
-            </button>
-
-            <button 
-              onClick={() => changeTab('returns')} 
-              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'returns' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
-            >
-              <div className="flex items-center">
-                <FileText className="w-4 h-4 mr-3 shrink-0" />
-                Client Returns
-              </div>
-              {tab === 'returns' && <Check className="w-4 h-4 text-emerald-400" />}
+              {(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') && <Check className="w-4 h-4 text-emerald-400" />}
             </button>
 
             <button 
@@ -1320,21 +1165,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button 
-              onClick={() => changeTab('clients')} 
-              title="Clients Registry"
-              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'clients' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+              onClick={() => changeTab('clients_returns')} 
+              title="Clients & Returns Hub"
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
               <Building className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
-              {!isSidebarCollapsed && <span>Clients</span>}
-            </button>
-
-            <button 
-              onClick={() => changeTab('returns')} 
-              title="Client Returns"
-              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'returns' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-            >
-              <FileText className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
-              {!isSidebarCollapsed && <span>Returns</span>}
+              {!isSidebarCollapsed && <span>Clients & Returns</span>}
             </button>
 
             <button 
@@ -1426,28 +1262,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {closures.filter(c => c.status === 'submitted').length > 0 && (
                 <span className="px-1.5 py-0.5 text-[8px] bg-rose-500 text-white rounded-full font-black animate-pulse">
                   {closures.filter(c => c.status === 'submitted').length}
-                </span>
-              )}
-            </button>
-            <button 
-              onClick={() => { setApprovalSubTab('complaints'); }}
-              className={`flex-1 py-3 px-4 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all text-center flex items-center justify-center gap-2 whitespace-nowrap ${approvalSubTab === 'complaints' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            >
-              <AlertTriangle className="w-4 h-4" /> Stakeholder Complaints
-              {complaints.filter(co => co.status === 'submitted').length > 0 && (
-                <span className="px-1.5 py-0.5 text-[8px] bg-rose-500 text-white rounded-full font-black animate-pulse">
-                  {complaints.filter(co => co.status === 'submitted').length}
-                </span>
-              )}
-            </button>
-            <button 
-              onClick={() => { setApprovalSubTab('inquiries'); }}
-              className={`flex-1 py-3 px-4 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all text-center flex items-center justify-center gap-2 whitespace-nowrap ${approvalSubTab === 'inquiries' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            >
-              <Mail className="w-4 h-4" /> Client Inquiries
-              {inquiries.filter(inq => inq.status === 'submitted').length > 0 && (
-                <span className="px-1.5 py-0.5 text-[8px] bg-rose-500 text-white rounded-full font-black animate-pulse">
-                  {inquiries.filter(inq => inq.status === 'submitted').length}
                 </span>
               )}
             </button>
@@ -1704,7 +1518,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
           </div>
         </div>
-          ) : approvalSubTab === 'cessations' ? (
+          ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 animate-in fade-in duration-300">
           <div className="lg:col-span-4 space-y-4">
             <div className="flex items-center justify-between mb-2 px-2">
@@ -1930,537 +1744,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
           </div>
         </div>
-          ) : approvalSubTab === 'complaints' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 animate-in fade-in duration-300">
-              <div className="lg:col-span-4 space-y-4">
-                <div className="flex items-center justify-between mb-2 px-2">
-                  <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-[0.3em]">Submitted Complaints</h3>
-                  <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full text-[9px] font-black">{complaints?.length || 0} Total</span>
-                </div>
-                {(!complaints || complaints.length === 0) ? (
-                  <div className="bg-white p-12 rounded-[32px] border-2 border-dashed border-slate-200 text-center text-slate-400 text-sm font-medium">No stakeholder complaints submitted</div>
-                ) : (
-                  complaints.map(co => (
-                    <div key={co.id} className="relative group">
-                      <button 
-                        onClick={() => { setSelectedComplaintId(co.id); }} 
-                        className={`w-full p-6 rounded-[32px] border text-left transition-all ${selectedComplaintId === co.id ? 'border-red-600 bg-red-50/50 shadow-xl' : 'border-white bg-white hover:border-red-200 shadow-sm'}`}
-                      >
-                        <div className="flex justify-between items-start mb-3">
-                          <span className="font-bold text-slate-800 block truncate leading-tight w-[70%]">{co.complainantName}</span>
-                          <div className={`px-2 py-0.5 text-[8px] font-black uppercase rounded-full ${
-                            co.status === 'submitted' ? 'bg-amber-100 text-amber-700 animate-pulse' : 
-                            co.status === 'investigating' ? 'bg-blue-100 text-blue-700' :
-                            co.status === 'resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {co.status}
-                          </div>
-                        </div>
-                        <div className="flex items-center space-x-3 text-[10px] text-slate-400 font-black uppercase tracking-widest">
-                          <span className="flex items-center"><MapPin className="w-3 h-3 mr-1" /> {co.county}</span>
-                          <span>•</span>
-                          <span>{new Date(co.submittedAt || '').toLocaleDateString()}</span>
-                        </div>
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); onDeleteComplaint?.(co.id); if (selectedComplaintId === co.id) setSelectedComplaintId(null); }}
-                        className="absolute top-4 right-4 p-2 bg-white text-rose-500 rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-50 border border-rose-100 z-10"
-                        title="Delete Complaint"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="lg:col-span-8">
-                {selectedComplaint ? (
-                  <div className="bg-white rounded-[40px] border border-slate-100 shadow-xl overflow-hidden animate-in slide-in-from-right duration-300">
-                    {/* Header */}
-                    <div className="bg-slate-900 p-8 text-white flex justify-between items-center">
-                      <div>
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-red-400">STAKEHOLDER COMPLAINT DOSSIER</span>
-                        <h4 className="text-xl font-black mt-1">{selectedComplaint.complainantName}</h4>
-                        <div className="flex items-center space-x-4 mt-2 text-xs text-slate-400">
-                          <span>Ref: {selectedComplaint.id}</span>
-                          <span>•</span>
-                          <span>Category: {selectedComplaint.complainantCategory}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-widest ${
-                          selectedComplaint.status === 'submitted' ? 'bg-amber-500 text-white animate-pulse' :
-                          selectedComplaint.status === 'investigating' ? 'bg-blue-500 text-white' :
-                          selectedComplaint.status === 'resolved' ? 'bg-emerald-500 text-white' : 'bg-slate-500 text-white'
-                        }`}>
-                          {selectedComplaint.status}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Details and Official Form */}
-                    <div className="p-8 space-y-8 max-h-[700px] overflow-y-auto">
-                      {/* Section 1: Details */}
-                      <div className="grid grid-cols-2 gap-6 bg-slate-50 p-6 rounded-[24px]">
-                        <div>
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">Complainant Contact</span>
-                          <span className="text-sm font-bold text-slate-700 block mt-1">{selectedComplaint.telephone || 'N/A'}</span>
-                          <span className="text-xs text-slate-400 block">{selectedComplaint.email || 'N/A'}</span>
-                        </div>
-                        <div>
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">Location / County</span>
-                          <span className="text-sm font-bold text-slate-700 block mt-1">{selectedComplaint.county} County</span>
-                          <span className="text-xs text-slate-400 block">{selectedComplaint.postalAddress || 'No postal address'}</span>
-                        </div>
-                        <div className="col-span-2 border-t pt-4">
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">Nature of Complaint</span>
-                          <span className="text-sm font-black text-slate-800 block mt-1 uppercase">{selectedComplaint.natureOfComplaint}</span>
-                        </div>
-                        <div className="col-span-2 border-t pt-4">
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block font-mono">Complaint Description & Details</span>
-                          <p className="text-sm font-medium text-slate-600 mt-2 whitespace-pre-wrap bg-white p-4 rounded-xl border border-slate-100">{selectedComplaint.complaintDetails}</p>
-                        </div>
-                      </div>
-
-                      {/* Section 2: Official Form (Editable by Admin) */}
-                      <div className="border-t pt-8 space-y-6">
-                        <div>
-                          <h5 className="font-black text-slate-900 text-xs uppercase tracking-[0.2em] mb-1">6. For Official Use Only (Kenya Dairy Board)</h5>
-                          <p className="text-xs text-slate-400 font-semibold">Verify facts, classify category, write findings, and sign authorization.</p>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-6">
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Complaint Category Code</label>
-                            <input 
-                              type="text"
-                              value={complaintCategoryCode}
-                              onChange={(e) => setComplaintCategoryCode(e.target.value)}
-                              placeholder="e.g. KDB/COMP/001"
-                              className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Assigned To Officer/Dept</label>
-                            <input 
-                              type="text"
-                              value={complaintAssignedTo}
-                              onChange={(e) => setComplaintAssignedTo(e.target.value)}
-                              placeholder="e.g. Compliance Department"
-                              className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 gap-6">
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Processing Status</label>
-                            <select 
-                              value={complaintStatus}
-                              onChange={(e) => setComplaintStatus(e.target.value as any)}
-                              className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                            >
-                              <option value="submitted">Submitted (Pending Review)</option>
-                              <option value="investigating">Under Investigation</option>
-                              <option value="resolved">Resolved</option>
-                              <option value="closed">Closed</option>
-                              <option value="rejected">Rejected</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-6">
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Investigation Findings</label>
-                            <textarea 
-                              rows={3}
-                              value={investigationFindings}
-                              onChange={(e) => setInvestigationFindings(e.target.value)}
-                              placeholder="Enter details of investigation..."
-                              className="w-full p-4 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-medium transition-all"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Action Taken</label>
-                            <textarea 
-                              rows={3}
-                              value={complaintActionTaken}
-                              onChange={(e) => setComplaintActionTaken(e.target.value)}
-                              placeholder="Enter actions taken to resolve..."
-                              className="w-full p-4 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-medium transition-all"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Signature Block */}
-                        <div className="p-6 rounded-[24px] bg-slate-50 border border-dashed flex flex-col space-y-4">
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">KDB Administrative Sign-off</span>
-                          
-                          <div className="grid grid-cols-3 gap-6 items-end">
-                            <div>
-                              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Full Name</label>
-                              <input 
-                                type="text"
-                                value={adminName}
-                                onChange={(e) => setAdminName(e.target.value)}
-                                placeholder="Enter your full name"
-                                className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Title / Designation</label>
-                              <input 
-                                type="text"
-                                value={adminTitle}
-                                onChange={(e) => setAdminTitle(e.target.value)}
-                                placeholder="e.g. Compliance Officer"
-                                className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                              />
-                            </div>
-                            <div className="flex flex-col items-center justify-center p-3 border rounded-xl bg-white min-h-[60px]">
-                              {staffConfig.officialSignature ? (
-                                <img 
-                                  src={staffConfig.officialSignature} 
-                                  alt="Officer Signature" 
-                                  className="max-h-[50px] object-contain" 
-                                  referrerPolicy="no-referrer"
-                                />
-                              ) : (
-                                <span className="text-[9px] font-black text-rose-500 bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-100">MISSING SIGNATURE</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Actions */}
-                        <div className="flex space-x-4 pt-4 border-t">
-                          <button 
-                            onClick={handleProcessComplaint}
-                            disabled={isProcessingComplaint}
-                            className="flex-1 py-4 bg-slate-900 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl shadow-lg hover:bg-slate-800 transition-all flex items-center justify-center disabled:opacity-50"
-                          >
-                            {isProcessingComplaint ? (
-                              <>
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                {complaintProcessingStatus}
-                              </>
-                            ) : (
-                              'Save & Process Complaint'
-                            )}
-                          </button>
-                          
-                          <button 
-                            onClick={() => setShowComplaintPreview(true)}
-                            className="px-6 py-4 border border-slate-200 text-slate-700 font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl hover:bg-slate-50 transition-all flex items-center justify-center"
-                          >
-                            <Eye className="w-4 h-4 mr-2" /> Preview Form
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    {/* Hidden offscreen preview for automated download generation */}
-                    <ComplaintPDFPreview complaint={selectedComplaint} isHidden={true} onClose={() => {}} />
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-[600px] text-slate-300 bg-white rounded-[40px] border-2 border-dashed border-slate-200">
-                    <AlertTriangle className="w-20 h-20 opacity-10 mb-8" />
-                    <p className="text-[10px] font-black tracking-[0.5em] uppercase text-center px-10">Select a complaint from the list to review and file official details.</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Popup visual preview modal if requested */}
-              {showComplaintPreview && selectedComplaint && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center z-[100] animate-in fade-in duration-300 p-6 overflow-y-auto">
-                  <div className="bg-white rounded-[40px] shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col relative">
-                    <button 
-                      onClick={() => setShowComplaintPreview(false)}
-                      className="absolute top-6 right-6 p-3 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full transition-all z-10"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                    <div className="p-8 bg-slate-50 border-b flex justify-between items-center pr-20">
-                      <div>
-                        <h4 className="text-lg font-black text-slate-900">Official Complaints Document</h4>
-                        <p className="text-xs text-slate-400 font-semibold mt-1">This matches the official KDB Stakeholder Complaints PDF format exactly.</p>
-                      </div>
-                      <button 
-                        onClick={async () => {
-                          await downloadComplaintPDF(selectedComplaint, `complaint-form-pdf-${selectedComplaint.id}`);
-                        }}
-                        className="py-3 px-6 bg-slate-900 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-xl hover:bg-slate-800 transition-all flex items-center shadow-md"
-                      >
-                        <Download className="w-4 h-4 mr-2" /> Download PDF Document
-                      </button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-12 flex justify-center bg-slate-100">
-                      <div className="bg-white shadow-lg rounded-2xl border p-2 scale-90 origin-top">
-                        <ComplaintPDFPreview complaint={selectedComplaint} onClose={() => setShowComplaintPreview(false)} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 animate-in fade-in duration-300">
-              <div className="lg:col-span-4 space-y-4">
-                <div className="flex items-center justify-between mb-2 px-2">
-                  <h3 className="font-black text-slate-400 text-[10px] uppercase tracking-[0.3em]">Submitted Inquiries</h3>
-                  <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[9px] font-black">{inquiries?.length || 0} Total</span>
-                </div>
-                {(!inquiries || inquiries.length === 0) ? (
-                  <div className="bg-white p-12 rounded-[32px] border-2 border-dashed border-slate-200 text-center text-slate-400 text-sm font-medium">No client inquiries submitted</div>
-                ) : (
-                  inquiries.map(inq => (
-                    <div key={inq.id} className="relative group">
-                      <button 
-                        onClick={() => { setSelectedInquiryId(inq.id); }} 
-                        className={`w-full p-6 rounded-[32px] border text-left transition-all ${selectedInquiryId === inq.id ? 'border-sky-600 bg-sky-50/50 shadow-xl' : 'border-white bg-white hover:border-sky-200 shadow-sm'}`}
-                      >
-                        <div className="flex justify-between items-start mb-3">
-                          <span className="font-bold text-slate-800 block truncate leading-tight w-[70%]">{inq.clientName}</span>
-                          <div className={`px-2 py-0.5 text-[8px] font-black uppercase rounded-full ${
-                            inq.status === 'submitted' ? 'bg-amber-100 text-amber-700 animate-pulse' : 
-                            inq.status === 'referred' ? 'bg-blue-100 text-blue-700' :
-                            inq.status === 'resolved' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {inq.status}
-                          </div>
-                        </div>
-                        <div className="flex items-center space-x-3 text-[10px] text-slate-400 font-black uppercase tracking-widest">
-                          <span className="flex items-center"><MapPin className="w-3 h-3 mr-1" /> {inq.county}</span>
-                          <span>•</span>
-                          <span>{new Date(inq.submittedAt || '').toLocaleDateString()}</span>
-                        </div>
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); onDeleteInquiry?.(inq.id); if (selectedInquiryId === inq.id) setSelectedInquiryId(null); }}
-                        className="absolute top-4 right-4 p-2 bg-white text-rose-500 rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-50 border border-rose-100 z-10"
-                        title="Delete Inquiry"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <div className="lg:col-span-8">
-                {selectedInquiry ? (
-                  <div className="bg-white rounded-[40px] border border-slate-100 shadow-xl overflow-hidden animate-in slide-in-from-right duration-300">
-                    {/* Header */}
-                    <div className="bg-slate-900 p-8 text-white flex justify-between items-center">
-                      <div>
-                        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-sky-400">CLIENT INQUIRY DOSSIER</span>
-                        <h4 className="text-xl font-black mt-1">{selectedInquiry.clientName}</h4>
-                        <div className="flex items-center space-x-4 mt-2 text-xs text-slate-400">
-                          <span>Ref: {selectedInquiry.id}</span>
-                          <span>•</span>
-                          <span>Category: {selectedInquiry.clientCategory}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-widest ${
-                          selectedInquiry.status === 'submitted' ? 'bg-amber-500 text-white animate-pulse' :
-                          selectedInquiry.status === 'referred' ? 'bg-blue-500 text-white' :
-                          selectedInquiry.status === 'resolved' ? 'bg-emerald-500 text-white' : 'bg-slate-500 text-white'
-                        }`}>
-                          {selectedInquiry.status}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Details and Official Form */}
-                    <div className="p-8 space-y-8 max-h-[700px] overflow-y-auto">
-                      {/* Section 1: Details */}
-                      <div className="grid grid-cols-2 gap-6 bg-slate-50 p-6 rounded-[24px]">
-                        <div>
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">Client Contact</span>
-                          <span className="text-sm font-bold text-slate-700 block mt-1">{selectedInquiry.telephone || 'N/A'}</span>
-                          <span className="text-xs text-slate-400 block">{selectedInquiry.email || 'N/A'}</span>
-                        </div>
-                        <div>
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">Location / County</span>
-                          <span className="text-sm font-bold text-slate-700 block mt-1">{selectedInquiry.location || 'N/A'}, {selectedInquiry.county} County</span>
-                          <span className="text-xs text-slate-400 block">{selectedInquiry.postalAddress || 'No postal address'}</span>
-                        </div>
-                        <div className="col-span-2 border-t pt-4">
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block font-mono">Nature of Inquiry & Message</span>
-                          <p className="text-sm font-medium text-slate-600 mt-2 whitespace-pre-wrap bg-white p-4 rounded-xl border border-slate-100">{selectedInquiry.message}</p>
-                        </div>
-                      </div>
-
-                      {/* Section 2: Official Form (Editable by Admin) */}
-                      <div className="border-t pt-8 space-y-6">
-                        <div>
-                          <h5 className="font-black text-slate-900 text-xs uppercase tracking-[0.2em] mb-1">8. For Official Use Only (Kenya Dairy Board)</h5>
-                          <p className="text-xs text-slate-400 font-semibold">Refer inquiry, provide response details, select status and authorize.</p>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-6">
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Referred To Officer/Dept</label>
-                            <input 
-                              type="text"
-                              value={inquiryReferredTo}
-                              onChange={(e) => setInquiryReferredTo(e.target.value)}
-                              placeholder="e.g. Technical Department"
-                              className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Processing Status</label>
-                            <select 
-                              value={inquiryStatus}
-                              onChange={(e) => setInquiryStatus(e.target.value as any)}
-                              className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                            >
-                              <option value="submitted">Submitted (Pending)</option>
-                              <option value="referred">Referred</option>
-                              <option value="resolved">Resolved</option>
-                              <option value="closed">Closed</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 gap-6">
-                          <div>
-                            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Response / Action Taken Details</label>
-                            <textarea 
-                              rows={4}
-                              value={inquiryResponseDetails}
-                              onChange={(e) => setInquiryResponseDetails(e.target.value)}
-                              placeholder="Enter details of official KDB response..."
-                              className="w-full p-4 bg-slate-50 border border-slate-100 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 text-sm font-medium transition-all"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Signature Block */}
-                        <div className="p-6 rounded-[24px] bg-slate-50 border border-dashed flex flex-col space-y-4">
-                          <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 block">KDB Administrative Sign-off</span>
-                          
-                          <div className="grid grid-cols-3 gap-6 items-end">
-                            <div>
-                              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Full Name</label>
-                              <input 
-                                type="text"
-                                value={adminName}
-                                onChange={(e) => setAdminName(e.target.value)}
-                                placeholder="Enter your full name"
-                                className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 block mb-2">Officer Title / Designation</label>
-                              <input 
-                                type="text"
-                                value={adminTitle}
-                                onChange={(e) => setAdminTitle(e.target.value)}
-                                placeholder="e.g. Compliance Officer"
-                                className="w-full px-4 py-3 bg-white border border-slate-100 rounded-xl focus:ring-2 focus:ring-slate-900 text-sm font-semibold transition-all"
-                              />
-                            </div>
-                            <div className="flex flex-col items-center justify-center p-3 border rounded-xl bg-white min-h-[60px]">
-                              {staffConfig.officialSignature ? (
-                                <img 
-                                  src={staffConfig.officialSignature} 
-                                  alt="Officer Signature" 
-                                  className="max-h-[50px] object-contain" 
-                                  referrerPolicy="no-referrer"
-                                />
-                              ) : (
-                                <span className="text-[9px] font-black text-rose-500 bg-rose-50 px-3 py-1.5 rounded-lg border border-rose-100">MISSING SIGNATURE</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Actions */}
-                        <div className="flex space-x-4 pt-4 border-t">
-                          <button 
-                            onClick={handleProcessInquiry}
-                            disabled={isProcessingInquiry}
-                            className="flex-1 py-4 bg-slate-900 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl shadow-lg hover:bg-slate-800 transition-all flex items-center justify-center disabled:opacity-50"
-                          >
-                            {isProcessingInquiry ? (
-                              <>
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                {inquiryProcessingStatus}
-                              </>
-                            ) : (
-                              'Save & Process Inquiry'
-                            )}
-                          </button>
-                          
-                          <button 
-                            onClick={() => setShowInquiryPreview(true)}
-                            className="px-6 py-4 border border-slate-200 text-slate-700 font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl hover:bg-slate-50 transition-all flex items-center justify-center"
-                          >
-                            <Eye className="w-4 h-4 mr-2" /> Preview Form
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    {/* Hidden offscreen preview for automated download generation */}
-                    <InquiryPDFPreview inquiry={selectedInquiry} isHidden={true} onClose={() => {}} />
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-[600px] text-slate-300 bg-white rounded-[40px] border-2 border-dashed border-slate-200">
-                    <Mail className="w-20 h-20 opacity-10 mb-8" />
-                    <p className="text-[10px] font-black tracking-[0.5em] uppercase text-center px-10">Select an inquiry from the list to review and compose official response.</p>
-                  </div>
-                )}
-              </div>
-
-              {/* Popup visual preview modal if requested */}
-              {showInquiryPreview && selectedInquiry && (
-                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center z-[100] animate-in fade-in duration-300 p-6 overflow-y-auto">
-                  <div className="bg-white rounded-[40px] shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col relative">
-                    <button 
-                      onClick={() => setShowInquiryPreview(false)}
-                      className="absolute top-6 right-6 p-3 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-full transition-all z-10"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                    <div className="p-8 bg-slate-50 border-b flex justify-between items-center pr-20">
-                      <div>
-                        <h4 className="text-lg font-black text-slate-900">Official Inquiry Document</h4>
-                        <p className="text-xs text-slate-400 font-semibold mt-1">This matches the official KDB Client Inquiry PDF format exactly.</p>
-                      </div>
-                      <button 
-                        onClick={async () => {
-                          await downloadInquiryPDF(selectedInquiry, `inquiry-form-pdf-${selectedInquiry.id}`);
-                        }}
-                        className="py-3 px-6 bg-slate-900 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-xl hover:bg-slate-800 transition-all flex items-center shadow-md"
-                      >
-                        <Download className="w-4 h-4 mr-2" /> Download PDF Document
-                      </button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-12 flex justify-center bg-slate-100">
-                      <div className="bg-white shadow-lg rounded-2xl border p-2 scale-90 origin-top">
-                        <InquiryPDFPreview inquiry={selectedInquiry} onClose={() => setShowInquiryPreview(false)} />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+      )}
         </div>
       )}
 
-      {tab === 'clients' && (
-        <div className="animate-in fade-in duration-500">
-          <LicensedClientsModule />
-        </div>
-      )}
-
-      {tab === 'returns' && (
-        <div className="animate-in fade-in duration-500">
-          <ClientReturnsModule debtors={debtors} onDebtorUpdate={onDebtorUpdate} onRefresh={onRefresh} />
+      {(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') && (
+        <div className="animate-in fade-in duration-300">
+          <ClientsAndReturnsHub 
+            initialTab={tab === 'returns' ? 'returns' : 'clients'} 
+            debtors={debtors} 
+            onDebtorUpdate={onDebtorUpdate} 
+            onRefresh={onRefresh}
+          />
         </div>
       )}
 
@@ -2522,87 +1817,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   <div className="grid grid-cols-1 gap-3">
-                    {/* Module 1: Client Inquiry */}
-                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
-                      staffConfig.enabledModules?.clientInquiry !== false ? 'bg-white border-sky-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
-                    }`}>
-                      <div className="flex items-center space-x-3">
-                        <div className={`p-2.5 rounded-xl ${
-                          staffConfig.enabledModules?.clientInquiry !== false ? 'bg-sky-50 text-sky-600' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          <HelpCircle className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-xs text-slate-900">Client Inquiry Form</span>
-                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
-                              staffConfig.enabledModules?.clientInquiry !== false ? 'bg-sky-100 text-sky-800' : 'bg-slate-200 text-slate-600'
-                            }`}>
-                              {staffConfig.enabledModules?.clientInquiry !== false ? 'Active' : 'Hidden'}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Allow public stakeholders to submit general or technical inquiries to KDB.</span>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleToggleModule('clientInquiry')}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          staffConfig.enabledModules?.clientInquiry !== false ? 'bg-sky-600' : 'bg-slate-300'
-                        }`}
-                        role="switch"
-                        aria-checked={staffConfig.enabledModules?.clientInquiry !== false}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                            staffConfig.enabledModules?.clientInquiry !== false ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Module 2: Stakeholder Complaints */}
-                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
-                      staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-white border-rose-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
-                    }`}>
-                      <div className="flex items-center space-x-3">
-                        <div className={`p-2.5 rounded-xl ${
-                          staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-rose-50 text-rose-600' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          <FileCheck className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-xs text-slate-900">Stakeholder Complaints Form</span>
-                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
-                              staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-600'
-                            }`}>
-                              {staffConfig.enabledModules?.stakeholderComplaint !== false ? 'Active' : 'Hidden'}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Allow stakeholders to submit formal complaint reports to KDB.</span>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleToggleModule('stakeholderComplaint')}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          staffConfig.enabledModules?.stakeholderComplaint !== false ? 'bg-rose-600' : 'bg-slate-300'
-                        }`}
-                        role="switch"
-                        aria-checked={staffConfig.enabledModules?.stakeholderComplaint !== false}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                            staffConfig.enabledModules?.stakeholderComplaint !== false ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Module 3: Levy Payment Agreement */}
+                    {/* Module 1: Levy Payment Agreement */}
                     <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
                       staffConfig.enabledModules?.levyAgreement !== false ? 'bg-white border-emerald-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
                     }`}>

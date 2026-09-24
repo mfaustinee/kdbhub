@@ -1,19 +1,17 @@
 
 import DataValidationModule from './components/DataValidationModule';
 import { ScopeDisclosureModule } from './components/ScopeDisclosureModule';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { AgreementForm } from './components/AgreementForm.tsx';
 import { AdminDashboard } from './components/AdminDashboard.tsx';
+import { AdminLogin } from './components/AdminLogin.tsx';
 import { SuccessScreen } from './components/SuccessScreen.tsx';
 import { PortalHub } from './components/PortalHub.tsx';
 import { ClosureForm } from './components/ClosureForm.tsx';
-import { ComplaintForm } from './components/ComplaintForm.tsx';
-import { InquiryForm } from './components/InquiryForm.tsx';
 import { DboSigningPortal } from './components/DboSigningPortal.tsx';
-import { AdminLogin } from './components/AdminLogin.tsx';
 import { useAuth } from './src/contexts/AuthContext.tsx';
-import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient, ComplaintData, InquiryData } from './types.ts';
+import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient } from './types.ts';
 import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp } from 'lucide-react';
 import { DBService } from './services/db.ts';
 import { isSupabaseDisabled } from './components/lib/supabase.ts';
@@ -25,17 +23,13 @@ const App: React.FC = () => {
   const location = useLocation();
   const [agreements, setAgreements] = useState<AgreementData[]>([]);
   const [closures, setClosures] = useState<ClosureNotificationData[]>([]);
-  const [complaints, setComplaints] = useState<ComplaintData[]>([]);
-  const [inquiries, setInquiries] = useState<InquiryData[]>([]);
   const [debtors, setDebtors] = useState<DebtorRecord[]>([]);
   const [clients, setClients] = useState<LicensedClient[]>([]);
   const unreadCount = useMemo(() => {
     const unreadAgreements = agreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length;
     const unreadClosures = closures.filter(c => c.status === 'submitted').length;
-    const unreadComplaints = complaints.filter(co => co.status === 'submitted').length;
-    const unreadInquiries = inquiries.filter(inq => inq.status === 'submitted').length;
-    return unreadAgreements + unreadClosures + unreadComplaints + unreadInquiries;
-  }, [agreements, closures, complaints, inquiries]);
+    return unreadAgreements + unreadClosures;
+  }, [agreements, closures]);
 
   const [isSyncing, setIsSyncing] = useState(false);
   const [staffConfig, setStaffConfig] = useState<StaffConfig>({
@@ -43,8 +37,6 @@ const App: React.FC = () => {
     enabledModules: {
       levyAgreement: true,
       businessClosure: true,
-      clientInquiry: true,
-      stakeholderComplaint: true,
     }
   });
   const [currentAgreement, setCurrentAgreement] = useState<AgreementData | null>(null);
@@ -72,12 +64,6 @@ const App: React.FC = () => {
             loadDatabase(true);
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'closures' }, () => {
-            loadDatabase(true);
-          })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'complaints' }, () => {
-            loadDatabase(true);
-          })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'inquiries' }, () => {
             loadDatabase(true);
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'staff_config' }, () => {
@@ -130,9 +116,10 @@ const App: React.FC = () => {
   }, [isAdminAuthenticated, location.pathname]);
 
   // Lazy-load client & debtor data only when needed
+  const isLoadingAdminDataRef = useRef(false);
   useEffect(() => {
-    const needsAdminData = isAdminAuthenticated || location.pathname === '/admin' || location.pathname === '/payment-agreement';
-    if (needsAdminData && (debtors.length === 0 || clients.length === 0)) {
+    const needsAdminData = (location.pathname === '/admin' && isAdminAuthenticated) || location.pathname === '/payment-agreement' || location.pathname === '/data-validation' || isAdminAuthenticated;
+    if (needsAdminData && (debtors.length === 0 || clients.length === 0) && !isLoadingAdminDataRef.current) {
       loadAdminData();
     }
   }, [location.pathname, isAdminAuthenticated]);
@@ -147,6 +134,8 @@ const App: React.FC = () => {
   };
 
   const loadAdminData = async (forceFresh = false) => {
+    if (isLoadingAdminDataRef.current && !forceFresh) return;
+    isLoadingAdminDataRef.current = true;
     try {
       const [storedDebtors, storedReturns, storedClients] = await Promise.all([
         DBService.getDebtors(forceFresh),
@@ -157,7 +146,7 @@ const App: React.FC = () => {
       setClients(storedClients || []);
 
       let baseDebtors = storedDebtors;
-      if (baseDebtors.length === 0) {
+      if (!baseDebtors || baseDebtors.length === 0) {
         baseDebtors = [
           {
             id: 'D001',
@@ -175,7 +164,11 @@ const App: React.FC = () => {
             installments: [{ no: 1, period: 'Jan 2024', dueDate: '', amount: 150000 }]
           }
         ];
-        await DBService.saveDebtors(baseDebtors);
+        try {
+          await DBService.saveDebtors(baseDebtors);
+        } catch (saveErr) {
+          console.warn("[App] Initial saveDebtors notice:", saveErr);
+        }
       }
 
       // Group returns with outstandingBalance > 0 by client
@@ -277,6 +270,8 @@ const App: React.FC = () => {
       setDebtors(uniqueDebtors);
     } catch (err) {
       console.error("[App] Failed to load admin debtor data:", err);
+    } finally {
+      isLoadingAdminDataRef.current = false;
     }
   };
 
@@ -286,12 +281,10 @@ const App: React.FC = () => {
     }
     setIsSyncing(true);
     try {
-      const [storedAgreements, storedStaff, storedClosures, storedComplaints, storedInquiries] = await Promise.all([
+      const [storedAgreements, storedStaff, storedClosures] = await Promise.all([
         DBService.getAgreements(forceFresh),
         DBService.getStaffConfig(),
-        DBService.getClosures(forceFresh),
-        DBService.getComplaints(forceFresh),
-        DBService.getInquiries(forceFresh)
+        DBService.getClosures(forceFresh)
       ]);
 
       const uniqueAgreements = Array.from(new Map(storedAgreements.map(a => [a.id, a])).values());
@@ -299,12 +292,6 @@ const App: React.FC = () => {
 
       const uniqueClosures = Array.from(new Map(storedClosures.map(c => [c.id, c])).values());
       setClosures(uniqueClosures);
-
-      const uniqueComplaints = Array.from(new Map(storedComplaints.map(co => [co.id, co])).values());
-      setComplaints(uniqueComplaints);
-
-      const uniqueInquiries = Array.from(new Map(storedInquiries.map(inq => [inq.id, inq])).values());
-      setInquiries(uniqueInquiries);
       
       // Check for direct link ID
       const urlParams = new URLSearchParams(window.location.search);
@@ -319,7 +306,7 @@ const App: React.FC = () => {
       
       setStaffConfig(storedStaff);
 
-      const needsAdminData = isAdminAuthenticated || location.pathname === '/admin' || location.pathname === '/payment-agreement';
+      const needsAdminData = location.pathname === '/admin' || location.pathname === '/payment-agreement' || location.pathname === '/data-validation' || isAdminAuthenticated;
       if (needsAdminData) {
         await loadAdminData(forceFresh);
       }
@@ -329,6 +316,10 @@ const App: React.FC = () => {
       setTimeout(() => setIsSyncing(false), 300);
     }
   };
+
+  const handleRefreshDatabase = useCallback(() => {
+    loadDatabase(true);
+  }, []);
 
   const handleClientSubmit = async (data: AgreementData) => {
     setIsSyncing(true);
@@ -365,44 +356,6 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error("Closure submission failed:", error);
       alert(`Cessation notification submission failed: ${error.message || 'Please try again.'}`);
-      throw error;
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleComplaintSubmit = async (data: ComplaintData) => {
-    setIsSyncing(true);
-    try {
-      const submission = { ...data, submittedAt: data.submittedAt || new Date().toISOString() };
-      await DBService.saveComplaint(submission);
-      
-      setComplaints(prev => {
-        const filtered = prev.filter(co => co.id !== submission.id);
-        return [submission, ...filtered];
-      });
-    } catch (error: any) {
-      console.error("Complaint submission failed:", error);
-      alert(`Complaint submission failed: ${error.message || 'Please try again.'}`);
-      throw error;
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleInquirySubmit = async (data: InquiryData) => {
-    setIsSyncing(true);
-    try {
-      const submission = { ...data, submittedAt: data.submittedAt || new Date().toISOString() };
-      await DBService.saveInquiry(submission);
-      
-      setInquiries(prev => {
-        const filtered = prev.filter(inq => inq.id !== submission.id);
-        return [submission, ...filtered];
-      });
-    } catch (error: any) {
-      console.error("Inquiry submission failed:", error);
-      alert(`Inquiry submission failed: ${error.message || 'Please try again.'}`);
       throw error;
     } finally {
       setIsSyncing(false);
@@ -515,58 +468,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleComplaintAction = async (id: string, updates: Partial<ComplaintData>) => {
-    setIsSyncing(true);
-    try {
-      await DBService.updateComplaint(id, updates);
-      setComplaints(prev => prev.map(co => co.id === id ? { ...co, ...updates } : co));
-    } catch (error) {
-      console.error("Complaint action failed:", error);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleDeleteComplaint = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this complaint? This action cannot be undone.")) return;
-    
-    setIsSyncing(true);
-    try {
-      await DBService.deleteComplaint(id);
-      setComplaints(prev => prev.filter(co => co.id !== id));
-    } catch (error) {
-      console.error("Complaint deletion failed:", error);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleInquiryAction = async (id: string, updates: Partial<InquiryData>) => {
-    setIsSyncing(true);
-    try {
-      await DBService.updateInquiry(id, updates);
-      setInquiries(prev => prev.map(inq => inq.id === id ? { ...inq, ...updates } : inq));
-    } catch (error) {
-      console.error("Inquiry action failed:", error);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const handleDeleteInquiry = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this inquiry? This action cannot be undone.")) return;
-    
-    setIsSyncing(true);
-    try {
-      await DBService.deleteInquiry(id);
-      setInquiries(prev => prev.filter(inq => inq.id !== id));
-    } catch (error) {
-      console.error("Inquiry deletion failed:", error);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
   const handleDebtorUpdate = async (updated: DebtorRecord[]) => {
     setDebtors(updated);
     await DBService.saveDebtors(updated);
@@ -607,15 +508,23 @@ const App: React.FC = () => {
                 </div>
               </div>
               
-              <nav className="flex items-center space-x-1">
-                {isAdminAuthenticated && (
+              <nav className="flex items-center space-x-1 sm:space-x-2">
+                <button 
+                  onClick={() => navigate('/')}
+                  className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${['/', '/portal'].includes(location.pathname) ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                >
+                  <User className="w-3.5 h-3.5 mr-1.5" />
+                  Public Portals
+                </button>
+
+                {location.pathname === '/admin' && isAdminAuthenticated ? (
                   <>
                     <button 
-                      onClick={() => navigate('/')}
-                      className={`flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${['/', '/portal'].includes(location.pathname) ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+                      onClick={handleAdminAccess}
+                      className="relative flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer bg-slate-800 text-white shadow-sm"
                     >
-                      <User className="w-3.5 h-3.5 mr-1.5" />
-                      Public Portals
+                      <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
+                      Admin Portal
                     </button>
 
                     <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700">
@@ -626,28 +535,15 @@ const App: React.FC = () => {
                     </div>
 
                     <button 
-                      onClick={handleAdminAccess}
-                      className={`relative flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${location.pathname === '/admin' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-                    >
-                      <ClipboardList className="w-3.5 h-3.5 mr-1.5" />
-                      Admin
-                      {unreadCount > 0 && location.pathname !== '/admin' && (
-                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white text-[9px] flex items-center justify-center rounded-full border border-white animate-bounce font-bold">
-                          {unreadCount}
-                        </span>
-                      )}
-                    </button>
-
-                    <button 
                       onClick={handleAdminLogout}
-                      className="flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                      className="flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
                       title="Sign out of administrative session"
                     >
-                      <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                      <LogOut className="w-3.5 h-3.5 mr-1" />
                       Logout
                     </button>
                   </>
-                )}
+                ) : null}
               </nav>
             </div>
           </div>
@@ -662,24 +558,18 @@ const App: React.FC = () => {
             <PortalHub 
               onSelectPaymentPortal={() => navigate('/payment-agreement')} 
               onSelectClosurePortal={() => navigate('/closure-notice')}
-              onSelectComplaintPortal={() => navigate('/complaints')}
-              onSelectInquiryPortal={() => navigate('/inquiries')}
               unreadAgreementsCount={agreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length}
               unreadClosuresCount={closures.filter(c => c.status === 'submitted').length}
               enabledModules={staffConfig.enabledModules}
             />
           } />
-          <Route path="/data-validation" element={
-            isAdminAuthenticated ? <DataValidationModule /> : <AdminLogin returnTo="/data-validation" />
-          } />
+          <Route path="/data-validation" element={<DataValidationModule />} />
           <Route path="/scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
           <Route path="/sign-scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
           <Route path="/portal" element={
             <PortalHub 
               onSelectPaymentPortal={() => navigate('/payment-agreement')} 
               onSelectClosurePortal={() => navigate('/closure-notice')}
-              onSelectComplaintPortal={() => navigate('/complaints')}
-              onSelectInquiryPortal={() => navigate('/inquiries')}
               unreadAgreementsCount={agreements.filter(a => a.status === 'submitted' || a.status === 'resubmission_requested').length}
               unreadClosuresCount={closures.filter(c => c.status === 'submitted').length}
               enabledModules={staffConfig.enabledModules}
@@ -725,70 +615,24 @@ const App: React.FC = () => {
               </div>
             )
           } />
-          <Route path="/complaints" element={
-            staffConfig.enabledModules?.stakeholderComplaint !== false ? (
-              <ComplaintForm onSubmit={handleComplaintSubmit} onBack={() => navigate('/')} />
-            ) : (
-              <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 shadow-xl text-center space-y-6">
-                <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600 border border-amber-100">
-                  <Lock className="w-7 h-7" />
-                </div>
-                <div className="space-y-2">
-                  <h2 className="text-xl font-black text-slate-800">Complaints Portal Offline</h2>
-                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    This portal module is currently offline or under administrative review. Please check back later or contact Kenya Dairy Board support.
-                  </p>
-                </div>
-                <button onClick={() => navigate('/')} className="w-full py-3.5 bg-slate-900 text-white text-xs font-black rounded-2xl hover:bg-slate-800 transition-all uppercase tracking-widest">
-                  Return to Portal Hub
-                </button>
-              </div>
-            )
-          } />
-          <Route path="/inquiries" element={
-            staffConfig.enabledModules?.clientInquiry !== false ? (
-              <InquiryForm onSubmit={handleInquirySubmit} onBack={() => navigate('/')} />
-            ) : (
-              <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 shadow-xl text-center space-y-6">
-                <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600 border border-amber-100">
-                  <Lock className="w-7 h-7" />
-                </div>
-                <div className="space-y-2">
-                  <h2 className="text-xl font-black text-slate-800">Inquiries Portal Offline</h2>
-                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    This portal module is currently offline or under administrative review. Please check back later or contact Kenya Dairy Board support.
-                  </p>
-                </div>
-                <button onClick={() => navigate('/')} className="w-full py-3.5 bg-slate-900 text-white text-xs font-black rounded-2xl hover:bg-slate-800 transition-all uppercase tracking-widest">
-                  Return to Portal Hub
-                </button>
-              </div>
-            )
-          } />
           <Route path="/admin" element={
             isAdminAuthenticated ? (
               <AdminDashboard 
                 agreements={agreements} 
                 closures={closures}
-                complaints={complaints}
-                inquiries={inquiries}
                 debtors={debtors}
                 staffConfig={staffConfig}
                 isSyncing={isSyncing}
-                onRefresh={() => loadDatabase(true)}
+                onRefresh={handleRefreshDatabase}
                 onAction={handleAdminAction} 
                 onDeleteAgreement={handleDeleteAgreement}
                 onClosureAction={handleClosureAction}
                 onDeleteClosure={handleDeleteClosure}
-                onComplaintAction={handleComplaintAction}
-                onDeleteComplaint={handleDeleteComplaint}
-                onInquiryAction={handleInquiryAction}
-                onDeleteInquiry={handleDeleteInquiry}
                 onDebtorUpdate={handleDebtorUpdate}
                 onStaffUpdate={handleStaffUpdate}
               />
             ) : (
-              <AdminLogin returnTo="/admin" />
+              <AdminLogin returnTo="/admin" onSuccess={() => navigate('/admin')} />
             )
           } />
           <Route path="/success" element={

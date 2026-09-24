@@ -15,8 +15,6 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(process.cwd(), "data");
 const AGREEMENTS_FILE = path.join(DATA_DIR, "agreements.json");
 const CLOSURES_FILE = path.join(DATA_DIR, "closures.json");
-const COMPLAINTS_FILE = path.join(DATA_DIR, "complaints.json");
-const INQUIRIES_FILE = path.join(DATA_DIR, "inquiries.json");
 const DEBTORS_FILE = path.join(DATA_DIR, "debtors.json");
 const STAFF_FILE = path.join(DATA_DIR, "staff.json");
 const AUTHORITY_SIGNATURES_FILE = path.join(DATA_DIR, "authority_signatures.json");
@@ -237,9 +235,8 @@ async function startServer() {
         res.setHeader('Expires', '0');
       }
 
-      // Hardened Security Headers
+      // Hardened Security Headers (Permit embedding in AI Studio preview iframe)
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
       res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
       next();
     });
@@ -262,8 +259,6 @@ Allow: /
 Allow: /portal
 Allow: /agreements
 Allow: /cessations
-Allow: /complaints
-Allow: /inquiries
 `);
     });
 
@@ -655,160 +650,6 @@ Allow: /inquiries
       }
     });
 
-    logToFile("[Server] Registering complaints routes...");
-    app.get("/api/complaints", async (req, res) => {
-      try {
-        const complaints = await readJsonArrayFile(COMPLAINTS_FILE);
-        res.json(complaints);
-      } catch (error) {
-        logToFile(`Error reading complaints: ${error}`);
-        res.status(500).json({ error: "Failed to read complaints" });
-      }
-    });
-
-    app.post("/api/complaints", async (req, res) => {
-      try {
-        logToFile(`Attempting to save complaint: ${req.body?.id}`);
-        if (!req.body || !req.body.id) {
-          logToFile("Error: Missing complaint ID in request body");
-          return res.status(400).json({ error: "Missing complaint ID" });
-        }
-
-        let complaints = await readJsonArrayFile(COMPLAINTS_FILE);
-
-        const newComplaint = req.body;
-        const index = complaints.findIndex((c: any) => c.id === newComplaint.id);
-        if (index !== -1) {
-          logToFile(`Updating existing complaint: ${newComplaint.id}`);
-          complaints[index] = newComplaint;
-        } else {
-          logToFile(`Adding new complaint: ${newComplaint.id}`);
-          complaints.push(newComplaint);
-        }
-
-        await fs.promises.writeFile(COMPLAINTS_FILE, JSON.stringify(complaints, null, 2));
-        logToFile(`Successfully saved complaint: ${newComplaint.id}`);
-        res.json({ success: true });
-      } catch (error: any) {
-        logToFile(`CRITICAL Error saving complaint: ${error.message}`);
-        res.status(500).json({ error: "Failed to save complaint", details: error.message });
-      }
-    });
-
-    app.patch("/api/complaints/:id", async (req, res) => {
-      try {
-        const { id } = req.params;
-        logToFile(`Attempting to update complaint: ${id}`);
-        
-        let complaints = await readJsonArrayFile(COMPLAINTS_FILE);
-
-        const index = complaints.findIndex((c: any) => c.id === id);
-        if (index !== -1) {
-          complaints[index] = { ...complaints[index], ...req.body };
-          await fs.promises.writeFile(COMPLAINTS_FILE, JSON.stringify(complaints, null, 2));
-          logToFile(`Successfully updated complaint: ${id}`);
-          res.json({ success: true });
-        } else {
-          logToFile(`Error: Complaint not found for update: ${id}`);
-          res.status(404).json({ error: "Not found" });
-        }
-      } catch (error: any) {
-        logToFile(`CRITICAL Error updating complaint: ${error.message}`);
-        res.status(500).json({ error: "Failed to update complaint", details: error.message });
-      }
-    });
-
-    app.delete("/api/complaints/:id", async (req, res) => {
-      try {
-        const complaints = await readJsonArrayFile(COMPLAINTS_FILE);
-        const { id } = req.params;
-        const filtered = complaints.filter((c: any) => c.id !== id);
-        await fs.promises.writeFile(COMPLAINTS_FILE, JSON.stringify(filtered, null, 2));
-        logToFile(`Deleted complaint: ${id}`);
-        res.json({ success: true });
-      } catch (error) {
-        logToFile(`Error deleting complaint ${req.params.id}: ${error}`);
-        res.status(500).json({ error: "Failed to delete complaint" });
-      }
-    });
-
-    logToFile("[Server] Registering inquiries routes...");
-    app.get("/api/inquiries", async (req, res) => {
-      try {
-        const inquiries = await readJsonArrayFile(INQUIRIES_FILE);
-        res.json(inquiries);
-      } catch (error) {
-        logToFile(`Error reading inquiries: ${error}`);
-        res.status(500).json({ error: "Failed to read inquiries" });
-      }
-    });
-
-    app.post("/api/inquiries", async (req, res) => {
-      try {
-        logToFile(`Attempting to save inquiry: ${req.body?.id}`);
-        if (!req.body || !req.body.id) {
-          logToFile("Error: Missing inquiry ID in request body");
-          return res.status(400).json({ error: "Missing inquiry ID" });
-        }
-
-        let inquiries = await readJsonArrayFile(INQUIRIES_FILE);
-
-        const newInquiry = req.body;
-        const index = inquiries.findIndex((c: any) => c.id === newInquiry.id);
-        if (index !== -1) {
-          logToFile(`Updating existing inquiry: ${newInquiry.id}`);
-          inquiries[index] = newInquiry;
-        } else {
-          logToFile(`Adding new inquiry: ${newInquiry.id}`);
-          inquiries.push(newInquiry);
-        }
-
-        await fs.promises.writeFile(INQUIRIES_FILE, JSON.stringify(inquiries, null, 2));
-        logToFile(`Successfully saved inquiry: ${newInquiry.id}`);
-        res.json({ success: true });
-      } catch (error: any) {
-        logToFile(`CRITICAL Error saving inquiry: ${error.message}`);
-        res.status(500).json({ error: "Failed to save inquiry", details: error.message });
-      }
-    });
-
-    app.patch("/api/inquiries/:id", async (req, res) => {
-      try {
-        const { id } = req.params;
-        logToFile(`Attempting to update inquiry: ${id}`);
-        
-        let inquiries = await readJsonArrayFile(INQUIRIES_FILE);
-
-        const index = inquiries.findIndex((c: any) => c.id === id);
-        if (index !== -1) {
-          inquiries[index] = { ...inquiries[index], ...req.body };
-          await fs.promises.writeFile(INQUIRIES_FILE, JSON.stringify(inquiries, null, 2));
-          logToFile(`Successfully updated inquiry: ${id}`);
-          res.json({ success: true });
-        } else {
-          logToFile(`Error: Inquiry not found for update: ${id}`);
-          res.status(404).json({ error: "Not found" });
-        }
-      } catch (error: any) {
-        logToFile(`CRITICAL Error updating inquiry: ${error.message}`);
-        res.status(500).json({ error: "Failed to update inquiry", details: error.message });
-      }
-    });
-
-    app.delete("/api/inquiries/:id", async (req, res) => {
-      try {
-        const inquiries = await readJsonArrayFile(INQUIRIES_FILE);
-        const { id } = req.params;
-        const filtered = inquiries.filter((c: any) => c.id !== id);
-        await fs.promises.writeFile(INQUIRIES_FILE, JSON.stringify(filtered, null, 2));
-        logToFile(`Deleted inquiry: ${id}`);
-        res.json({ success: true });
-      } catch (error) {
-        logToFile(`Error deleting inquiry ${req.params.id}: ${error}`);
-        res.status(500).json({ error: "Failed to delete inquiry" });
-      }
-    });
-
     logToFile("[Server] Registering debtors routes...");
     app.get("/api/debtors", async (req, res) => {
     try {
@@ -836,6 +677,66 @@ Allow: /inquiries
     app.get("/api/clients", async (req, res) => {
       try {
         const clients = await readJsonArrayFile(CLIENTS_FILE);
+        const { page, pageSize, search, category, status, levyInfo, sortBy, sortOrder } = req.query;
+
+        if (page !== undefined || pageSize !== undefined) {
+          const p = Math.max(1, parseInt(page as string, 10) || 1);
+          const rawPs = parseInt(pageSize as string, 10);
+          const ps = [10, 25, 50, 100].includes(rawPs) ? rawPs : 25;
+          
+          let filtered = [...clients];
+
+          if (search && typeof search === 'string' && search.trim()) {
+            const term = search.trim().toLowerCase();
+            filtered = filtered.filter((c: any) =>
+              String(c.customerNumber || '').toLowerCase().includes(term) ||
+              String(c.clientName || '').toLowerCase().includes(term) ||
+              String(c.premiseName || '').toLowerCase().includes(term) ||
+              String(c.permitNumber || '').toLowerCase().includes(term) ||
+              String(c.location || '').toLowerCase().includes(term) ||
+              String(c.county || '').toLowerCase().includes(term) ||
+              String(c.contactPerson || '').toLowerCase().includes(term) ||
+              String(c.tel || '').toLowerCase().includes(term)
+            );
+          }
+
+          if (category && category !== 'All') {
+            filtered = filtered.filter((c: any) =>
+              String(c.premiseCategory || '').toLowerCase().includes(String(category).toLowerCase())
+            );
+          }
+
+          if (levyInfo && levyInfo !== 'All') {
+            filtered = filtered.filter((c: any) => c.levyInfo === levyInfo);
+          }
+
+          if (status === 'operating') {
+            filtered = filtered.filter((c: any) => c.operationalStatus === 'operating');
+          } else if (status === 'closed') {
+            filtered = filtered.filter((c: any) => c.operationalStatus === 'closed');
+          }
+
+          const isAsc = sortOrder !== 'desc';
+          filtered.sort((a: any, b: any) => {
+            const valA = String(sortBy === 'permitNumber' ? a.permitNumber : a.clientName || '');
+            const valB = String(sortBy === 'permitNumber' ? b.permitNumber : b.clientName || '');
+            return isAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+          });
+
+          const totalCount = filtered.length;
+          const from = (p - 1) * ps;
+          const sliced = filtered.slice(from, from + ps);
+
+          return res.json({
+            data: sliced,
+            count: totalCount,
+            totalCount,
+            page: p,
+            pageSize: ps,
+            totalPages: Math.ceil(totalCount / ps) || 1
+          });
+        }
+
         res.json(clients);
       } catch (error) {
         logToFile(`Error reading clients: ${error}`);
@@ -856,17 +757,24 @@ Allow: /inquiries
 
         if (Array.isArray(req.body)) {
           // Deduplicate array and ensure closed clients are DNQ-R
-          const seen = new Set<string>();
+          const seenIds = new Set<string>();
+          const seenEntities = new Set<string>();
           const deduped: any[] = [];
           for (const item of req.body) {
             if (item.operationalStatus === 'closed') {
               item.levyInfo = 'DNQ-R';
             }
-            const pKey = cleanPermit(item.permitNumber || item.id) || cleanStr(item.clientName);
-            if (!pKey || !seen.has(pKey)) {
-              if (pKey) seen.add(pKey);
-              deduped.push(item);
-            }
+            const recId = String(item.id || '').trim();
+            const cName = cleanStr(item.clientName);
+            const pName = cleanStr(item.premiseName);
+            const entityKey = `${cName}::${pName}`;
+
+            if (recId && seenIds.has(recId)) continue;
+            if (cName && pName && seenEntities.has(entityKey)) continue;
+
+            if (recId) seenIds.add(recId);
+            if (cName && pName) seenEntities.add(entityKey);
+            deduped.push(item);
           }
           clients = deduped;
         } else {
@@ -941,10 +849,102 @@ Allow: /inquiries
     app.get("/api/returns", async (req, res) => {
       try {
         const returnsList = await readJsonArrayFile(RETURNS_FILE);
+        const { page, pageSize, search, clientId, year, month, status, sortBy, sortOrder } = req.query;
+
+        if (page !== undefined || pageSize !== undefined) {
+          const p = Math.max(1, parseInt(page as string, 10) || 1);
+          const rawPs = parseInt(pageSize as string, 10);
+          const ps = [10, 25, 50, 100].includes(rawPs) ? rawPs : 25;
+
+          let filtered = [...returnsList];
+
+          if (clientId && typeof clientId === 'string' && clientId.trim()) {
+            filtered = filtered.filter((r: any) => r.clientId === clientId);
+          }
+
+          if (year && year !== 'All') {
+            filtered = filtered.filter((r: any) => String(r.year) === String(year));
+          }
+
+          if (month && month !== 'All') {
+            filtered = filtered.filter((r: any) => String(r.period || '').trim().toLowerCase() === String(month).trim().toLowerCase());
+          }
+
+          if (status && status !== 'All') {
+            filtered = filtered.filter((r: any) => r.paymentStatus === status);
+          }
+
+          if (search && typeof search === 'string' && search.trim()) {
+            const term = search.trim().toLowerCase();
+            filtered = filtered.filter((r: any) =>
+              String(r.clientName || '').toLowerCase().includes(term) ||
+              String(r.txnRef || '').toLowerCase().includes(term) ||
+              String(r.comments || '').toLowerCase().includes(term)
+            );
+          }
+
+          const isAsc = sortOrder === 'asc';
+          filtered.sort((a: any, b: any) => {
+            const valA = String(sortBy === 'returndate' ? a.returnDate : a.year || '');
+            const valB = String(sortBy === 'returndate' ? b.returnDate : b.year || '');
+            return isAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+          });
+
+          const totalQty = filtered.reduce((sum: number, r: any) => sum + (Number(r.qty) || 0), 0);
+          const totalInvoicedAmt = filtered.reduce((sum: number, r: any) => sum + (Number(r.invoiceAmount) || 0), 0);
+          const totalPaidAmt = filtered.reduce((sum: number, r: any) => sum + (Number(r.paymentAmount) || 0), 0);
+          const totalLessCFAmt = filtered.reduce((sum: number, r: any) => sum + (Number(r.lessCF) || 0), 0);
+          const totalOutstanding = filtered.reduce((sum: number, r: any) => sum + (Number(r.outstandingBalance) || 0), 0);
+
+          const totalCount = filtered.length;
+          const from = (p - 1) * ps;
+          const sliced = filtered.slice(from, from + ps);
+
+          return res.json({
+            data: sliced,
+            count: totalCount,
+            totalCount,
+            page: p,
+            pageSize: ps,
+            totalPages: Math.ceil(totalCount / ps) || 1,
+            summary: {
+              totalQty,
+              totalInvoicedAmt,
+              totalPaidAmt,
+              totalLessCFAmt,
+              totalOutstanding
+            }
+          });
+        }
+
         res.json(returnsList);
       } catch (error) {
         logToFile(`Error reading returns: ${error}`);
         res.status(500).json({ error: "Failed to read returns" });
+      }
+    });
+
+    app.get("/api/hub-summary", async (_req, res) => {
+      try {
+        const clients = await readJsonArrayFile(CLIENTS_FILE);
+        const returns = await readJsonArrayFile(RETURNS_FILE);
+
+        const totalClients = clients.length;
+        const operatingClients = clients.filter((c: any) => c.operationalStatus === 'operating').length;
+        const totalReturns = returns.length;
+        const totalVolume = returns.reduce((sum: number, r: any) => sum + (Number(r.qty) || 0), 0);
+        const totalOutstanding = returns.reduce((sum: number, r: any) => sum + (Number(r.outstandingBalance) || 0), 0);
+
+        res.json({
+          totalClients,
+          operatingClients,
+          totalReturns,
+          totalVolume,
+          totalOutstanding
+        });
+      } catch (error) {
+        logToFile(`Error calculating hub summary: ${error}`);
+        res.status(500).json({ error: "Failed to calculate hub summary" });
       }
     });
 
@@ -1920,8 +1920,6 @@ Allow: /inquiries
     [
       AGREEMENTS_FILE,
       CLOSURES_FILE,
-      COMPLAINTS_FILE,
-      INQUIRIES_FILE,
       DEBTORS_FILE,
       RETURNS_FILE,
       VALIDATIONS_FILE,

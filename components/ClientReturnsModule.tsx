@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DBService } from '../services/db';
-import { LicensedClient, ClientReturn, DebtorRecord, Installment, ArrearItem } from '../types';
+import { LicensedClient, ClientReturn, DebtorRecord, Installment, ArrearItem, formatDateToDDMMYYYY } from '../types';
 import { numberToWords } from '../utils/numberToWords';
+import { areNamesMatching, searchMatches, normalizeAlphanumeric, cleanPermitNumber } from './lib/nameMatching';
+import { autoProvisionClientStub } from '../services/clientReturnsPipeline';
 import { 
   FileText, 
   Plus, 
@@ -23,6 +25,8 @@ import {
   Loader2, 
   Printer, 
   ChevronRight, 
+  ChevronLeft,
+  Edit2,
   FileSpreadsheet, 
   HelpCircle,
   Clock,
@@ -34,23 +38,67 @@ import {
   PenTool
 } from 'lucide-react';
 
-interface ClientReturnsModuleProps {
+export interface ClientReturnsModuleProps {
   debtors?: DebtorRecord[];
   onDebtorUpdate?: (updated: DebtorRecord[]) => void;
   onRefresh?: () => void;
+  clients?: LicensedClient[];
+  returns?: ClientReturn[];
+  loading?: boolean;
+  onReturnsChange?: (returns: ClientReturn[]) => void;
+  onClientsChange?: (clients: LicensedClient[]) => void;
+  defaultSubTab?: 'registry' | 'debtors' | 'statements';
+  standalone?: boolean;
+  hideNavigationHeader?: boolean;
 }
 
 export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   debtors: propDebtors,
   onDebtorUpdate,
-  onRefresh
+  onRefresh,
+  clients: propClients,
+  returns: propReturns,
+  loading: propLoading,
+  onReturnsChange,
+  onClientsChange,
+  defaultSubTab = 'registry',
+  standalone = true,
+  hideNavigationHeader = false
 }) => {
   const navigate = useNavigate();
-  const [clients, setClients] = useState<LicensedClient[]>([]);
-  const [returns, setReturns] = useState<ClientReturn[]>([]);
+  const [clients, setClients] = useState<LicensedClient[]>(propClients || []);
+  const [returns, setReturns] = useState<ClientReturn[]>(propReturns || []);
   const [localDebtors, setLocalDebtors] = useState<DebtorRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [activeSubTab, setActiveSubTab] = useState<'registry' | 'debtors' | 'statements'>('registry');
+  const [loading, setLoading] = useState<boolean>(propLoading !== undefined ? propLoading : (standalone || !propClients || !propReturns));
+  const [activeSubTab, setActiveSubTab] = useState<'registry' | 'debtors' | 'statements'>(defaultSubTab);
+
+  // Sync state when props update
+  useEffect(() => {
+    if (propClients !== undefined) {
+      setClients(propClients);
+      if (propClients.length > 0 && !selectedStatementClientId) {
+        setSelectedStatementClientId(propClients[0].id);
+      }
+    }
+  }, [propClients]);
+
+  useEffect(() => {
+    if (propReturns !== undefined) {
+      setReturns(propReturns);
+    }
+  }, [propReturns]);
+
+  useEffect(() => {
+    if (propLoading !== undefined) {
+      setLoading(propLoading);
+    }
+  }, [propLoading]);
+
+  useEffect(() => {
+    if (defaultSubTab) {
+      setActiveSubTab(defaultSubTab);
+    }
+  }, [defaultSubTab]);
 
   // Search & Filter state for returns registry
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -81,6 +129,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [parsedReturns, setParsedReturns] = useState<ClientReturn[]>([]);
+  const [newlyProvisionedClients, setNewlyProvisionedClients] = useState<LicensedClient[]>([]);
+  const [autoProvisionClients, setAutoProvisionClients] = useState<boolean>(true);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const [importing, setImporting] = useState<boolean>(false);
 
@@ -89,6 +139,17 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   const [debtorFilterMonth, setDebtorFilterMonth] = useState<string>('All');
   const [debtorSearchQuery, setDebtorSearchQuery] = useState<string>('');
   const [debtorSubView, setDebtorSubView] = useState<'non-filers' | 'debtors-ledger'>('non-filers');
+
+  // Pagination states for Non-Filers and Debtors Ledger
+  const [nonFilersBatchSize, setNonFilersBatchSize] = useState<10 | 25 | 50 | 100>(25);
+  const [nonFilersCurrentPage, setNonFilersCurrentPage] = useState<number>(1);
+  const [debtorsBatchSize, setDebtorsBatchSize] = useState<10 | 25 | 50 | 100>(25);
+  const [debtorsCurrentPage, setDebtorsCurrentPage] = useState<number>(1);
+
+  useEffect(() => {
+    setNonFilersCurrentPage(1);
+    setDebtorsCurrentPage(1);
+  }, [debtorSearchQuery, debtorFilterYear, debtorFilterMonth, debtorSubView]);
 
   // Statement client selection state
   const [selectedStatementClientId, setSelectedStatementClientId] = useState<string>('');
@@ -142,7 +203,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
       // Check if existing
       const existingIndex = integrated.findIndex(d => 
-        (d.dboName || '').toLowerCase() === (clientName || '').toLowerCase() ||
+        areNamesMatching(d.dboName, clientName) ||
         d.id === clientId ||
         (d.permitNo || '') === clientId ||
         (d.permitNo || '') === `KDB/LC/${clientId}`
@@ -207,31 +268,86 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     return Array.from(new Map(integrated.map(d => [d.id, d])).values());
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  // Batching & Pagination states for Returns filings list (10, 25, 50 & 100 batch options)
+  const [batchSize, setBatchSize] = useState<10 | 25 | 50 | 100>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalReturnsCount, setTotalReturnsCount] = useState<number>(0);
+  const [totalReturnsPages, setTotalReturnsPages] = useState<number>(1);
+  const [registryView, setRegistryView] = useState<'returns-list' | 'client-summaries'>('returns-list');
+  const [returnsSummary, setReturnsSummary] = useState<{
+    totalQty: number;
+    totalInvoicedAmt: number;
+    totalPaidAmt: number;
+    totalLessCFAmt: number;
+    totalOutstanding: number;
+  }>({ totalQty: 0, totalInvoicedAmt: 0, totalPaidAmt: 0, totalLessCFAmt: 0, totalOutstanding: 0 });
 
-  const fetchData = async () => {
+  const fetchReturnsBatch = useCallback(async (page: number = currentPage, size: 10 | 25 | 50 | 100 = batchSize) => {
     setLoading(true);
     try {
-      const [fetchedClients, fetchedReturns, fetchedDebtors] = await Promise.all([
-        DBService.getClients(),
-        DBService.getReturns(),
-        DBService.getDebtors()
+      const [res, fetchedClients, fetchedDebtors] = await Promise.all([
+        DBService.getReturnsPaginated({
+          page,
+          pageSize: size,
+          search: searchQuery,
+          year: filterYear,
+          month: filterMonth,
+          status: filterStatus
+        }),
+        clients.length === 0 ? DBService.getClients(false) : Promise.resolve(clients),
+        localDebtors.length === 0 ? DBService.getDebtors(false) : Promise.resolve(localDebtors)
       ]);
-      setClients(fetchedClients);
-      setReturns(fetchedReturns);
-      setLocalDebtors(fetchedDebtors);
-      
-      if (fetchedClients.length > 0 && !selectedStatementClientId) {
-        setSelectedStatementClientId(fetchedClients[0].id);
+
+      setReturns(res.data);
+      const total = res.count ?? res.totalCount ?? res.data.length;
+      setTotalReturnsCount(total);
+      setTotalReturnsPages(res.totalPages || Math.ceil(total / size) || 1);
+      setCurrentPage(page);
+      if (res.summary) {
+        setReturnsSummary(res.summary);
+      }
+      onReturnsChange?.(res.data);
+
+      if (fetchedClients && fetchedClients.length > 0 && clients.length === 0) {
+        setClients(fetchedClients);
+        onClientsChange?.(fetchedClients);
+        if (!selectedStatementClientId) {
+          setSelectedStatementClientId(fetchedClients[0].id);
+        }
+      }
+      if (fetchedDebtors && fetchedDebtors.length > 0 && localDebtors.length === 0) {
+        setLocalDebtors(fetchedDebtors);
       }
       onRefresh?.();
     } catch (error) {
-      console.error("Error fetching returns dashboard data:", error);
+      console.error("Error fetching returns batch:", error);
     } finally {
       setLoading(false);
     }
+  }, [currentPage, batchSize, searchQuery, filterYear, filterMonth, filterStatus, clients, localDebtors, onReturnsChange, onClientsChange, onRefresh, selectedStatementClientId]);
+
+  // Fetch only the selected batch on filter/batch changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchReturnsBatch(1, batchSize);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery, filterYear, filterMonth, filterStatus, batchSize]);
+
+  const handleBatchSizeChange = (newSize: 10 | 25 | 50 | 100) => {
+    setBatchSize(newSize);
+    setCurrentPage(1);
+    fetchReturnsBatch(1, newSize);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    const validPage = Math.max(1, Math.min(newPage, totalReturnsPages));
+    setCurrentPage(validPage);
+    fetchReturnsBatch(validPage, batchSize);
+  };
+
+  const fetchData = async () => {
+    await fetchReturnsBatch(currentPage, batchSize);
   };
 
   // Pre-fill return values based on select client in the form
@@ -440,11 +556,13 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
         'comments'
       ];
 
-      const headers = parseCSVLine(lines[0]).map(h => h.replace(/^["']|["']$/g, '').trim().toLowerCase());
+      const cleanHeader = (h: string) => h.replace(/^["']|["']$/g, '').toLowerCase().replace(/[\s_-]+/g, '');
+      const headers = parseCSVLine(lines[0]).map(cleanHeader);
+      const expectedClean = expectedHeaders.map(cleanHeader);
       
-      if (headers.length < expectedHeaders.length || !expectedHeaders.every((h, idx) => headers[idx] === h)) {
+      if (headers.length < expectedClean.length || !expectedClean.every((h, idx) => headers[idx] === h)) {
         setImportErrors([
-          `Invalid CSV columns or order. The CSV must contain these exact columns in this specific order and spelling:\n` +
+          `Invalid CSV columns or order. The CSV must contain these 14 columns in order:\n` +
           expectedHeaders.join(', ')
         ]);
         setParsedReturns([]);
@@ -453,16 +571,9 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
       const records: ClientReturn[] = [];
       const errors: string[] = [];
+      const newlyCreated: LicensedClient[] = [];
+      const workingClientsPool = [...clients];
       const csvKeys = new Set<string>();
-
-      // Helper to normalize strings for comparison (removes all spacing, punctuation, non-breaking spaces)
-      const normalizeForMatching = (str: string): string => {
-        if (!str) return '';
-        return str
-          .toLowerCase()
-          .replace(/[\s\u00a0\u1680\u180e\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g, '')
-          .replace(/[^a-z0-9]/g, '');
-      };
 
       // Helper to match full month names
       const normalizePeriod = (val: string): string => {
@@ -515,57 +626,67 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
           continue;
         }
 
-        // Match against existing licensed clients (Permit number, Exact DBO, Exact Premise, Branch Premise, Normalized Stem)
-        const cleanPermit = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
-        const csvClientNameClean = csvClientName.trim().toLowerCase();
-        const csvClientNameNorm = normalizeForMatching(csvClientName);
+        // Match against existing licensed clients (Permit number, Exact DBO, Exact Premise, Branch Premise, Normalized Stem, Substring)
+        const cleanPermit = (s: string) => cleanPermitNumber(s);
         const csvPermitClean = cleanPermit(csvClientName);
 
-        // 1. Exact Permit match (highest priority)
-        let matchedClient = csvPermitClean ? clients.find(c => 
+        // 1. Exact or Cleaned Permit match (highest priority)
+        let matchedClient = csvPermitClean ? workingClientsPool.find(c => 
           cleanPermit(c.permitNumber) === csvPermitClean || 
           cleanPermit(c.id) === csvPermitClean ||
           (c.branches && c.branches.some(b => cleanPermit(b.permitNumber) === csvPermitClean || cleanPermit(b.id) === csvPermitClean))
         ) : undefined;
 
-        // 2. Exact Name / Premise / Branch Premise match
+        // 2. Flexible Name / Premise / Branch Premise match (case-insensitive, variable spacing resilient)
         if (!matchedClient) {
-          matchedClient = clients.find(c => 
-            (c.clientName || '').trim().toLowerCase() === csvClientNameClean ||
-            (c.premiseName || '').trim().toLowerCase() === csvClientNameClean ||
-            (c.branches && c.branches.some(b => (b.premiseName || '').trim().toLowerCase() === csvClientNameClean))
+          matchedClient = workingClientsPool.find(c => 
+            areNamesMatching(c.clientName, csvClientName) ||
+            areNamesMatching(c.premiseName, csvClientName) ||
+            (c.branches && c.branches.some(b => areNamesMatching(b.premiseName, csvClientName)))
           );
         }
 
-        // 3. Normalized alphanumeric exact match
+        // 3. Flexible search/substring match as fallback
         if (!matchedClient) {
-          matchedClient = clients.find(c => 
-            normalizeForMatching(c.clientName) === csvClientNameNorm ||
-            normalizeForMatching(c.premiseName) === csvClientNameNorm ||
-            (c.branches && c.branches.some(b => normalizeForMatching(b.premiseName) === csvClientNameNorm))
+          matchedClient = workingClientsPool.find(c => 
+            searchMatches(c.clientName, csvClientName) ||
+            searchMatches(c.premiseName, csvClientName) ||
+            (c.branches && c.branches.some(b => searchMatches(b.premiseName, csvClientName)))
           );
         }
 
-        // 4. Distinctive stem match (ignoring generic corporate suffixes, requiring unique match)
-        if (!matchedClient && csvClientNameNorm.length >= 6) {
-          const stripSuffixes = (s: string) => s.replace(/(limited|ltd|cooperative|coop|society|group|enterprises|plant|depot|station|dairy|dairies|bar|milk)/g, '').trim();
-          const csvStem = stripSuffixes(csvClientNameNorm);
-          if (csvStem.length >= 5) {
-            const candidates = clients.filter(c => {
-              const cStem = stripSuffixes(normalizeForMatching(c.clientName));
-              const pStem = stripSuffixes(normalizeForMatching(c.premiseName));
-              const bStem = (c.branches || []).some(b => stripSuffixes(normalizeForMatching(b.premiseName)) === csvStem);
-              return (cStem && cStem === csvStem) || (pStem && pStem === csvStem) || bStem;
+        // 4. Loose substring / alphanumeric stem containment fallback
+        if (!matchedClient) {
+          const csvAlpha = normalizeAlphanumeric(csvClientName);
+          if (csvAlpha.length >= 4) {
+            matchedClient = workingClientsPool.find(c => {
+              const cAlpha = normalizeAlphanumeric(c.clientName);
+              const pAlpha = normalizeAlphanumeric(c.premiseName);
+              return cAlpha.includes(csvAlpha) || csvAlpha.includes(cAlpha) ||
+                     pAlpha.includes(csvAlpha) || csvAlpha.includes(pAlpha);
             });
-            if (candidates.length === 1) {
-              matchedClient = candidates[0];
-            }
           }
         }
 
+        // Option B: Auto-Discovery Pipeline for Returns Ingestion
         if (!matchedClient) {
-          errors.push(`Row ${rowNum}: Could not find a registered client matching "${csvClientName}". Go to the Clients tab to add them first.`);
-          continue;
+          if (autoProvisionClients) {
+            const existingNew = newlyCreated.find(c => 
+              areNamesMatching(c.clientName, csvClientName) || 
+              areNamesMatching(c.premiseName, csvClientName)
+            );
+            if (existingNew) {
+              matchedClient = existingNew;
+            } else {
+              const stub = autoProvisionClientStub(csvClientName, yearVal, periodVal);
+              newlyCreated.push(stub);
+              workingClientsPool.push(stub);
+              matchedClient = stub;
+            }
+          } else {
+            errors.push(`Row ${rowNum}: Could not find a registered client matching "${csvClientName}". Go to the Clients tab to add them first.`);
+            continue;
+          }
         }
 
         if (isNaN(yearVal) || yearVal < 1980 || yearVal > 2030) {
@@ -575,23 +696,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
         if (!monthsList.includes(periodVal)) {
           errors.push(`Row ${rowNum}: Invalid Period "${rawPeriod}". Must be a valid month (e.g., January, February).`);
-          continue;
-        }
-
-        const uniqueKey = `${matchedClient.id}-${yearVal}-${periodVal}`;
-        if (csvKeys.has(uniqueKey)) {
-          errors.push(`Row ${rowNum}: Duplicate entry within the CSV file for "${matchedClient.clientName}" - ${periodVal} ${yearVal}.`);
-          continue;
-        }
-        csvKeys.add(uniqueKey);
-
-        const dbDuplicateExists = returns.some(r => 
-          r.clientId === matchedClient.id && 
-          r.year === yearVal && 
-          r.period.toLowerCase() === periodVal.toLowerCase()
-        );
-        if (dbDuplicateExists) {
-          errors.push(`Row ${rowNum}: Duplicate entry. A return for "${matchedClient.clientName}" - ${periodVal} ${yearVal} already exists in the database.`);
           continue;
         }
 
@@ -621,9 +725,19 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
           }
         }
 
-        const returnId = `RET-${Date.now().toString().slice(-4)}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+        // Check if a return already exists in the database for this client and period.
+        // As mandated: latest input acts as absolute source of truth, so we overwrite/update rather than error.
+        const existingReturn = returns.find(r => 
+          (r.clientId === matchedClient.id || areNamesMatching(r.clientName, matchedClient.clientName)) && 
+          r.year === yearVal && 
+          (r.period || '').trim().toLowerCase() === periodVal.toLowerCase()
+        );
 
-        records.push({
+        const returnId = existingReturn 
+          ? existingReturn.id 
+          : `RET-${Date.now().toString().slice(-4)}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+
+        const newReturnRecord: ClientReturn = {
           id: returnId,
           clientId: matchedClient.id,
           clientName: matchedClient.clientName,
@@ -640,10 +754,24 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
           agingDays: aging,
           paymentStatus: status,
           comments: commsVal || `Imported return for ${periodVal} ${yearVal}`
-        });
+        };
+
+        // If duplicate appears within the same CSV, latest row in CSV acts as source of truth
+        const existingInCsvIdx = records.findIndex(r => 
+          r.clientId === matchedClient.id && 
+          r.year === yearVal && 
+          (r.period || '').trim().toLowerCase() === periodVal.toLowerCase()
+        );
+
+        if (existingInCsvIdx >= 0) {
+          records[existingInCsvIdx] = newReturnRecord;
+        } else {
+          records.push(newReturnRecord);
+        }
       }
 
       setParsedReturns(records);
+      setNewlyProvisionedClients(newlyCreated);
       setImportErrors(errors);
     };
     reader.readAsText(file);
@@ -725,13 +853,29 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     }
     setImporting(true);
     try {
+      // 1. If any new client profiles were auto-discovered in the returns sheet, persist them
+      if (newlyProvisionedClients.length > 0) {
+        await DBService.saveClientsBulk(newlyProvisionedClients);
+        const updatedClientsList = [...clients, ...newlyProvisionedClients];
+        onClientsChange?.(updatedClientsList);
+      }
+
+      // 2. Persist returns in bulk
       await DBService.saveReturnsBulk(parsedReturns);
+      const totalImported = parsedReturns.length;
+      const totalNewClients = newlyProvisionedClients.length;
+
       setIsImportModalOpen(false);
       setCsvFile(null);
       setParsedReturns([]);
+      setNewlyProvisionedClients([]);
       setImportErrors([]);
       await fetchData();
-      alert(`Successfully imported ${parsedReturns.length} returns!`);
+
+      const successMessage = totalNewClients > 0
+        ? `Successfully imported ${totalImported} returns and auto-registered ${totalNewClients} new client profile(s) into Clients Registry!`
+        : `Successfully imported ${totalImported} returns!`;
+      alert(successMessage);
     } catch (error: any) {
       console.error("Bulk import failed:", error);
       alert(`Bulk import issue: ${error?.message || "Please check connection and try again."}`);
@@ -1058,12 +1202,14 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     if (!ret) return false;
     const qSafe = String(searchQuery || '').trim().toLowerCase();
     const matchesSearch = !qSafe ||
-      String(ret.clientName || '').toLowerCase().includes(qSafe) ||
-      String(ret.txnRef || '').toLowerCase().includes(qSafe) ||
-      String(ret.comments || '').toLowerCase().includes(qSafe);
+      searchMatches(ret.clientName, qSafe) ||
+      searchMatches(ret.txnRef, qSafe) ||
+      searchMatches(ret.comments, qSafe) ||
+      searchMatches(ret.period, qSafe) ||
+      searchMatches(String(ret.year), qSafe);
     
-    const matchesYear = filterYear === 'All' || ret.year.toString() === filterYear;
-    const matchesMonth = filterMonth === 'All' || ret.period === filterMonth;
+    const matchesYear = filterYear === 'All' || String(ret.year).trim() === filterYear.trim();
+    const matchesMonth = filterMonth === 'All' || (ret.period || '').trim().toLowerCase() === filterMonth.trim().toLowerCase();
     const matchesStatus = filterStatus === 'All' || ret.paymentStatus === filterStatus;
 
     return matchesSearch && matchesYear && matchesMonth && matchesStatus;
@@ -1072,9 +1218,10 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   // Group returns by client for the single-entry Returns Registry view
   const clientSummaries = clients.map(client => {
     const clientReturns = returns.filter(ret => {
-      if (ret.clientId !== client.id) return false;
-      const matchesYear = filterYear === 'All' || ret.year.toString() === filterYear;
-      const matchesMonth = filterMonth === 'All' || ret.period === filterMonth;
+      const isClientMatch = ret.clientId === client.id || areNamesMatching(ret.clientName, client.clientName);
+      if (!isClientMatch) return false;
+      const matchesYear = filterYear === 'All' || String(ret.year).trim() === filterYear.trim();
+      const matchesMonth = filterMonth === 'All' || (ret.period || '').trim().toLowerCase() === filterMonth.trim().toLowerCase();
       return matchesYear && matchesMonth;
     });
 
@@ -1100,10 +1247,11 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     if (!summary || !summary.client) return false;
     const qSafe = String(searchQuery || '').trim().toLowerCase();
     const matchesSearch = !qSafe ||
-      String(summary.client.clientName || '').toLowerCase().includes(qSafe) ||
-      String(summary.client.premiseName || '').toLowerCase().includes(qSafe) ||
-      String(summary.client.location || '').toLowerCase().includes(qSafe) ||
-      String(summary.client.id || '').toLowerCase().includes(qSafe);
+      searchMatches(summary.client.clientName, qSafe) ||
+      searchMatches(summary.client.premiseName, qSafe) ||
+      searchMatches(summary.client.location, qSafe) ||
+      searchMatches(summary.client.id, qSafe) ||
+      searchMatches(summary.client.permitNumber, qSafe);
 
     let matchesStatusFilter = true;
     if (filterStatus !== 'All') {
@@ -1125,15 +1273,15 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   };
 
   // Calculations for registry sub-tab summary
-  const totalInvoiced = filteredReturns.reduce((sum, r) => sum + r.invoiceAmount, 0);
-  const totalPaid = filteredReturns.reduce((sum, r) => sum + r.paymentAmount, 0);
-  const totalLessCF = filteredReturns.reduce((sum, r) => sum + r.lessCF, 0);
-  const totalOutstanding = filteredReturns.reduce((sum, r) => sum + r.outstandingBalance, 0);
+  const totalInvoiced = returnsSummary.totalInvoicedAmt || returns.reduce((sum, r) => sum + r.invoiceAmount, 0);
+  const totalPaid = returnsSummary.totalPaidAmt || returns.reduce((sum, r) => sum + r.paymentAmount, 0);
+  const totalLessCF = returnsSummary.totalLessCFAmt || returns.reduce((sum, r) => sum + r.lessCF, 0);
+  const totalOutstanding = returnsSummary.totalOutstanding || returns.reduce((sum, r) => sum + r.outstandingBalance, 0);
 
   // Client Statement calculations
   const statementClientObj = clients.find(c => c.id === selectedStatementClientId);
   const statementReturns = returns
-    .filter(r => r.clientId === selectedStatementClientId)
+    .filter(r => r.clientId === selectedStatementClientId || (statementClientObj && areNamesMatching(r.clientName, statementClientObj.clientName)))
     .sort((a, b) => b.year - a.year || monthsList.indexOf(b.period) - monthsList.indexOf(a.period));
 
   const filteredStatementReturns = statementReturns.filter(r => {
@@ -1401,38 +1549,40 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     <div className="space-y-8 max-w-7xl mx-auto">
       
       {/* Page Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-        <div>
-          <h2 className="text-base font-bold text-slate-800 tracking-tight flex items-center gap-2">
-            <FileSpreadsheet className="w-4 h-4 text-indigo-500" /> Returns & Ledger Module
-          </h2>
-          <p className="text-xs font-medium text-slate-500 mt-0.5">
-            File monthly levy, monitor collections, generate client statements, and track unfiled debtors
-          </p>
-        </div>
+      {!hideNavigationHeader && (
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+          <div>
+            <h2 className="text-base font-bold text-slate-800 tracking-tight flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-indigo-500" /> Returns & Ledger Module
+            </h2>
+            <p className="text-xs font-medium text-slate-500 mt-0.5">
+              File monthly levy, monitor collections, generate client statements, and track unfiled debtors
+            </p>
+          </div>
 
-        {/* Sub-tab Navigation */}
-        <div className="bg-slate-100 p-1 rounded-xl flex gap-1 border border-slate-200">
-          <button
-            onClick={() => setActiveSubTab('registry')}
-            className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'registry' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            <Database size={13} /> Returns Registry
-          </button>
-          <button
-            onClick={() => setActiveSubTab('debtors')}
-            className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'debtors' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            <AlertTriangle size={13} className="text-amber-500" /> Non-Filers & Debtors
-          </button>
-          <button
-            onClick={() => setActiveSubTab('statements')}
-            className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'statements' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            <FileText size={13} /> Client Statements
-          </button>
+          {/* Sub-tab Navigation */}
+          <div className="bg-slate-100 p-1 rounded-xl flex gap-1 border border-slate-200">
+            <button
+              onClick={() => setActiveSubTab('registry')}
+              className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'registry' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Database size={13} /> Returns Registry
+            </button>
+            <button
+              onClick={() => setActiveSubTab('debtors')}
+              className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'debtors' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <AlertTriangle size={13} className="text-amber-500" /> Non-Filers & Debtors
+            </button>
+            <button
+              onClick={() => setActiveSubTab('statements')}
+              className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'statements' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <FileText size={13} /> Client Statements
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {loading ? (
         <div className="bg-white rounded-[24px] border border-slate-100 shadow-md p-12 text-center space-y-3">
@@ -1586,89 +1736,334 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                 </div>
               </div>
 
+              {/* Batch Options & Egress Limitation Bar (Dropdown Format: Show ___ entries) */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 p-3 rounded-xl border border-slate-200/70 text-xs">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 font-medium text-slate-700">
+                    <span className="text-slate-600 font-semibold text-xs">Show</span>
+                    <select
+                      value={batchSize}
+                      onChange={(e) => handleBatchSizeChange(Number(e.target.value) as 10 | 25 | 50 | 100)}
+                      className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-100 shadow-2xs cursor-pointer"
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                    <span className="text-slate-600 font-semibold text-xs">entries</span>
+                  </div>
+
+                  {/* View Mode: Returns List vs Client Summaries */}
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-xs">
+                    <button
+                      type="button"
+                      onClick={() => setRegistryView('returns-list')}
+                      className={`px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        registryView === 'returns-list'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      Returns List ({returns.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRegistryView('client-summaries')}
+                      className={`px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        registryView === 'client-summaries'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      Client Summaries
+                    </button>
+                  </div>
+
+                  <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200/60 font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Limited Egress: Batch {currentPage} of {totalReturnsPages} (range: {totalReturnsCount === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, totalReturnsCount)})</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-3">
+                  <span className="text-[11px] text-slate-500 font-semibold">
+                    Showing <span className="font-bold text-slate-900">{totalReturnsCount === 0 ? 0 : (currentPage - 1) * batchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(currentPage * batchSize, totalReturnsCount)}</span> of <span className="font-bold text-slate-900">{totalReturnsCount.toLocaleString()}</span>
+                  </span>
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handlePageChange(currentPage - 1)}
+                      disabled={currentPage <= 1 || loading}
+                      className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                      title="Previous batch"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <span className="text-[11px] font-bold text-slate-700 px-2">
+                      Page {currentPage} of {totalReturnsPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handlePageChange(currentPage + 1)}
+                      disabled={currentPage >= totalReturnsPages || loading}
+                      className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                      title="Next batch"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {/* Main Registry Table */}
               <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-xl overflow-hidden">
-                {filteredClientSummaries.length === 0 ? (
-                  <div className="p-20 text-center space-y-4">
-                    <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto" />
-                    <p className="text-slate-400 font-bold uppercase tracking-wider text-xs">No clients matched your filters.</p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
-                          <th className="px-6 py-4">Client / Premise details</th>
-                          <th className="px-6 py-4 text-center">Returns Filed</th>
-                          <th className="px-6 py-4 text-right">Aggregated QTY</th>
-                          <th className="px-6 py-4 text-right">Invoiced Amt</th>
-                          <th className="px-6 py-4 text-right">Paid Amt</th>
-                          <th className="px-6 py-4 text-right">Outstanding Bal</th>
-                          <th className="px-6 py-4">Status</th>
-                          <th className="px-6 py-4 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                        {filteredClientSummaries.map(({ client, returnsCount, totalQty, totalInvoicedAmt, totalPaidAmt, totalLessCFAmt, outstandingBal }) => (
-                          <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4.5">
-                              <div className="text-slate-900 font-black">{client.clientName}</div>
-                              <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
-                                <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[9px] uppercase font-bold">{client.premiseCategory}</span>
-                                <span>• {client.premiseName}</span>
-                                <span>• Permit: {client.permitNumber || client.id}</span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4.5 text-center">
-                              <span className="bg-slate-100 text-slate-800 px-2.5 py-1 rounded-full text-[10px] font-black">
-                                {returnsCount}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4.5 text-right text-slate-900 font-extrabold">
-                              {totalQty.toLocaleString()}
-                            </td>
-                            <td className="px-6 py-4.5 text-right font-black text-slate-900">
-                              {formatCurrency(totalInvoicedAmt)}
-                            </td>
-                            <td className="px-6 py-4.5 text-right font-bold text-emerald-600">
-                              {formatCurrency(totalPaidAmt)}
-                            </td>
-                            <td className={`px-6 py-4.5 text-right font-black ${outstandingBal > 0 ? 'text-amber-600' : 'text-slate-500'}`}>
-                              {formatCurrency(outstandingBal)}
-                            </td>
-                            <td className="px-6 py-4.5">
-                              <span className={`inline-flex px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                                outstandingBal <= 0 && returnsCount > 0
-                                  ? 'bg-emerald-50 border border-emerald-100 text-emerald-600'
-                                  : outstandingBal > 0
-                                  ? 'bg-rose-50 border border-rose-100 text-rose-600'
-                                  : 'bg-slate-50 border border-slate-100 text-slate-500'
-                              }`}>
-                                {outstandingBal <= 0 && returnsCount > 0 ? 'Up to Date' : outstandingBal > 0 ? 'Arrears' : 'No filings'}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4.5 text-right">
-                              <div className="flex justify-end gap-2">
-                                <button
-                                  onClick={() => handleViewStatement(client.id)}
-                                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg text-[10px] uppercase tracking-wider transition-all"
-                                  title="View detailed transaction statement for this client"
-                                >
-                                  View Statement
-                                </button>
-                                <button
-                                  onClick={() => openAddModal(client.id)}
-                                  className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-800 transition-colors"
-                                  title="File Return"
-                                >
-                                  <Plus size={14} className="text-slate-600" />
-                                </button>
-                              </div>
-                            </td>
+                {registryView === 'returns-list' ? (
+                  /* Returns Filings List View */
+                  returns.length === 0 ? (
+                    <div className="p-20 text-center space-y-4">
+                      <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto" />
+                      <p className="text-slate-400 font-bold uppercase tracking-wider text-xs">No return filings found in this batch.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                            <th className="px-6 py-4">Client & Period</th>
+                            <th className="px-6 py-4 text-right">Quantity (L)</th>
+                            <th className="px-6 py-4 text-right">Invoiced (KES)</th>
+                            <th className="px-6 py-4 text-right">Paid (KES)</th>
+                            <th className="px-6 py-4 text-right">Less CF (KES)</th>
+                            <th className="px-6 py-4 text-right">Balance (KES)</th>
+                            <th className="px-6 py-4">Dates & Ref</th>
+                            <th className="px-6 py-4">Status</th>
+                            <th className="px-6 py-4 text-right">Actions</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
+                          {returns.map((ret) => (
+                            <tr key={ret.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-6 py-4.5">
+                                <div className="text-slate-900 font-black">{ret.clientName}</div>
+                                <div className="text-[10px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                                  <span className="bg-slate-100 text-slate-800 px-1.5 py-0.5 rounded font-black text-[9px]">
+                                    {ret.period} {ret.year}
+                                  </span>
+                                  {ret.clientId && <span>• ID: {ret.clientId}</span>}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4.5 text-right text-slate-900 font-extrabold">
+                                {Number(ret.qty || 0).toLocaleString()}
+                              </td>
+                              <td className="px-6 py-4.5 text-right font-black text-slate-900">
+                                {formatCurrency(ret.invoiceAmount)}
+                              </td>
+                              <td className="px-6 py-4.5 text-right font-bold text-emerald-600">
+                                {formatCurrency(ret.paymentAmount)}
+                              </td>
+                              <td className="px-6 py-4.5 text-right font-medium text-slate-500">
+                                {formatCurrency(ret.lessCF)}
+                              </td>
+                              <td className={`px-6 py-4.5 text-right font-black ${ret.outstandingBalance > 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+                                {formatCurrency(ret.outstandingBalance)}
+                              </td>
+                              <td className="px-6 py-4.5 text-[10px]">
+                                <div className="text-slate-600 font-semibold">
+                                  Filed: {ret.returnDate ? formatDateToDDMMYYYY(ret.returnDate) : '—'}
+                                </div>
+                                {ret.paymentDate && (
+                                  <div className="text-slate-400">
+                                    Paid: {formatDateToDDMMYYYY(ret.paymentDate)}
+                                  </div>
+                                )}
+                                {ret.txnRef && (
+                                  <div className="text-slate-400 truncate max-w-[120px]" title={ret.txnRef}>
+                                    Ref: {ret.txnRef}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-6 py-4.5">
+                                <span className={`inline-flex px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                  ret.paymentStatus === 'Fully Paid' || (ret.outstandingBalance <= 0 && ret.paymentAmount > 0)
+                                    ? 'bg-emerald-50 border border-emerald-100 text-emerald-600'
+                                    : ret.paymentStatus === 'Partially Paid' || (ret.outstandingBalance > 0 && ret.paymentAmount > 0)
+                                    ? 'bg-amber-50 border border-amber-100 text-amber-600'
+                                    : 'bg-rose-50 border border-rose-100 text-rose-600'
+                                }`}>
+                                  {ret.paymentStatus || (ret.outstandingBalance <= 0 ? 'Fully Paid' : 'Unpaid')}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4.5 text-right">
+                                <div className="flex justify-end gap-1.5">
+                                  <button
+                                    onClick={() => openEditModal(ret)}
+                                    className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-800 transition-colors cursor-pointer"
+                                    title="Edit Return"
+                                  >
+                                    <Edit2 size={13} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteReturn(ret.id)}
+                                    className="p-1.5 hover:bg-rose-50 rounded-lg text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                                    title="Delete Return"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                ) : (
+                  /* Client Summaries View */
+                  filteredClientSummaries.length === 0 ? (
+                    <div className="p-20 text-center space-y-4">
+                      <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto" />
+                      <p className="text-slate-400 font-bold uppercase tracking-wider text-xs">No clients matched your filters.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                            <th className="px-6 py-4">Client / Premise details</th>
+                            <th className="px-6 py-4 text-center">Returns Filed</th>
+                            <th className="px-6 py-4 text-right">Aggregated QTY</th>
+                            <th className="px-6 py-4 text-right">Invoiced Amt</th>
+                            <th className="px-6 py-4 text-right">Paid Amt</th>
+                            <th className="px-6 py-4 text-right">Outstanding Bal</th>
+                            <th className="px-6 py-4">Status</th>
+                            <th className="px-6 py-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
+                          {filteredClientSummaries.map(({ client, returnsCount, totalQty, totalInvoicedAmt, totalPaidAmt, totalLessCFAmt, outstandingBal }) => (
+                            <tr key={client.id} className="hover:bg-slate-50/50 transition-colors">
+                              <td className="px-6 py-4.5">
+                                <div className="text-slate-900 font-black">{client.clientName}</div>
+                                <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                  <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[9px] uppercase font-bold">{client.premiseCategory}</span>
+                                  <span>• {client.premiseName}</span>
+                                  <span>• Permit: {client.permitNumber || client.id}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4.5 text-center">
+                                <span className="bg-slate-100 text-slate-800 px-2.5 py-1 rounded-full text-[10px] font-black">
+                                  {returnsCount}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4.5 text-right text-slate-900 font-extrabold">
+                                {totalQty.toLocaleString()}
+                              </td>
+                              <td className="px-6 py-4.5 text-right font-black text-slate-900">
+                                {formatCurrency(totalInvoicedAmt)}
+                              </td>
+                              <td className="px-6 py-4.5 text-right font-bold text-emerald-600">
+                                {formatCurrency(totalPaidAmt)}
+                              </td>
+                              <td className={`px-6 py-4.5 text-right font-black ${outstandingBal > 0 ? 'text-amber-600' : 'text-slate-500'}`}>
+                                {formatCurrency(outstandingBal)}
+                              </td>
+                              <td className="px-6 py-4.5">
+                                <span className={`inline-flex px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                  outstandingBal <= 0 && returnsCount > 0
+                                    ? 'bg-emerald-50 border border-emerald-100 text-emerald-600'
+                                    : outstandingBal > 0
+                                    ? 'bg-rose-50 border border-rose-100 text-rose-600'
+                                    : 'bg-slate-50 border border-slate-100 text-slate-500'
+                                }`}>
+                                  {outstandingBal <= 0 && returnsCount > 0 ? 'Up to Date' : outstandingBal > 0 ? 'Arrears' : 'No filings'}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4.5 text-right">
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    onClick={() => handleViewStatement(client.id)}
+                                    className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg text-[10px] uppercase tracking-wider transition-all cursor-pointer"
+                                    title="View detailed transaction statement for this client"
+                                  >
+                                    View Statement
+                                  </button>
+                                  <button
+                                    onClick={() => openAddModal(client.id)}
+                                    className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-800 transition-colors cursor-pointer"
+                                    title="File Return"
+                                  >
+                                    <Plus size={14} className="text-slate-600" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                )}
+
+                {/* Bottom Pagination & Batch Range Controls */}
+                {totalReturnsCount > 0 && (
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-slate-100 bg-slate-50/50 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-600 font-semibold text-xs">Show</span>
+                      <select
+                        value={batchSize}
+                        onChange={(e) => handleBatchSizeChange(Number(e.target.value) as 10 | 25 | 50 | 100)}
+                        className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
+                      >
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                      <span className="text-slate-600 font-semibold text-xs">entries</span>
+                      <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
+                        (Showing {totalReturnsCount === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, totalReturnsCount)} of {totalReturnsCount.toLocaleString()} returns)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handlePageChange(1)}
+                        disabled={currentPage <= 1 || loading}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                      >
+                        First
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage <= 1 || loading}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                      >
+                        <ChevronLeft size={13} /> Prev
+                      </button>
+                      <span className="px-3 py-1 rounded-lg bg-slate-100 text-slate-900 text-[11px] font-black">
+                        {currentPage} / {totalReturnsPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={currentPage >= totalReturnsPages || loading}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                      >
+                        Next <ChevronRight size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePageChange(totalReturnsPages)}
+                        disabled={currentPage >= totalReturnsPages || loading}
+                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                      >
+                        Last
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1804,6 +2199,14 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                         );
                       }
 
+                      const totalNonFilers = missingList.length;
+                      const nonFilersTotalPages = Math.max(1, Math.ceil(totalNonFilers / nonFilersBatchSize));
+                      const safeNonFilersPage = Math.min(Math.max(1, nonFilersCurrentPage), nonFilersTotalPages);
+                      const paginatedMissingList = missingList.slice(
+                        (safeNonFilersPage - 1) * nonFilersBatchSize,
+                        safeNonFilersPage * nonFilersBatchSize
+                      );
+
                       return (
                         <>
                           <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -1824,6 +2227,64 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                             </button>
                           </div>
 
+                          {/* Top Batch Options & Pagination Bar */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 p-3 border-b border-slate-200/70 text-xs">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <div className="flex items-center gap-2 font-medium text-slate-700">
+                                <span className="text-slate-600 font-semibold text-xs">Show</span>
+                                <select
+                                  value={nonFilersBatchSize}
+                                  onChange={(e) => {
+                                    setNonFilersBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
+                                    setNonFilersCurrentPage(1);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-100 shadow-2xs cursor-pointer"
+                                >
+                                  <option value={10}>10</option>
+                                  <option value={25}>25</option>
+                                  <option value={50}>50</option>
+                                  <option value={100}>100</option>
+                                </select>
+                                <span className="text-slate-600 font-semibold text-xs">entries</span>
+                              </div>
+
+                              <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-rose-700 bg-rose-50 px-2.5 py-1 rounded-full border border-rose-200/60 font-bold">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+                                <span>Batch {safeNonFilersPage} of {nonFilersTotalPages} (range: {totalNonFilers === 0 ? 0 : (safeNonFilersPage - 1) * nonFilersBatchSize + 1}–{Math.min(safeNonFilersPage * nonFilersBatchSize, totalNonFilers)})</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between sm:justify-end gap-3">
+                              <span className="text-[11px] text-slate-500 font-semibold">
+                                Showing <span className="font-bold text-slate-900">{totalNonFilers === 0 ? 0 : (safeNonFilersPage - 1) * nonFilersBatchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(safeNonFilersPage * nonFilersBatchSize, totalNonFilers)}</span> of <span className="font-bold text-slate-900">{totalNonFilers.toLocaleString()}</span>
+                              </span>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setNonFilersCurrentPage(prev => Math.max(1, prev - 1))}
+                                  disabled={safeNonFilersPage <= 1}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                  title="Previous batch"
+                                >
+                                  <ChevronLeft size={14} />
+                                </button>
+                                <span className="text-[11px] font-bold text-slate-700 px-2">
+                                  Page {safeNonFilersPage} of {nonFilersTotalPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setNonFilersCurrentPage(prev => Math.min(nonFilersTotalPages, prev + 1))}
+                                  disabled={safeNonFilersPage >= nonFilersTotalPages}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                  title="Next batch"
+                                >
+                                  <ChevronRight size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
                           {missingList.length === 0 ? (
                             <div className="p-20 text-center space-y-4">
                               <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
@@ -1842,7 +2303,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                                  {missingList.map((item, idx) => (
+                                  {paginatedMissingList.map((item, idx) => (
                                     <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
                                       <td className="px-6 py-3.5">
                                         <div className="text-slate-900 font-black">{item.client.clientName}</div>
@@ -1867,7 +2328,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                             <button
                                               key={pIdx}
                                               onClick={() => openAddModal(item.client.id, p.year, p.month)}
-                                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-100 px-2 py-1 rounded-md text-[9px] font-black tracking-wide transition-all whitespace-nowrap flex items-center gap-1"
+                                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-100 px-2 py-1 rounded-md text-[9px] font-black tracking-wide transition-all whitespace-nowrap flex items-center gap-1 cursor-pointer"
                                               title={`Click to file for ${p.month} ${p.year}`}
                                             >
                                               {p.month.substring(0,3)} {p.year} ✎
@@ -1878,7 +2339,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                       <td className="px-6 py-3.5 text-right">
                                         <button
                                           onClick={() => openAddModal(item.client.id, item.missingPeriods[0].year, item.missingPeriods[0].month)}
-                                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all"
+                                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all cursor-pointer"
                                         >
                                           File Return
                                         </button>
@@ -1887,6 +2348,70 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                   ))}
                                 </tbody>
                               </table>
+                            </div>
+                          )}
+
+                          {/* Bottom Pagination & Batch Range Controls for Non-Filers */}
+                          {totalNonFilers > 0 && (
+                            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-slate-100 bg-slate-50/50 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-600 font-semibold text-xs">Show</span>
+                                <select
+                                  value={nonFilersBatchSize}
+                                  onChange={(e) => {
+                                    setNonFilersBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
+                                    setNonFilersCurrentPage(1);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
+                                >
+                                  <option value={10}>10</option>
+                                  <option value={25}>25</option>
+                                  <option value={50}>50</option>
+                                  <option value={100}>100</option>
+                                </select>
+                                <span className="text-slate-600 font-semibold text-xs">entries</span>
+                                <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
+                                  (Showing {totalNonFilers === 0 ? 0 : (safeNonFilersPage - 1) * nonFilersBatchSize + 1}–{Math.min(safeNonFilersPage * nonFilersBatchSize, totalNonFilers)} of {totalNonFilers.toLocaleString()} non-filers)
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setNonFilersCurrentPage(1)}
+                                  disabled={safeNonFilersPage <= 1}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                                >
+                                  First
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setNonFilersCurrentPage(prev => Math.max(1, prev - 1))}
+                                  disabled={safeNonFilersPage <= 1}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                >
+                                  <ChevronLeft size={14} />
+                                </button>
+                                <span className="text-[11px] font-bold text-slate-700 px-2">
+                                  Page {safeNonFilersPage} of {nonFilersTotalPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setNonFilersCurrentPage(prev => Math.min(nonFilersTotalPages, prev + 1))}
+                                  disabled={safeNonFilersPage >= nonFilersTotalPages}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                >
+                                  <ChevronRight size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setNonFilersCurrentPage(nonFilersTotalPages)}
+                                  disabled={safeNonFilersPage >= nonFilersTotalPages}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                                >
+                                  Last
+                                </button>
+                              </div>
                             </div>
                           )}
                         </>
@@ -1930,6 +2455,14 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                         });
                       }
 
+                      const totalDebtors = filteredLedger.length;
+                      const debtorsTotalPages = Math.max(1, Math.ceil(totalDebtors / debtorsBatchSize));
+                      const safeDebtorsPage = Math.min(Math.max(1, debtorsCurrentPage), debtorsTotalPages);
+                      const paginatedDebtors = filteredLedger.slice(
+                        (safeDebtorsPage - 1) * debtorsBatchSize,
+                        safeDebtorsPage * debtorsBatchSize
+                      );
+
                       return (
                         <>
                           <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -1959,6 +2492,64 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                             </div>
                           </div>
 
+                          {/* Top Batch Options & Pagination Bar for Debtors Ledger */}
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 p-3 border-b border-slate-200/70 text-xs">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <div className="flex items-center gap-2 font-medium text-slate-700">
+                                <span className="text-slate-600 font-semibold text-xs">Show</span>
+                                <select
+                                  value={debtorsBatchSize}
+                                  onChange={(e) => {
+                                    setDebtorsBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
+                                    setDebtorsCurrentPage(1);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-100 shadow-2xs cursor-pointer"
+                                >
+                                  <option value={10}>10</option>
+                                  <option value={25}>25</option>
+                                  <option value={50}>50</option>
+                                  <option value={100}>100</option>
+                                </select>
+                                <span className="text-slate-600 font-semibold text-xs">entries</span>
+                              </div>
+
+                              <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200/60 font-bold">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                                <span>Batch {safeDebtorsPage} of {debtorsTotalPages} (range: {totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}–{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)})</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between sm:justify-end gap-3">
+                              <span className="text-[11px] text-slate-500 font-semibold">
+                                Showing <span className="font-bold text-slate-900">{totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)}</span> of <span className="font-bold text-slate-900">{totalDebtors.toLocaleString()}</span>
+                              </span>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setDebtorsCurrentPage(prev => Math.max(1, prev - 1))}
+                                  disabled={safeDebtorsPage <= 1}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                  title="Previous batch"
+                                >
+                                  <ChevronLeft size={14} />
+                                </button>
+                                <span className="text-[11px] font-bold text-slate-700 px-2">
+                                  Page {safeDebtorsPage} of {debtorsTotalPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setDebtorsCurrentPage(prev => Math.min(debtorsTotalPages, prev + 1))}
+                                  disabled={safeDebtorsPage >= debtorsTotalPages}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                  title="Next batch"
+                                >
+                                  <ChevronRight size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
                           {filteredLedger.length === 0 ? (
                             <div className="p-20 text-center space-y-4">
                               <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
@@ -1978,7 +2569,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                   </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                                  {filteredLedger.map((item, idx) => {
+                                  {paginatedDebtors.map((item, idx) => {
                                     const matchingClient = clients.find(c => 
                                       c.id === item.id || 
                                       String(c.clientName || '').toLowerCase() === String(item.dboName || '').toLowerCase()
@@ -2078,6 +2669,70 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                   })}
                                 </tbody>
                               </table>
+                            </div>
+                          )}
+
+                          {/* Bottom Pagination & Batch Range Controls for Debtors Ledger */}
+                          {totalDebtors > 0 && (
+                            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-slate-100 bg-slate-50/50 text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-600 font-semibold text-xs">Show</span>
+                                <select
+                                  value={debtorsBatchSize}
+                                  onChange={(e) => {
+                                    setDebtorsBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
+                                    setDebtorsCurrentPage(1);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
+                                >
+                                  <option value={10}>10</option>
+                                  <option value={25}>25</option>
+                                  <option value={50}>50</option>
+                                  <option value={100}>100</option>
+                                </select>
+                                <span className="text-slate-600 font-semibold text-xs">entries</span>
+                                <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
+                                  (Showing {totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}–{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)} of {totalDebtors.toLocaleString()} debtors)
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setDebtorsCurrentPage(1)}
+                                  disabled={safeDebtorsPage <= 1}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                                >
+                                  First
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDebtorsCurrentPage(prev => Math.max(1, prev - 1))}
+                                  disabled={safeDebtorsPage <= 1}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                >
+                                  <ChevronLeft size={14} />
+                                </button>
+                                <span className="text-[11px] font-bold text-slate-700 px-2">
+                                  Page {safeDebtorsPage} of {debtorsTotalPages}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setDebtorsCurrentPage(prev => Math.min(debtorsTotalPages, prev + 1))}
+                                  disabled={safeDebtorsPage >= debtorsTotalPages}
+                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                                >
+                                  <ChevronRight size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDebtorsCurrentPage(debtorsTotalPages)}
+                                  disabled={safeDebtorsPage >= debtorsTotalPages}
+                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                                >
+                                  Last
+                                </button>
+                              </div>
                             </div>
                           )}
                         </>
@@ -2858,18 +3513,28 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                 </h4>
                 <ul className="list-disc pl-5 text-slate-600 text-xs space-y-2 leading-relaxed">
                   <li>Download the pre-formatted returns CSV template below.</li>
-                  <li>The <strong>clientName</strong> column must match a client exactly as registered in the <em>Clients Tab</em> (case-insensitive).</li>
+                  <li>The <strong>clientname</strong> column can match existing registered clients, or <em>automatically register new client stubs</em> into the Clients Registry.</li>
                   <li>Ensure <strong>period</strong> values are written in full (e.g., <em>January</em>, <em>February</em>, etc).</li>
-                  <li>Numerical fields like <strong>qty</strong>, <strong>invoiceAmount</strong>, and <strong>paymentAmount</strong> must contain positive numbers only.</li>
+                  <li>Strictly follow the 14-column layout as outlined in the template.</li>
                 </ul>
 
-                <div className="pt-2">
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <button
                     onClick={downloadReturnsTemplate}
                     className="inline-flex items-center gap-2 bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 px-4 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all shadow-sm"
                   >
                     <Download size={14} className="text-emerald-500" /> Download Returns Template (.csv)
                   </button>
+
+                  <label className="flex items-center gap-2 cursor-pointer bg-emerald-50/80 text-emerald-900 border border-emerald-200 px-3 py-2 rounded-xl text-xs font-bold">
+                    <input
+                      type="checkbox"
+                      checked={autoProvisionClients}
+                      onChange={(e) => setAutoProvisionClients(e.target.checked)}
+                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span>Auto-register new clients into Clients Registry</span>
+                  </label>
                 </div>
               </div>
 
@@ -2892,6 +3557,31 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* Auto-Discovery Feedback Banner */}
+              {newlyProvisionedClients.length > 0 && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-emerald-900 flex items-center gap-1.5 uppercase tracking-wide">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      {newlyProvisionedClients.length} New Client Profile(s) Auto-Discovered
+                    </span>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                      Will Synchronize to Clients Registry
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-emerald-800">
+                    The following client profiles were not in your registry and will be automatically created upon saving:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pt-1">
+                    {newlyProvisionedClients.map(c => (
+                      <span key={c.id} className="text-[10px] bg-white border border-emerald-300 text-emerald-900 px-2.5 py-1 rounded-lg font-bold shadow-xs">
+                        {c.clientName}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Parsing status / Warning messages */}
               {(parsedReturns.length > 0 || importErrors.length > 0) && (

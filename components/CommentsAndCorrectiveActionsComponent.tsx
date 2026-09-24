@@ -32,12 +32,11 @@ interface CommentsAndCorrectiveActionsComponentProps {
   readOnly?: boolean;
 }
 
-const QUICK_DIRECTIVES = [
+const BASE_QUICK_DIRECTIVES = [
   'Reconcile daily intake records with submitted monthly returns',
-  'Settle identified under-declaration levy arrears within 14 days',
-  'Regularize operating category and permit classification',
+  'Settle identified Non/under-declaration levy arrears within 14 days',
   'Maintain complete physical dispatch and customer receipts',
-  'Rectify transaction reconciliation discrepancies identified during audit',
+  'Rectify transaction reconciliation discrepancies identified during inspection',
   'Submit missing delivery notes and county business permit copies'
 ];
 
@@ -58,9 +57,62 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
     if (!trimmed) {
       onChange({ recommendedActions: `• ${directiveText}` });
     } else {
+      // Don't duplicate if already present in the recommended actions
+      if (trimmed.includes(directiveText)) return;
       onChange({ recommendedActions: `${trimmed}\n• ${directiveText}` });
     }
   };
+
+  // Automatically derive smart directives based on specific issues identified
+  const generatedDirectives = React.useMemo(() => {
+    const list: string[] = [];
+    const added = new Set<string>();
+
+    const addUnique = (d: string) => {
+      const clean = d.trim();
+      if (clean && !added.has(clean) && !BASE_QUICK_DIRECTIVES.includes(clean)) {
+        added.add(clean);
+        list.push(clean);
+      }
+    };
+
+    exceptionObservations.forEach(obs => {
+      const type = (obs.type || '').toLowerCase();
+      const text = `${obs.observation || ''} ${obs.definition || ''}`.toLowerCase();
+
+      if (text.includes('non-declaration') || text.includes('unfiled') || text.includes('not filed')) {
+        addUnique('File outstanding monthly returns and settle full undeclared levy within 14 days');
+      } else if (text.includes('under-declaration') || type.includes('arrears') || text.includes('arrears')) {
+        addUnique('Remit identified volume variance levy arrears and submit updated reconciliation within 14 days');
+      }
+
+      if (type.includes('missing') || text.includes('missing') || text.includes('cannot be located')) {
+        addUnique('Furnish missing delivery notes, invoices, and physical dispatch records within 7 days');
+      }
+
+      if (type.includes('incomplete') || text.includes('incomplete') || text.includes('missing data')) {
+        addUnique('Complete and standardize all mandatory daily intake and sales register entries');
+      }
+
+      if (type.includes('conflict') || text.includes('conflict') || text.includes('discrepan')) {
+        addUnique('Harmonize premise intake registers with submitted monthly returns to resolve identified discrepancies');
+      }
+
+      if (type.includes('late') || text.includes('late') || text.includes('deadline')) {
+        addUnique('Adhere to statutory filing deadlines by submitting monthly returns on or before the 10th of every month');
+      }
+
+      if (text.includes('permit') || text.includes('licen') || type.includes('permit')) {
+        addUnique('Display valid KDB operating permit conspicuously at the premise at all times');
+      }
+
+      if (text.includes('branch') || text.includes('cooling plant') || text.includes('dispenser')) {
+        addUnique('Ensure all subsidiary dispensing points and branch facilities maintain accurate intake manifests');
+      }
+    });
+
+    return list;
+  }, [exceptionObservations]);
 
   const handleToggleComment = (commentText: string, cleanObs: string) => {
     if (readOnly) return;
@@ -236,24 +288,65 @@ export const CommentsAndCorrectiveActionsComponent: React.FC<CommentsAndCorrecti
           </div>
         </div>
 
-        {/* Quick Suggestion Directives */}
+        {/* Auto-Generated Directives from Identified Issues */}
+        {!readOnly && generatedDirectives.length > 0 && (
+          <div className="space-y-1.5 pt-1 p-3 bg-amber-50/60 rounded-2xl border border-amber-200">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-900 uppercase tracking-wider">
+                <Sparkles className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                <span>Issue-Specific Directives (Auto-Generated • Click to Append):</span>
+              </div>
+              <span className="text-[10px] text-amber-700 font-medium">{generatedDirectives.length} available</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {generatedDirectives.map((directive, idx) => {
+                const isAppended = (recommendedActions || '').includes(directive);
+                return (
+                  <button
+                    key={`gen-${idx}`}
+                    type="button"
+                    onClick={() => handleAppendDirective(directive)}
+                    className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-all text-left cursor-pointer flex items-center gap-1.5 ${
+                      isAppended
+                        ? 'bg-emerald-100 border-emerald-300 text-emerald-900'
+                        : 'bg-white hover:bg-amber-100 hover:border-amber-400 text-slate-800 border-amber-200 shadow-2xs'
+                    }`}
+                  >
+                    <span>{isAppended ? '✓' : '+'}</span>
+                    <span>{directive}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Base Quick Suggestion Directives */}
         {!readOnly && (
           <div className="space-y-1.5 pt-1">
             <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
               <Sparkles className="w-3 h-3 text-blue-600" />
-              <span>Quick Directives (Click to append):</span>
+              <span>Standard Quick Directives (Click to append):</span>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {QUICK_DIRECTIVES.map((directive, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleAppendDirective(directive)}
-                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 text-slate-600 text-[11px] font-medium transition-all text-left cursor-pointer"
-                >
-                  + {directive}
-                </button>
-              ))}
+              {BASE_QUICK_DIRECTIVES.map((directive, idx) => {
+                const isAppended = (recommendedActions || '').includes(directive);
+                return (
+                  <button
+                    key={`base-${idx}`}
+                    type="button"
+                    onClick={() => handleAppendDirective(directive)}
+                    className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-all text-left cursor-pointer flex items-center gap-1 ${
+                      isAppended
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                        : 'bg-slate-50 border-slate-200 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 text-slate-600'
+                    }`}
+                  >
+                    <span>{isAppended ? '✓' : '+'}</span>
+                    <span>{directive}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

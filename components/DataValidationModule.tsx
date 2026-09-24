@@ -137,6 +137,7 @@ interface NonComplianceEntry {
   amount: string;
   paymentMonthYear: string;
   mpesaRef: string;
+  classification?: 'under-declaration' | 'non-declaration';
 }
 
 interface OutletEntry {
@@ -290,7 +291,7 @@ export const parsePaymentMonthYearToDDMMYYYY = (paymentMonthYearStr?: string): s
 
 export const syncArrearsExceptions = (
   currentExceptions: ExceptionRegisterItem[] = [],
-  nonComplianceList: Array<{ month: string; litres: string; amount: string; paymentMonthYear: string; mpesaRef?: string }>,
+  nonComplianceList: Array<{ month: string; litres: string; amount: string; paymentMonthYear: string; mpesaRef?: string; classification?: 'under-declaration' | 'non-declaration' }>,
   dboName: string = '',
   unit: string = 'L'
 ): ExceptionRegisterItem[] => {
@@ -300,6 +301,8 @@ export const syncArrearsExceptions = (
   activeNC.forEach(nc => {
     const cleanMonth = nc.month.trim();
     const cleanMonthNorm = cleanMonth.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const classification = nc.classification || 'under-declaration';
+    const isNonDeclaration = classification === 'non-declaration';
 
     // Find existing Arrears exception for this month
     const existingIdx = next.findIndex(e => 
@@ -311,16 +314,23 @@ export const syncArrearsExceptions = (
       )
     );
 
-    const exampleText = `${cleanMonth} under-declaration: ${nc.litres || '0'} ${unit}${nc.amount ? `, Kshs ${nc.amount}` : ''}`;
-    const sourceText = `Under-Declaration Schedule (${cleanMonth})`;
+    const term = isNonDeclaration ? 'non-declaration' : 'under-declaration';
+    const titleTerm = isNonDeclaration ? 'Non-Declaration' : 'Under-Declaration';
+    const exampleText = `${cleanMonth} ${term}: ${nc.litres || '0'} ${unit}${nc.amount ? `, Kshs ${nc.amount}` : ''}`;
+    const sourceText = `${titleTerm} Schedule (${cleanMonth})`;
+    const definitionText = isNonDeclaration
+      ? 'Outstanding CSL levy arrears and penalties identified from non-declaration of monthly returns'
+      : 'Outstanding CSL levy arrears and compounding penalties identified from under-declaration or reconciliation';
     const dueDateVal = parsePaymentMonthYearToDDMMYYYY(nc.paymentMonthYear);
 
     if (existingIdx >= 0) {
       next[existingIdx] = {
         ...next[existingIdx],
+        definition: definitionText,
         dueDate: dueDateVal,
         example: exampleText,
         source: sourceText,
+        arrearsClassification: classification,
         status: nc.mpesaRef ? 'Resolved' : (next[existingIdx].status || 'Open'),
         resolutionEvidence: nc.mpesaRef ? `Payment Ref: ${nc.mpesaRef}` : next[existingIdx].resolutionEvidence
       };
@@ -332,11 +342,12 @@ export const syncArrearsExceptions = (
       next.push({
         id,
         type: 'Arrears',
-        definition: 'Outstanding CSL levy arrears and compounding penalties identified from under-declaration or reconciliation',
+        definition: definitionText,
         example: exampleText,
         source: sourceText,
         owner: dboName || 'Client / DBO',
         dueDate: dueDateVal,
+        arrearsClassification: classification,
         resolutionEvidence: nc.mpesaRef ? `Payment Ref: ${nc.mpesaRef}` : '',
         status: nc.mpesaRef ? 'Resolved' : 'Open'
       });
@@ -1253,23 +1264,30 @@ export function DataValidationModule() {
   }, []);
 
   useEffect(() => {
-    const verifyApi = async () => {
+    let isMounted = true;
+    const verifyApi = async (retries = 2) => {
       try {
         const res = await fetch('/api/health');
         if (res.ok) {
           const data: any = await res.json();
-          console.log('API is healthy', data);
-          setIsConnected(data.configured);
+          if (isMounted) setIsConnected(!!data.configured);
         } else {
-          console.log('API health check failed:', res.status);
-          setIsConnected(false);
+          if (isMounted) setIsConnected(false);
         }
       } catch (err) {
-        console.error('API unreachable:', err);
-        setIsConnected(false);
+        if (retries > 0) {
+          setTimeout(() => {
+            if (isMounted) verifyApi(retries - 1);
+          }, 1500);
+        } else {
+          if (isMounted) setIsConnected(false);
+        }
       }
     };
     verifyApi();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Fast helper to compute premise validation history from any list of records
@@ -3787,9 +3805,19 @@ export function DataValidationModule() {
         doc.setFontSize(9);
         doc.text("Compliance Observations & Comments:", 20, currentY);
         doc.setFont("helvetica", "normal");
-        const splitComments = doc.splitTextToSize(data.comments, 170);
-        doc.text(splitComments, 20, currentY + 4);
-        currentY += Math.max(splitComments.length * 4.5, 6) + 4;
+        currentY += 5;
+
+        // Split comments by paragraph/lines for comfortable row spacing
+        const commentParas = String(data.comments || '').split('\n').filter(p => p.trim().length > 0);
+        const effectiveComments = commentParas.length > 0 ? commentParas : [String(data.comments || '')];
+
+        effectiveComments.forEach((para) => {
+          checkPageBreak(12);
+          const splitLines = doc.splitTextToSize(para.trim(), 170);
+          doc.text(splitLines, 20, currentY, { lineHeightFactor: 1.45 });
+          currentY += (splitLines.length * 5.2) + 2.5;
+        });
+        currentY += 2;
       }
 
       if (data.recommendedActions) {
@@ -3798,17 +3826,28 @@ export function DataValidationModule() {
         doc.setFontSize(9);
         doc.text("Recommended Corrective Actions & Directives:", 20, currentY);
         doc.setFont("helvetica", "normal");
-        const splitActions = doc.splitTextToSize(data.recommendedActions, 170);
-        doc.text(splitActions, 20, currentY + 4);
-        currentY += Math.max(splitActions.length * 4.5, 6) + 4;
+        currentY += 5;
+
+        // Split directives by paragraph/lines for comfortable row spacing
+        const actionParas = String(data.recommendedActions || '').split('\n').filter(p => p.trim().length > 0);
+        const effectiveActions = actionParas.length > 0 ? actionParas : [String(data.recommendedActions || '')];
+
+        effectiveActions.forEach((directive) => {
+          checkPageBreak(12);
+          const splitLines = doc.splitTextToSize(directive.trim(), 170);
+          doc.text(splitLines, 20, currentY, { lineHeightFactor: 1.45 });
+          currentY += (splitLines.length * 5.2) + 2.5;
+        });
+        currentY += 2;
 
         if (data.actionDueDate || data.actionOwner) {
+          checkPageBreak(12);
           doc.setFontSize(8);
           doc.setFont("helvetica", "italic");
           const metaText = `Remediation Due Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
           doc.text(metaText, 20, currentY);
           doc.setFont("helvetica", "normal");
-          currentY += 6;
+          currentY += 7;
         }
       }
       currentY += 4;
@@ -7931,7 +7970,7 @@ export function DataValidationModule() {
 
                       <button
                         type="button"
-                        onClick={() => validateStep(3) && setStep(4)}
+                        onClick={() => validateStep(3) && setStep(isBranchFacility ? 5 : 4)}
                         className="flex items-center gap-1.5 sm:gap-2 px-5 sm:px-8 py-2.5 sm:py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all text-xs sm:text-sm shadow-sm cursor-pointer"
                       >
                         Next Step
@@ -7954,12 +7993,36 @@ export function DataValidationModule() {
                   <div className="flex items-center gap-2 mb-6 pb-3 border-b border-gray-100">
                     <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">4</div>
                     <div>
-                      <h2 className="text-lg font-bold text-gray-900">{isBranchFacility ? "Compliance & Settlement" : "Compliance & Confirmation"}</h2>
-                      <p className="text-[11px] text-gray-500 font-medium">Under-declaration arrears and settlement schedule</p>
+                      <h2 className="text-lg font-bold text-gray-900">{isBranchFacility ? "Compliance & Settlement (Disabled for Branches)" : "Compliance & Confirmation"}</h2>
+                      <p className="text-[11px] text-gray-500 font-medium">
+                        {isBranchFacility ? "Branch facility compliance is consolidated under the main premise" : "Under-declaration/Non-declaration arrears and settlement schedule"}
+                      </p>
                     </div>
                   </div>
 
-                  {!isBranchFacility && (
+                  {isBranchFacility ? (
+                    <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-6 sm:p-8 text-center space-y-4">
+                      <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 border border-blue-200 flex items-center justify-center mx-auto shadow-xs">
+                        <AlertCircle className="w-6 h-6" />
+                      </div>
+                      <div className="max-w-md mx-auto space-y-1.5">
+                        <h3 className="text-base font-bold text-slate-900">Compliance & Settlement Section Disabled for Branches</h3>
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                          This facility is recognized as a branch premises. Financial compliance assessments, regulatory levy calculations, and arrears settlement schedules are managed and settled centrally under the parent licensed premise.
+                        </p>
+                      </div>
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setStep(5)}
+                          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                        >
+                          <span>Proceed to Step 5 (Exceptions & Directives)</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100 space-y-6">
                       {/* Under-Declaration & Settlement Schedule */}
                       <div className="bg-white p-5 rounded-2xl border border-blue-100/80 shadow-xs space-y-3">
@@ -7967,10 +8030,10 @@ export function DataValidationModule() {
                           <div>
                             <h3 className="text-sm font-bold text-blue-950 flex items-center gap-2">
                               <AlertCircle className="w-4 h-4 text-blue-600" />
-                              <span>Under-Declaration & Settlement Schedule</span>
+                              <span>Arrears & Settlement Schedule</span>
                             </h3>
                             <p className="text-[11px] text-gray-500">
-                              Calculated under-declared volumes, agreed amounts and official MPESA / payment receipts.
+                              Classify whether arrears arise from under-declaration or non-declaration, and record agreed payment receipts.
                             </p>
                           </div>
                           {formData.nonCompliance.length > 0 && (
@@ -7984,16 +8047,44 @@ export function DataValidationModule() {
                           <table className="w-full text-left border-collapse">
                             <thead>
                               <tr className="bg-blue-100/50">
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Classification</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Recalculated Amount (Kshs)</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Agreed Due Date</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider text-center w-12">Action</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-blue-50">
                               {formData.nonCompliance.map((nc, idx) => (
                                 <tr key={idx}>
+                                  <td className="p-1">
+                                    <select
+                                      value={nc.classification || 'under-declaration'}
+                                      onChange={(e) => {
+                                        const val = e.target.value as 'under-declaration' | 'non-declaration';
+                                        const newNC = [...formData.nonCompliance];
+                                        newNC[idx].classification = val;
+                                        const updatedExceptions = syncArrearsExceptions(
+                                          formData.exceptionRegister || [],
+                                          newNC,
+                                          formData.dboName || selectedClient?.clientName || '',
+                                          globalUnit
+                                        );
+                                        setFormData(prev => ({
+                                          ...prev,
+                                          nonCompliance: newNC,
+                                          exceptionRegister: updatedExceptions
+                                        }));
+                                      }}
+                                      className="w-full px-2 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white font-medium text-slate-800"
+                                      title="Select whether this arrears exception is an under-declaration or non-declaration"
+                                    >
+                                      <option value="under-declaration">Under-declaration</option>
+                                      <option value="non-declaration">Non-declaration</option>
+                                    </select>
+                                  </td>
                                   <td className="p-3 text-xs font-bold text-blue-800">{nc.month}</td>
                                   <td className="p-3 text-xs text-blue-700">{nc.litres}</td>
                                   <td className="p-1">
@@ -8047,6 +8138,29 @@ export function DataValidationModule() {
                                       className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white"
                                     />
                                   </td>
+                                  <td className="p-1 text-center">
+                                    <button
+                                      type="button"
+                                      title="Delete row from settlement schedule"
+                                      onClick={() => {
+                                        const newNC = formData.nonCompliance.filter((_, i) => i !== idx);
+                                        const updatedExceptions = syncArrearsExceptions(
+                                          formData.exceptionRegister || [],
+                                          newNC,
+                                          formData.dboName || selectedClient?.clientName || '',
+                                          globalUnit
+                                        );
+                                        setFormData(prev => ({ 
+                                          ...prev, 
+                                          nonCompliance: newNC,
+                                          exceptionRegister: updatedExceptions
+                                        }));
+                                      }}
+                                      className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors inline-flex items-center justify-center cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
                                 </tr>
                               ))}
                               {formData.nonCompliance.length > 0 && (
@@ -8058,7 +8172,7 @@ export function DataValidationModule() {
                                   <td className="p-3 text-xs font-bold text-blue-900 font-mono">
                                     {totalPenalty.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </td>
-                                  <td colSpan={2} className="p-3 text-xs font-semibold text-blue-800 text-right">
+                                  <td colSpan={3} className="p-3 text-xs font-semibold text-blue-800 text-right">
                                     <span className="bg-blue-100/80 text-blue-900 px-2.5 py-1 rounded-md border border-blue-200 inline-block">
                                       Arrears estimate valid through {validTillDate}; figures subject to recalculation thereafter
                                     </span>
@@ -8067,7 +8181,7 @@ export function DataValidationModule() {
                               )}
                               {formData.nonCompliance.length === 0 && (
                                 <tr>
-                                  <td colSpan={5} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
+                                  <td colSpan={6} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
                                 </tr>
                               )}
                             </tbody>
@@ -8248,7 +8362,7 @@ export function DataValidationModule() {
                   <div className="flex justify-between items-center pt-6 border-t border-gray-100">
                     <button
                       type="button"
-                      onClick={() => setStep(4)}
+                      onClick={() => setStep(isBranchFacility ? 3 : 4)}
                       className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2.5 sm:py-3 text-xs sm:text-sm text-gray-600 font-bold hover:text-black hover:bg-gray-100 rounded-xl transition-all cursor-pointer"
                     >
                       <ChevronLeft className="w-4 h-4" />
