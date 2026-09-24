@@ -1,12 +1,10 @@
 import React from 'react';
-import { ShieldCheck, ArrowRight, Building2, FileCheck, CircleCheck, HelpCircle, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, ArrowRight, Building2, FileCheck, CircleCheck, AlertTriangle } from 'lucide-react';
 import { EnabledModules } from '../types';
 
 interface PortalHubProps {
   onSelectPaymentPortal: () => void;
   onSelectClosurePortal: () => void;
-  onSelectComplaintPortal: () => void;
-  onSelectInquiryPortal: () => void;
   unreadAgreementsCount: number;
   unreadClosuresCount: number;
   enabledModules?: EnabledModules;
@@ -15,21 +13,15 @@ interface PortalHubProps {
 export const PortalHub: React.FC<PortalHubProps> = ({ 
   onSelectPaymentPortal, 
   onSelectClosurePortal,
-  onSelectComplaintPortal,
-  onSelectInquiryPortal,
   enabledModules = {
     levyAgreement: true,
     businessClosure: true,
-    clientInquiry: true,
-    stakeholderComplaint: true,
   }
 }) => {
-  const showInquiry = enabledModules.clientInquiry !== false;
-  const showComplaint = enabledModules.stakeholderComplaint !== false;
   const showPayment = enabledModules.levyAgreement !== false;
   const showClosure = enabledModules.businessClosure !== false;
 
-  const activeCount = [showInquiry, showComplaint, showPayment, showClosure].filter(Boolean).length;
+  const activeCount = [showPayment, showClosure].filter(Boolean).length;
 
   return (
     <div className="w-full max-w-5xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-6 animate-in fade-in zoom-in-95 duration-500">
@@ -45,7 +37,7 @@ export const PortalHub: React.FC<PortalHubProps> = ({
         </p>
         <p className="max-w-2xl mx-auto text-xs text-slate-500 font-medium leading-relaxed">
           Welcome to the Kenya Dairy Board compliance support platform. 
-          Select an active regulatory pathway below to execute a structured levy payment agreement, formally submit a business cessation notice, file a stakeholder complaint, or submit a client inquiry.
+          Select an active regulatory pathway below to execute a structured levy payment agreement or formally submit a business cessation notice.
         </p>
       </div>
 
@@ -63,75 +55,7 @@ export const PortalHub: React.FC<PortalHubProps> = ({
         </div>
       ) : (
         <div className={`grid grid-cols-1 ${activeCount === 1 ? 'max-w-2xl mx-auto' : 'md:grid-cols-2'} gap-8 pt-4`}>
-          {/* Card 1: Client Inquiry Form */}
-          {showInquiry && (
-            <div 
-              onClick={onSelectInquiryPortal}
-              className="group relative cursor-pointer overflow-hidden rounded-[32px] bg-white border border-slate-100 shadow-xl transition-all duration-300 hover:shadow-2xl hover:border-sky-300 p-8 flex flex-col justify-between space-y-8"
-            >
-              <div className="absolute top-0 right-0 w-32 h-32 bg-sky-50/40 rounded-full blur-2xl group-hover:scale-125 transition-transform duration-500"></div>
-              
-              <div className="space-y-6">
-                <div className="inline-flex p-4 bg-sky-50 rounded-2xl text-sky-600 border border-sky-100">
-                  <HelpCircle className="w-6 h-6" style={{ color: '#0284c7' }} />
-                </div>
-                <div className="space-y-2">
-                  <h3 className="text-xl font-black text-slate-800 tracking-tight group-hover:text-sky-700 transition-colors">
-                    Client Inquiry Form
-                  </h3>
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">
-                    KDB Information Desk
-                  </p>
-                  <p className="text-sm text-slate-500 font-medium leading-relaxed">
-                    Submit general or specific inquiries regarding dairy standards, license renewals, imports/exports regulations, or training schedules.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-4 border-t border-slate-50">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ask Inquiry</span>
-                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-sky-600 group-hover:text-white transition-all">
-                  <ArrowRight className="w-4 h-4" />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Card 2: Stakeholder Complaints Form */}
-          {showComplaint && (
-            <div 
-              onClick={onSelectComplaintPortal}
-              className="group relative cursor-pointer overflow-hidden rounded-[32px] bg-white border border-slate-100 shadow-xl transition-all duration-300 hover:shadow-2xl hover:border-rose-300 p-8 flex flex-col justify-between space-y-8"
-            >
-              <div className="absolute top-0 right-0 w-32 h-32 bg-rose-50/40 rounded-full blur-2xl group-hover:scale-125 transition-transform duration-500"></div>
-              
-              <div className="space-y-6">
-                <div className="inline-flex p-4 bg-rose-50 rounded-2xl text-rose-600 border border-rose-100">
-                  <FileCheck className="w-6 h-6" />
-                </div>
-                <div className="space-y-2">
-                  <h3 className="text-xl font-black text-slate-800 tracking-tight group-hover:text-rose-700 transition-colors">
-                    Stakeholder Complaints Form
-                  </h3>
-                  <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">
-                    KDB Feedback & Redress
-                  </p>
-                  <p className="text-sm text-slate-500 font-medium leading-relaxed">
-                    Formally submit complaints regarding licensing issues, delayed services, pricing disputes, staff conduct, or regulatory enforcement concerns.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-4 border-t border-slate-50">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">File Complaint</span>
-                <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center group-hover:bg-red-700 group-hover:text-white transition-all">
-                  <ArrowRight className="w-4 h-4" />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Card 3: Levy Payment Agreement */}
+          {/* Card 1: Levy Payment Agreement */}
           {showPayment && (
             <div 
               onClick={onSelectPaymentPortal}
@@ -165,7 +89,7 @@ export const PortalHub: React.FC<PortalHubProps> = ({
             </div>
           )}
 
-          {/* Card 4: Business Closure Notification */}
+          {/* Card 2: Business Closure Notification */}
           {showClosure && (
             <div 
               onClick={onSelectClosurePortal}

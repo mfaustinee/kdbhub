@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AgreementData, DebtorRecord, LicensedClient } from '../types';
 import { SignaturePad } from './SignaturePad';
-import { Building2, Calendar, CreditCard, ChevronRight, CheckCircle2, ShieldCheck, Mail, AlertCircle, FileText, Lock, MapPin, Phone, Check, Camera, PenTool, Upload, Loader2, Send, ArrowLeft } from 'lucide-react';
+import { Building2, Calendar, CreditCard, ChevronRight, CheckCircle2, ShieldCheck, Mail, AlertCircle, FileText, Lock, MapPin, Phone, Check, Camera, PenTool, Upload, Loader2, Send, ArrowLeft, Trash2 } from 'lucide-react';
 
 interface AgreementFormProps {
   agreements: AgreementData[];
@@ -354,13 +354,33 @@ export const AgreementForm: React.FC<AgreementFormProps> = ({ agreements, debtor
 
               <div className="border rounded-3xl overflow-hidden shadow-sm">
                 <table className="w-full text-sm">
-                  <thead className="bg-slate-50 font-black text-slate-400 uppercase text-[10px] tracking-widest"><tr><th className="px-8 py-5 text-left">Installment Period</th><th className="px-8 py-5 text-left">Amount (KES)</th><th className="px-8 py-5 text-left text-slate-800">Payment Due Date *</th></tr></thead>
+                  <thead className="bg-slate-50 font-black text-slate-400 uppercase text-[10px] tracking-widest">
+                    <tr>
+                      <th className="px-8 py-5 text-left">Installment Period</th>
+                      <th className="px-8 py-5 text-left">Amount (KES)</th>
+                      <th className="px-8 py-5 text-left text-slate-800">Payment Due Date *</th>
+                      <th className="px-4 py-5 text-center text-slate-400 w-16">Action</th>
+                    </tr>
+                  </thead>
                   <tbody className="divide-y divide-slate-100">
                     {formData.installments?.map((inst, i) => (
                       <tr key={i} className="bg-white hover:bg-slate-50/50 transition-colors">
                         <td className="px-8 py-5 font-bold text-slate-400">Inst. {inst.no} ({inst.period})</td>
                         <td className="px-8 py-5 font-black text-emerald-600 text-lg">KES {inst.amount.toLocaleString()}</td>
                         <td className="px-8 py-5"><input required type="date" value={inst.dueDate || ''} onChange={e => updateInstallment(i, e.target.value)} className="w-full px-4 py-3 border-2 border-emerald-600 rounded-xl outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all font-bold text-slate-800" /></td>
+                        <td className="px-4 py-5 text-center">
+                          <button
+                            type="button"
+                            title="Remove installment"
+                            onClick={() => {
+                              const updated = formData.installments?.filter((_, idx) => idx !== i).map((item, idx) => ({ ...item, no: idx + 1 }));
+                              setFormData(prev => ({ ...prev, installments: updated }));
+                            }}
+                            className="p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl transition-all inline-flex items-center justify-center cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

@@ -1,6 +1,23 @@
-import { AgreementData, DebtorRecord, StaffConfig, ClosureNotificationData, LicensedClient, ClientReturn, DataValidation, ComplaintData, InquiryData, getIndividualValidationsCount, ValidationDraft, AuthoritySignature, ScopeDisclosureRecord } from '../types';
+import { 
+  AgreementData, 
+  DebtorRecord, 
+  StaffConfig, 
+  ClosureNotificationData, 
+  LicensedClient, 
+  ClientReturn, 
+  DataValidation, 
+  getIndividualValidationsCount, 
+  ValidationDraft, 
+  AuthoritySignature, 
+  ScopeDisclosureRecord,
+  ClientQueryParams,
+  PaginatedResult,
+  ReturnQueryParams,
+  PaginatedReturnsResult
+} from '../types';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createSafeSupabaseClient, isSupabaseDisabled } from '../components/lib/supabase';
+import { areNamesMatching, searchMatches, cleanPermitNumber } from '../components/lib/nameMatching';
 
 let supabase: SupabaseClient | null = null;
 let supabasePromise: Promise<SupabaseClient | null> | null = null;
@@ -139,12 +156,31 @@ const safeSetLocalStorage = (key: string, value: string) => {
   }
 };
 
+export const formatCustomerNumber = (idOrNum?: string, clientName?: string, premiseName?: string): string => {
+  if (idOrNum && typeof idOrNum === 'string') {
+    const trimmed = idOrNum.trim();
+    if (/^CUST-\d+/i.test(trimmed)) return trimmed.toUpperCase();
+    if (/^\d{4,8}$/.test(trimmed)) return `CUST-${trimmed}`;
+  }
+  // Generate deterministic 5-digit number from name + premise or random fallback
+  let hash = 0;
+  const str = `${clientName || ''}::${premiseName || ''}::${idOrNum || ''}`;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  const positive = (Math.abs(hash) % 90000) + 10000;
+  return `CUST-${positive}`;
+};
+
 // Custom translators for LicensedClient to map cleanly to the 19 actual Supabase columns
 const clientToDb = (client: any) => {
   if (!client) return client;
-  const pNo = String(client.permitNumber || client.permitnumber || client.id || '').trim();
+  const pNo = String(client.permitNumber || client.permitnumber || '').trim();
+  const custNo = String(client.customerNumber || client.customernumber || formatCustomerNumber(client.id, client.clientName, client.premiseName)).trim();
   const rawId = String(client.id || '').trim();
-  const idVal = rawId || (pNo ? `${pNo}_${Math.random().toString(36).substring(2, 6)}` : `CLI-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
+  // Never default unique ID to permit number because multiple clients can share the same permit number
+  const idVal = (rawId && !rawId.includes('/')) ? rawId : (custNo || `CLI-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
 
   let branchesVal: any[] = [];
   if (Array.isArray(client.branches)) {
@@ -159,6 +195,7 @@ const clientToDb = (client: any) => {
 
   const out: any = {
     id: idVal,
+    customernumber: custNo,
     clientname: String(client.clientName ?? client.clientname ?? '').trim(),
     premisename: String(client.premiseName ?? client.premisename ?? '').trim(),
     premisecategory: String(client.premiseCategory ?? client.premisecategory ?? 'Milk Bar').trim(),
@@ -207,20 +244,20 @@ const returnFromDb = (dbObj: any): ClientReturn => {
   if (!dbObj) return dbObj;
   return {
     id: String(dbObj.id || '').trim(),
-    clientId: String(dbObj.clientid ?? dbObj.clientId ?? '').trim(),
-    clientName: String(dbObj.clientname ?? dbObj.clientName ?? '').trim(),
+    clientId: String(dbObj.clientid ?? dbObj.client_id ?? dbObj.clientId ?? '').trim(),
+    clientName: String(dbObj.clientname ?? dbObj.client_name ?? dbObj.clientName ?? '').trim(),
     year: Number(dbObj.year ?? 2026),
     period: String(dbObj.period ?? 'January').trim(),
-    qty: Number(dbObj.qty ?? 0),
-    invoiceAmount: Number(dbObj.invoiceamount ?? dbObj.invoiceAmount ?? 0),
-    returnDate: String(dbObj.returndate ?? dbObj.returnDate ?? '').trim(),
-    paymentAmount: Number(dbObj.paymentamount ?? dbObj.paymentAmount ?? 0),
-    paymentDate: String(dbObj.paymentdate ?? dbObj.paymentDate ?? '').trim(),
-    txnRef: String(dbObj.txnref ?? dbObj.txnRef ?? '').trim(),
-    lessCF: Number(dbObj.lesscf ?? dbObj.lessCF ?? 0),
-    outstandingBalance: Number(dbObj.outstandingbalance ?? dbObj.outstandingBalance ?? 0),
-    agingDays: Number(dbObj.agingdays ?? dbObj.agingDays ?? 0),
-    paymentStatus: (dbObj.paymentstatus ?? dbObj.paymentStatus ?? 'Unpaid') as any,
+    qty: Number(dbObj.qty ?? dbObj.quantity ?? 0),
+    invoiceAmount: Number(dbObj.invoiceamount ?? dbObj.invoice_amount ?? dbObj.invoiceAmount ?? 0),
+    returnDate: String(dbObj.returndate ?? dbObj.return_date ?? dbObj.returnDate ?? '').trim(),
+    paymentAmount: Number(dbObj.paymentamount ?? dbObj.payment_amount ?? dbObj.paymentAmount ?? 0),
+    paymentDate: String(dbObj.paymentdate ?? dbObj.payment_date ?? dbObj.paymentDate ?? '').trim(),
+    txnRef: String(dbObj.txnref ?? dbObj.txn_ref ?? dbObj.txnRef ?? '').trim(),
+    lessCF: Number(dbObj.lesscf ?? dbObj.less_cf ?? dbObj.lessCF ?? 0),
+    outstandingBalance: Number(dbObj.outstandingbalance ?? dbObj.outstanding_balance ?? dbObj.outstandingBalance ?? 0),
+    agingDays: Number(dbObj.agingdays ?? dbObj.aging_days ?? dbObj.agingDays ?? 0),
+    paymentStatus: (dbObj.paymentstatus ?? dbObj.payment_status ?? dbObj.paymentStatus ?? 'Unpaid') as any,
     comments: String(dbObj.comments ?? '').trim()
   };
 };
@@ -230,24 +267,35 @@ const clientFromDb = (dbObj: any): LicensedClient => {
   const out: any = { ...dbObj };
   
   const clientName = dbObj.clientname ?? dbObj.client_name ?? dbObj.clientName;
-  if (clientName !== undefined) out.clientName = clientName;
+  if (clientName !== undefined) out.clientName = String(clientName).trim();
 
   const premiseName = dbObj.premisename ?? dbObj.premises ?? dbObj.premise_name ?? dbObj.premiseName;
-  if (premiseName !== undefined) out.premiseName = premiseName;
+  if (premiseName !== undefined) out.premiseName = String(premiseName).trim();
 
-  if (dbObj.startyear !== undefined) out.startYear = Number(dbObj.startyear);
-  if (dbObj.startmonth !== undefined) out.startMonth = dbObj.startmonth;
-  if (dbObj.endyear !== undefined) out.endYear = dbObj.endyear ? Number(dbObj.endyear) : null;
-  if (dbObj.endmonth !== undefined) out.endMonth = dbObj.endmonth;
+  if (dbObj.startyear !== undefined || dbObj.start_year !== undefined) {
+    out.startYear = Number(dbObj.startyear ?? dbObj.start_year);
+  }
+  if (dbObj.startmonth !== undefined || dbObj.start_month !== undefined) {
+    out.startMonth = dbObj.startmonth ?? dbObj.start_month;
+  }
+  if (dbObj.endyear !== undefined || dbObj.end_year !== undefined) {
+    const ey = dbObj.endyear ?? dbObj.end_year;
+    out.endYear = ey ? Number(ey) : null;
+  }
+  if (dbObj.endmonth !== undefined || dbObj.end_month !== undefined) {
+    out.endMonth = dbObj.endmonth ?? dbObj.end_month;
+  }
   
-  if (dbObj.tel !== undefined) out.tel = dbObj.tel;
+  if (dbObj.tel !== undefined || dbObj.phone !== undefined) {
+    out.tel = dbObj.tel ?? dbObj.phone;
+  }
   
   const contactPerson = dbObj.contactperson ?? dbObj.contacts ?? dbObj.contact_person ?? dbObj.contactPerson;
   if (contactPerson !== undefined) out.contactPerson = contactPerson;
 
   if (dbObj.location !== undefined) out.location = dbObj.location;
 
-  const rawCat = dbObj.premisecategory ?? dbObj.category ?? dbObj.premiseCategory ?? dbObj.premise_category ?? dbObj.client_category ?? dbObj.clientCategory;
+  const rawCat = dbObj.premisecategory ?? dbObj.premise_category ?? dbObj.category ?? dbObj.premiseCategory ?? dbObj.client_category ?? dbObj.clientCategory;
   if (rawCat !== undefined && rawCat !== null) {
     out.premiseCategory = String(rawCat).trim();
   } else if (!out.premiseCategory) {
@@ -255,10 +303,19 @@ const clientFromDb = (dbObj: any): LicensedClient => {
   }
 
   if (dbObj.county !== undefined) out.county = dbObj.county;
-  if (dbObj.coolingcapacity !== undefined) out.coolingCapacity = dbObj.coolingcapacity ? Number(dbObj.coolingcapacity) : undefined;
-  if (dbObj.permitstatus !== undefined) out.permitStatus = dbObj.permitstatus;
-  if (dbObj.operationalstatus !== undefined) out.operationalStatus = dbObj.operationalstatus;
-  if (dbObj.levyinfo !== undefined) out.levyInfo = dbObj.levyinfo;
+  if (dbObj.coolingcapacity !== undefined || dbObj.cooling_capacity !== undefined) {
+    const cc = dbObj.coolingcapacity ?? dbObj.cooling_capacity;
+    out.coolingCapacity = cc ? Number(cc) : undefined;
+  }
+  if (dbObj.permitstatus !== undefined || dbObj.permit_status !== undefined) {
+    out.permitStatus = dbObj.permitstatus ?? dbObj.permit_status;
+  }
+  if (dbObj.operationalstatus !== undefined || dbObj.operational_status !== undefined) {
+    out.operationalStatus = dbObj.operationalstatus ?? dbObj.operational_status;
+  }
+  if (dbObj.levyinfo !== undefined || dbObj.levy_info !== undefined) {
+    out.levyInfo = dbObj.levyinfo ?? dbObj.levy_info;
+  }
   if (out.operationalStatus === 'closed') {
     out.levyInfo = 'DNQ-R';
   }
@@ -266,14 +323,18 @@ const clientFromDb = (dbObj: any): LicensedClient => {
   const expiryDate = dbObj.expirydate ?? dbObj.expiry_date ?? dbObj.expiryDate;
   if (expiryDate !== undefined) out.expiryDate = expiryDate;
 
-  const permitNumber = dbObj.permitnumber ?? dbObj.permit_number ?? dbObj.permitNumber ?? dbObj.id;
+  const permitNumber = dbObj.permitnumber ?? dbObj.permit_number ?? dbObj.permitNumber;
   if (permitNumber !== undefined) {
-    out.permitNumber = permitNumber;
-    out.id = dbObj.id || permitNumber;
-  } else if (dbObj.id !== undefined) {
-    out.id = dbObj.id;
-    if (!out.permitNumber) out.permitNumber = dbObj.id;
+    out.permitNumber = String(permitNumber).trim();
   }
+  
+  const rawCust = dbObj.customernumber ?? dbObj.customer_number ?? dbObj.customerNumber;
+  const rawId = dbObj.id !== undefined ? String(dbObj.id).trim() : '';
+  const customerNumber = rawCust ? String(rawCust).trim() : formatCustomerNumber(rawId, out.clientName, out.premiseName);
+  out.customerNumber = customerNumber;
+
+  // Use explicit ID or customer number, avoiding permit number as unique ID
+  out.id = (rawId && !rawId.includes('/')) ? rawId : (customerNumber || `CLI-${Date.now()}`);
   
   if (dbObj.branches !== undefined) {
     if (typeof dbObj.branches === 'string') {
@@ -378,14 +439,6 @@ let closuresMemoryCache: ClosureNotificationData[] | null = null;
 let closuresCacheTimestamp = 0;
 let closuresInFlightPromise: Promise<ClosureNotificationData[]> | null = null;
 
-let complaintsMemoryCache: ComplaintData[] | null = null;
-let complaintsCacheTimestamp = 0;
-let complaintsInFlightPromise: Promise<ComplaintData[]> | null = null;
-
-let inquiriesMemoryCache: InquiryData[] | null = null;
-let inquiriesCacheTimestamp = 0;
-let inquiriesInFlightPromise: Promise<InquiryData[]> | null = null;
-
 let debtorsMemoryCache: DebtorRecord[] | null = null;
 let debtorsCacheTimestamp = 0;
 let debtorsInFlightPromise: Promise<DebtorRecord[]> | null = null;
@@ -419,16 +472,6 @@ export const DBService = {
       closuresMemoryCache = null;
       closuresCacheTimestamp = 0;
       closuresInFlightPromise = null;
-    }
-    if (!table || table === 'complaints') {
-      complaintsMemoryCache = null;
-      complaintsCacheTimestamp = 0;
-      complaintsInFlightPromise = null;
-    }
-    if (!table || table === 'inquiries') {
-      inquiriesMemoryCache = null;
-      inquiriesCacheTimestamp = 0;
-      inquiriesInFlightPromise = null;
     }
     if (!table || table === 'staff_config' || table === 'staff') {
       staffConfigMemoryCache = null;
@@ -1147,563 +1190,6 @@ export const DBService = {
     }
   },
 
-  async getComplaints(forceFresh: boolean = false): Promise<ComplaintData[]> {
-    const now = Date.now();
-    if (!forceFresh && complaintsMemoryCache && Array.isArray(complaintsMemoryCache) && (now - complaintsCacheTimestamp < DEFAULT_CACHE_TTL_MS)) {
-      return complaintsMemoryCache;
-    }
-
-    if (!forceFresh) {
-      const cached = localStorage.getItem('kdb_complaints_cache');
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            complaintsMemoryCache = parsed;
-            complaintsCacheTimestamp = now;
-            return parsed;
-          }
-        } catch (_) {}
-      }
-    }
-
-    if (complaintsInFlightPromise) {
-      return complaintsInFlightPromise;
-    }
-
-    const fetchComplaintsPromise = (async (): Promise<ComplaintData[]> => {
-      const client = await getSupabase();
-      if (!client) {
-        console.warn("[DBService] Supabase not initialized, trying local API for complaints");
-        const data = await safeFetchJson<ComplaintData[]>('/api/complaints');
-        if (data && Array.isArray(data)) {
-          complaintsMemoryCache = data;
-          complaintsCacheTimestamp = Date.now();
-          safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(data));
-          return data;
-        }
-        const local = getArrayFromLocalStorage<ComplaintData>('kdb_complaints_cache');
-        complaintsMemoryCache = local;
-        complaintsCacheTimestamp = Date.now();
-        return local;
-      }
-
-      try {
-        const { data, error } = await client
-          .from('complaints')
-          .select('*')
-          .order('submittedat', { ascending: false });
-        
-        if (error) {
-          console.warn("[DBService] Supabase getComplaints failed, falling back to local API. Error:", error);
-          throw error;
-        }
-        
-        const complaints = (data || []).map(b => fromDb(b, {
-          id: '', status: '', submittedAt: '', dateReceived: '', receivedBy: '',
-          clientName: '', idNumber: '', stakeholderCategory: '', otherStakeholderCategory: '',
-          postalAddress: '', tel: '', email: '', county: '',
-          natureOfComplaint: '', otherNatureOfComplaint: '', location: '',
-          incidentDate: '', complaintDescription: '', attachments: [], otherAttachment: '',
-          numAttachments: 0, desiredResolution: '', declarationAgreed: false,
-          clientSignature: '', clientNameDeclaration: '', complaintCategoryCode: '',
-          assignedTo: '', investigationFindings: '', actionTaken: '', officialStatus: '',
-          dateClosed: '', officialSignature: '', officialName: '', officialTitle: '',
-          officialComments: '', rejectionReason: '',
-          complainantName: '', complainantCategory: '', telephone: '', complaintDetails: '',
-          actionDate: '', dateReplied: '', referenceNumber: ''
-        })) as ComplaintData[];
-        
-        complaintsMemoryCache = complaints;
-        complaintsCacheTimestamp = Date.now();
-        safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(complaints));
-        return complaints;
-      } catch (error) {
-        console.warn("[DBService] Supabase getComplaints exception, trying local API. Error:", error);
-        const data = await safeFetchJson<ComplaintData[]>('/api/complaints');
-        if (data && Array.isArray(data)) {
-          complaintsMemoryCache = data;
-          complaintsCacheTimestamp = Date.now();
-          safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(data));
-          return data;
-        }
-        const local = localStorage.getItem('kdb_complaints_cache');
-        const parsed = local ? JSON.parse(local) : [];
-        complaintsMemoryCache = parsed;
-        complaintsCacheTimestamp = Date.now();
-        return parsed;
-      } finally {
-        complaintsInFlightPromise = null;
-      }
-    })();
-
-    complaintsInFlightPromise = fetchComplaintsPromise;
-    return fetchComplaintsPromise;
-  },
-
-  async saveComplaint(complaint: ComplaintData): Promise<void> {
-    const populatedComplaint = {
-      ...complaint,
-      complainantName: complaint.complainantName || complaint.clientName,
-      complainantCategory: complaint.complainantCategory || complaint.stakeholderCategory,
-      telephone: complaint.telephone || complaint.tel,
-      complaintDetails: complaint.complaintDetails || complaint.complaintDescription,
-      referenceNumber: complaint.referenceNumber || complaint.id,
-      actionDate: complaint.actionDate || (complaint.dateClosed ? complaint.dateClosed : undefined)
-    };
-
-    const saveLocal = async () => {
-      console.log("[DBService] Saving complaint to local API / storage...");
-      try {
-        await fetch('/api/complaints', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(populatedComplaint)
-        });
-      } catch (e) {
-        console.warn("[DBService] Local API saveComplaint fetch error:", e);
-      }
-      updateLocalStorageCollection('kdb_complaints_cache', populatedComplaint, 'id');
-      if (complaintsMemoryCache) {
-        const idx = complaintsMemoryCache.findIndex(c => c.id === populatedComplaint.id);
-        if (idx >= 0) complaintsMemoryCache[idx] = populatedComplaint;
-        else complaintsMemoryCache.unshift(populatedComplaint);
-      } else {
-        complaintsMemoryCache = [populatedComplaint];
-      }
-      complaintsCacheTimestamp = Date.now();
-    };
-
-    const client = await getSupabase();
-    if (!client) {
-      await saveLocal();
-      return;
-    }
-
-    try {
-      const dbComplaint = toDb(populatedComplaint);
-      const { error } = await client
-        .from('complaints')
-        .upsert(dbComplaint);
-      
-      if (error) {
-        console.warn("[DBService] Supabase upsert complaint failed, falling back to local API. Error:", error);
-        await saveLocal();
-        return;
-      }
-      
-      if (complaintsMemoryCache) {
-        const idx = complaintsMemoryCache.findIndex(c => c.id === populatedComplaint.id);
-        if (idx >= 0) complaintsMemoryCache[idx] = populatedComplaint;
-        else complaintsMemoryCache.unshift(populatedComplaint);
-      } else {
-        complaintsMemoryCache = [populatedComplaint];
-      }
-      complaintsCacheTimestamp = Date.now();
-      updateLocalStorageCollection('kdb_complaints_cache', populatedComplaint, 'id');
-    } catch (error: any) {
-      console.warn("[DBService] Supabase saveComplaint exception, falling back to local API. Error:", error);
-      await saveLocal();
-    }
-  },
-
-  async updateComplaint(id: string, updates: Partial<ComplaintData>): Promise<void> {
-    const populatedUpdates = {
-      ...updates,
-    };
-    if (updates.clientName) populatedUpdates.complainantName = updates.clientName;
-    if (updates.stakeholderCategory) populatedUpdates.complainantCategory = updates.stakeholderCategory;
-    if (updates.tel) populatedUpdates.telephone = updates.tel;
-    if (updates.complaintDescription) populatedUpdates.complaintDetails = updates.complaintDescription;
-    if (updates.id) populatedUpdates.referenceNumber = updates.id;
-
-    const updateLocal = async () => {
-      console.log("[DBService] Updating complaint via local API / storage...");
-      try {
-        await fetch(`/api/complaints/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(populatedUpdates)
-        });
-      } catch (e) {
-        console.warn("[DBService] Local API updateComplaint fetch error:", e);
-      }
-      if (complaintsMemoryCache) {
-        const idx = complaintsMemoryCache.findIndex(i => i.id === id);
-        if (idx >= 0) {
-          complaintsMemoryCache[idx] = { ...complaintsMemoryCache[idx], ...populatedUpdates };
-        }
-      }
-      complaintsCacheTimestamp = Date.now();
-      const items = getArrayFromLocalStorage<ComplaintData>('kdb_complaints_cache');
-      const idx = items.findIndex(i => i.id === id);
-      if (idx >= 0) {
-        items[idx] = { ...items[idx], ...populatedUpdates };
-        safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(items));
-      }
-    };
-
-    const client = await getSupabase();
-    if (!client) {
-      await updateLocal();
-      return;
-    }
-
-    try {
-      const dbUpdates = toDb(populatedUpdates);
-      const { error } = await client
-        .from('complaints')
-        .update(dbUpdates)
-        .eq('id', id);
-      
-      if (error) {
-        console.warn("[DBService] Supabase updateComplaint failed, falling back to local API. Error:", error);
-        await updateLocal();
-        return;
-      }
-      
-      if (complaintsMemoryCache) {
-        const idx = complaintsMemoryCache.findIndex(i => i.id === id);
-        if (idx >= 0) {
-          complaintsMemoryCache[idx] = { ...complaintsMemoryCache[idx], ...populatedUpdates };
-        }
-      }
-      complaintsCacheTimestamp = Date.now();
-      const items = getArrayFromLocalStorage<ComplaintData>('kdb_complaints_cache');
-      const idx = items.findIndex(i => i.id === id);
-      if (idx >= 0) {
-        items[idx] = { ...items[idx], ...populatedUpdates };
-        safeSetLocalStorage('kdb_complaints_cache', JSON.stringify(items));
-      }
-    } catch (error: any) {
-      console.warn("[DBService] Supabase updateComplaint exception, falling back to local API. Error:", error);
-      await updateLocal();
-    }
-  },
-
-  async deleteComplaint(id: string): Promise<void> {
-    const deleteLocal = async () => {
-      try {
-        await fetch(`/api/complaints/${id}`, {
-          method: 'DELETE'
-        });
-      } catch (e) {
-        console.warn("[DBService] Local API delete complaint error:", e);
-      }
-      if (complaintsMemoryCache) {
-        complaintsMemoryCache = complaintsMemoryCache.filter(c => c.id !== id);
-      }
-      complaintsCacheTimestamp = Date.now();
-      removeFromLocalStorageCollection('kdb_complaints_cache', id, 'id');
-    };
-
-    const client = await getSupabase();
-    if (!client) {
-      await deleteLocal();
-      return;
-    }
-
-    try {
-      const { error } = await client
-        .from('complaints')
-        .delete()
-        .eq('id', id);
-      
-      if (error) {
-        console.warn("[DBService] Supabase deleteComplaint failed, falling back to local API. Error:", error);
-        await deleteLocal();
-        return;
-      }
-      
-      if (complaintsMemoryCache) {
-        complaintsMemoryCache = complaintsMemoryCache.filter(c => c.id !== id);
-      }
-      complaintsCacheTimestamp = Date.now();
-      removeFromLocalStorageCollection('kdb_complaints_cache', id, 'id');
-    } catch (error: any) {
-      console.warn("[DBService] Supabase deleteComplaint exception, falling back to local API. Error:", error);
-      await deleteLocal();
-    }
-  },
-
-  async getInquiries(forceFresh: boolean = false): Promise<InquiryData[]> {
-    const now = Date.now();
-    if (!forceFresh && inquiriesMemoryCache && Array.isArray(inquiriesMemoryCache) && (now - inquiriesCacheTimestamp < DEFAULT_CACHE_TTL_MS)) {
-      return inquiriesMemoryCache;
-    }
-
-    if (!forceFresh) {
-      const cached = localStorage.getItem('kdb_inquiries_cache');
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            inquiriesMemoryCache = parsed;
-            inquiriesCacheTimestamp = now;
-            return parsed;
-          }
-        } catch (_) {}
-      }
-    }
-
-    if (inquiriesInFlightPromise) {
-      return inquiriesInFlightPromise;
-    }
-
-    const fetchInquiriesPromise = (async (): Promise<InquiryData[]> => {
-      const client = await getSupabase();
-      if (!client) {
-        console.warn("[DBService] Supabase not initialized, trying local API for inquiries");
-        const data = await safeFetchJson<InquiryData[]>('/api/inquiries');
-        if (data && Array.isArray(data)) {
-          inquiriesMemoryCache = data;
-          inquiriesCacheTimestamp = Date.now();
-          safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(data));
-          return data;
-        }
-        const local = getArrayFromLocalStorage<InquiryData>('kdb_inquiries_cache');
-        inquiriesMemoryCache = local;
-        inquiriesCacheTimestamp = Date.now();
-        return local;
-      }
-
-      try {
-        const { data, error } = await client
-          .from('inquiries')
-          .select('*')
-          .order('submittedat', { ascending: false });
-        
-        if (error) {
-          console.warn("[DBService] Supabase getInquiries failed, falling back to local API. Error:", error);
-          throw error;
-        }
-        
-        const inquiries = (data || []).map(b => fromDb(b, {
-          id: '', status: '', submittedAt: '',
-          clientName: '', contactPerson: '', idPassportNo: '', kdbLicenseNo: '',
-          postalAddress: '', cityTown: '', tel: '', mobileNumber: '', email: '',
-          clientType: '', otherClientType: '', natureOfInquiry: '', otherNatureOfInquiry: '',
-          inquiryDetails: '', supportingDocsStatus: '', attachedDocsList: '',
-          preferredResponseMode: '', declarationAgreed: false, clientSignature: '',
-          receivedBy: '', dateReceived: '', departmentAssigned: '', actionTaken: '',
-          dateClosed: '', officialSignature: '', officialName: '', officialTitle: '',
-          officialComments: '', rejectionReason: '',
-          county: '', clientCategory: '', telephone: '', location: '', message: '',
-          referredTo: '', actionDate: '', responseDetails: '', dateReplied: '', referenceNumber: ''
-        })) as InquiryData[];
-        
-        inquiriesMemoryCache = inquiries;
-        inquiriesCacheTimestamp = Date.now();
-        safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(inquiries));
-        return inquiries;
-      } catch (error) {
-        console.warn("[DBService] Supabase getInquiries exception, trying local API. Error:", error);
-        const data = await safeFetchJson<InquiryData[]>('/api/inquiries');
-        if (data && Array.isArray(data)) {
-          inquiriesMemoryCache = data;
-          inquiriesCacheTimestamp = Date.now();
-          safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(data));
-          return data;
-        }
-        const local = localStorage.getItem('kdb_inquiries_cache');
-        const parsed = local ? JSON.parse(local) : [];
-        inquiriesMemoryCache = parsed;
-        inquiriesCacheTimestamp = Date.now();
-        return parsed;
-      } finally {
-        inquiriesInFlightPromise = null;
-      }
-    })();
-
-    inquiriesInFlightPromise = fetchInquiriesPromise;
-    return fetchInquiriesPromise;
-  },
-
-  async saveInquiry(inquiry: InquiryData): Promise<void> {
-    const populatedInquiry = {
-      ...inquiry,
-      telephone: inquiry.telephone || inquiry.tel || inquiry.mobileNumber,
-      clientCategory: inquiry.clientCategory || inquiry.clientType,
-      location: inquiry.location || inquiry.cityTown,
-      referenceNumber: inquiry.referenceNumber || inquiry.id,
-      county: inquiry.county || inquiry.cityTown
-    };
-
-    const saveLocal = async () => {
-      console.log("[DBService] Saving inquiry to local API / storage...");
-      try {
-        await fetch('/api/inquiries', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(populatedInquiry)
-        });
-      } catch (e) {
-        console.warn("[DBService] Local API saveInquiry fetch error:", e);
-      }
-      updateLocalStorageCollection('kdb_inquiries_cache', populatedInquiry, 'id');
-      if (inquiriesMemoryCache) {
-        const idx = inquiriesMemoryCache.findIndex(i => i.id === populatedInquiry.id);
-        if (idx >= 0) inquiriesMemoryCache[idx] = populatedInquiry;
-        else inquiriesMemoryCache.unshift(populatedInquiry);
-      } else {
-        inquiriesMemoryCache = [populatedInquiry];
-      }
-      inquiriesCacheTimestamp = Date.now();
-    };
-
-    const client = await getSupabase();
-    if (!client) {
-      await saveLocal();
-      return;
-    }
-
-    try {
-      const dbInquiry = toDb(populatedInquiry);
-      const { error } = await client
-        .from('inquiries')
-        .upsert(dbInquiry);
-      
-      if (error) {
-        console.warn("[DBService] Supabase upsert inquiry failed, falling back to local API. Error:", error);
-        await saveLocal();
-        return;
-      }
-      
-      if (inquiriesMemoryCache) {
-        const idx = inquiriesMemoryCache.findIndex(i => i.id === populatedInquiry.id);
-        if (idx >= 0) inquiriesMemoryCache[idx] = populatedInquiry;
-        else inquiriesMemoryCache.unshift(populatedInquiry);
-      } else {
-        inquiriesMemoryCache = [populatedInquiry];
-      }
-      inquiriesCacheTimestamp = Date.now();
-      updateLocalStorageCollection('kdb_inquiries_cache', populatedInquiry, 'id');
-    } catch (error: any) {
-      console.warn("[DBService] Supabase saveInquiry exception, falling back to local API. Error:", error);
-      await saveLocal();
-    }
-  },
-
-  async updateInquiry(id: string, updates: Partial<InquiryData>): Promise<void> {
-    const populatedUpdates = {
-      ...updates,
-    };
-    if (updates.tel || updates.mobileNumber) populatedUpdates.telephone = updates.tel || updates.mobileNumber;
-    if (updates.clientType) populatedUpdates.clientCategory = updates.clientType;
-    if (updates.cityTown) {
-      populatedUpdates.location = updates.cityTown;
-      populatedUpdates.county = updates.cityTown;
-    }
-    if (updates.id) populatedUpdates.referenceNumber = updates.id;
-
-    const updateLocal = async () => {
-      console.log("[DBService] Updating inquiry via local API / storage...");
-      try {
-        await fetch(`/api/inquiries/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(populatedUpdates)
-        });
-      } catch (e) {
-        console.warn("[DBService] Local API updateInquiry fetch error:", e);
-      }
-      if (inquiriesMemoryCache) {
-        const idx = inquiriesMemoryCache.findIndex(i => (i.id || i.referenceNumber) === id);
-        if (idx >= 0) {
-          inquiriesMemoryCache[idx] = { ...inquiriesMemoryCache[idx], ...populatedUpdates };
-        }
-      }
-      inquiriesCacheTimestamp = Date.now();
-      const items = getArrayFromLocalStorage<InquiryData>('kdb_inquiries_cache');
-      const idx = items.findIndex(i => (i.id || i.referenceNumber) === id);
-      if (idx >= 0) {
-        items[idx] = { ...items[idx], ...populatedUpdates };
-        safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(items));
-      }
-    };
-
-    const client = await getSupabase();
-    if (!client) {
-      await updateLocal();
-      return;
-    }
-
-    try {
-      const dbUpdates = toDb(populatedUpdates);
-      const { error } = await client
-        .from('inquiries')
-        .update(dbUpdates)
-        .eq('id', id);
-      
-      if (error) {
-        console.warn("[DBService] Supabase updateInquiry failed, falling back to local API. Error:", error);
-        await updateLocal();
-        return;
-      }
-      
-      if (inquiriesMemoryCache) {
-        const idx = inquiriesMemoryCache.findIndex(i => (i.id || i.referenceNumber) === id);
-        if (idx >= 0) {
-          inquiriesMemoryCache[idx] = { ...inquiriesMemoryCache[idx], ...populatedUpdates };
-        }
-      }
-      inquiriesCacheTimestamp = Date.now();
-      const items = getArrayFromLocalStorage<InquiryData>('kdb_inquiries_cache');
-      const idx = items.findIndex(i => (i.id || i.referenceNumber) === id);
-      if (idx >= 0) {
-        items[idx] = { ...items[idx], ...populatedUpdates };
-        safeSetLocalStorage('kdb_inquiries_cache', JSON.stringify(items));
-      }
-    } catch (error: any) {
-      console.warn("[DBService] Supabase updateInquiry exception, falling back to local API. Error:", error);
-      await updateLocal();
-    }
-  },
-
-  async deleteInquiry(id: string): Promise<void> {
-    const deleteLocal = async () => {
-      try {
-        await fetch(`/api/inquiries/${id}`, {
-          method: 'DELETE'
-        });
-      } catch (e) {
-        console.warn("[DBService] Local API delete inquiry error:", e);
-      }
-      if (inquiriesMemoryCache) {
-        inquiriesMemoryCache = inquiriesMemoryCache.filter(i => (i.id || i.referenceNumber) !== id);
-      }
-      inquiriesCacheTimestamp = Date.now();
-      removeFromLocalStorageCollection('kdb_inquiries_cache', id, 'id');
-    };
-
-    const client = await getSupabase();
-    if (!client) {
-      await deleteLocal();
-      return;
-    }
-
-    try {
-      const { error } = await client
-        .from('inquiries')
-        .delete()
-        .eq('id', id);
-      
-      if (error) {
-        console.warn("[DBService] Supabase deleteInquiry failed, falling back to local API. Error:", error);
-        await deleteLocal();
-        return;
-      }
-      
-      if (inquiriesMemoryCache) {
-        inquiriesMemoryCache = inquiriesMemoryCache.filter(i => (i.id || i.referenceNumber) !== id);
-      }
-      inquiriesCacheTimestamp = Date.now();
-      removeFromLocalStorageCollection('kdb_inquiries_cache', id, 'id');
-    } catch (error: any) {
-      console.warn("[DBService] Supabase deleteInquiry exception, falling back to local API. Error:", error);
-      await deleteLocal();
-    }
-  },
 
   async getDebtors(forceFresh: boolean = false): Promise<DebtorRecord[]> {
     const now = Date.now();
@@ -1755,7 +1241,13 @@ export const DBService = {
           .select('*')
           .order('dboname', { ascending: true });
         
-        if (error) throw error;
+        if (error) {
+          if (error.code === 'PGRST205' || error.code === '42P01' || String(error.message || '').includes('public.debtors')) {
+            console.warn("[DBService] Supabase 'debtors' table not found in schema (PGRST205). Falling back to local storage.");
+            return await fetchLocal();
+          }
+          throw error;
+        }
         
         if (data && data.length > 0) {
           const debtors = data.map(d => fromDb(d, {
@@ -1771,8 +1263,8 @@ export const DBService = {
         debtorsMemoryCache = [];
         debtorsCacheTimestamp = Date.now();
         return [];
-      } catch (error) {
-        console.warn("[DBService] getDebtors error:", error);
+      } catch (error: any) {
+        console.warn("[DBService] getDebtors fallback to local:", error?.message || error);
         return await fetchLocal();
       } finally {
         debtorsInFlightPromise = null;
@@ -1788,9 +1280,7 @@ export const DBService = {
     debtorsCacheTimestamp = Date.now();
     safeSetLocalStorage('kdb_debtors_cache', JSON.stringify(debtors));
 
-    const client = await getSupabase();
-    if (!client) {
-      console.warn("[DBService] Supabase not initialized, trying local API");
+    const syncLocal = async () => {
       try {
         await fetch('/api/debtors', {
           method: 'POST',
@@ -1800,6 +1290,12 @@ export const DBService = {
       } catch (e) {
         console.warn("[DBService] Local API notice for saveDebtors:", e);
       }
+    };
+
+    const client = await getSupabase();
+    if (!client) {
+      console.warn("[DBService] Supabase not initialized, synchronizing debtors via local API");
+      await syncLocal();
       return;
     }
 
@@ -1809,10 +1305,17 @@ export const DBService = {
         .from('debtors')
         .upsert(dbDebtors);
       
-      if (error) throw error;
-    } catch (error) {
-      console.error("[DBService] saveDebtors error:", error);
-      throw error;
+      if (error) {
+        console.warn("[DBService] Supabase saveDebtors notice, falling back to local storage:", error?.message || error);
+        await syncLocal();
+        return;
+      }
+
+      // Background local backup sync
+      syncLocal().catch(() => {});
+    } catch (error: any) {
+      console.warn("[DBService] Supabase saveDebtors exception, falling back to local API:", error?.message || error);
+      await syncLocal();
     }
   },
 
@@ -1820,8 +1323,6 @@ export const DBService = {
     const defaultModules = {
       levyAgreement: true,
       businessClosure: true,
-      clientInquiry: true,
-      stakeholderComplaint: true,
     };
 
     const now = Date.now();
@@ -1991,7 +1492,7 @@ export const DBService = {
           .upsert({ id: 1, officialsignature: fullConfig.officialSignature || '' });
       }
     } catch (error) {
-      console.error("[DBService] saveStaffConfig error:", error);
+      console.warn("[DBService] saveStaffConfig notice (using local storage):", error);
     }
   },
 
@@ -2344,22 +1845,14 @@ export const DBService = {
 
   async getClients(forceFresh: boolean = false): Promise<LicensedClient[]> {
     const deduplicateClients = (list: LicensedClient[]): LicensedClient[] => {
-      const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
-      const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
       const unique: LicensedClient[] = [];
       const seenIds = new Set<string>();
-      const seenPermits = new Set<string>();
 
       for (const client of list) {
         if (!client) continue;
-        const id = String(client.id || '').trim();
-        const permit = cleanPermit(client.permitNumber || client.id);
-
+        const id = String(client.id || client.permitNumber || '').trim();
         if (id && seenIds.has(id)) continue;
-        if (permit && seenPermits.has(permit)) continue;
-
         if (id) seenIds.add(id);
-        if (permit) seenPermits.add(permit);
         unique.push(client);
       }
       return unique;
@@ -2370,35 +1863,60 @@ export const DBService = {
       return clientsMemoryCache;
     }
 
-    if (!forceFresh) {
-      const cached = localStorage.getItem('kdb_clients_cache');
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const deduplicated = deduplicateClients(parsed);
-            clientsMemoryCache = deduplicated;
-            clientsCacheTimestamp = now;
-            return deduplicated;
-          }
-        } catch (_) {}
-      }
-    }
-
     if (clientsInFlightPromise) {
       return clientsInFlightPromise;
     }
 
     const fetchFreshPromise = (async (): Promise<LicensedClient[]> => {
+      const fetchLocal = async () => {
+        try {
+          const response = await fetch('/api/clients');
+          if (response.ok) {
+            const data = await response.json();
+            if (Array.isArray(data) && data.length > 0) {
+              const clients = deduplicateClients(data);
+              clientsMemoryCache = clients;
+              clientsCacheTimestamp = Date.now();
+              safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
+              return clients;
+            }
+          }
+        } catch (e) {
+          console.warn("[DBService] Local API clients fetch error:", e);
+        }
+        const local = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
+        const deduplicated = deduplicateClients(local);
+        clientsMemoryCache = deduplicated;
+        clientsCacheTimestamp = Date.now();
+        return deduplicated;
+      };
+
       try {
         const client = await getSupabase();
         if (client) {
-          const { data, error } = await client
-            .from('licensed_clients')
-            .select('*')
-            .order('clientname', { ascending: true });
-          if (!error && data) {
-            const clients = deduplicateClients(data.map(c => clientFromDb(c)));
+          let allClientsData: any[] = [];
+          let from = 0;
+          const pageSize = 1000;
+          while (true) {
+            const { data, error } = await client
+              .from('licensed_clients')
+              .select('*')
+              .order('clientname', { ascending: true })
+              .order('id', { ascending: true })
+              .range(from, from + pageSize - 1);
+
+            if (error) {
+              console.warn("[DBService] Supabase getClients page error:", error);
+              break;
+            }
+            if (!data || data.length === 0) break;
+            allClientsData.push(...data);
+            if (data.length < pageSize) break;
+            from += pageSize;
+          }
+
+          if (allClientsData.length > 0) {
+            const clients = deduplicateClients(allClientsData.map(c => clientFromDb(c)));
             clientsMemoryCache = clients;
             clientsCacheTimestamp = Date.now();
             safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
@@ -2406,40 +1924,146 @@ export const DBService = {
           }
         }
         
-        const response = await fetch('/api/clients');
-        if (response.ok) {
-          const data = await response.json();
-          if (Array.isArray(data)) {
-            const clients = deduplicateClients(data);
-            clientsMemoryCache = clients;
-            clientsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
-            return clients;
-          }
-        }
+        return await fetchLocal();
       } catch (e) {
-        console.warn("[DBService] Fresh clients fetch error:", e);
+        console.warn("[DBService] Fresh clients fetch error, falling back to local:", e);
+        return await fetchLocal();
       } finally {
         clientsInFlightPromise = null;
       }
-      const local = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
-      const deduplicated = deduplicateClients(local);
-      clientsMemoryCache = deduplicated;
-      clientsCacheTimestamp = Date.now();
-      return deduplicated;
     })();
 
     clientsInFlightPromise = fetchFreshPromise;
     return fetchFreshPromise;
   },
 
+  async getClientsPaginated(params: ClientQueryParams = {}): Promise<PaginatedResult<LicensedClient>> {
+    const page = Math.max(1, params.page || 1);
+    const pageSize = [10, 25, 50, 100].includes(Number(params.pageSize)) ? Number(params.pageSize) : 25;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        let query = client.from('licensed_clients').select('*', { count: 'exact' });
+
+        if (params.search && params.search.trim()) {
+          const term = `%${params.search.trim()}%`;
+          query = query.or(`clientname.ilike.${term},premisename.ilike.${term},permitnumber.ilike.${term},location.ilike.${term},county.ilike.${term}`);
+        }
+
+        if (params.category && params.category !== 'All') {
+          query = query.ilike('premisecategory', `%${params.category}%`);
+        }
+
+        if (params.levyInfo && params.levyInfo !== 'All') {
+          query = query.eq('levyinfo', params.levyInfo);
+        }
+
+        if (params.status === 'operating') {
+          query = query.eq('operationalstatus', 'operating');
+        } else if (params.status === 'closed') {
+          query = query.eq('operationalstatus', 'closed');
+        }
+
+        const sortColumn = params.sortBy === 'permitNumber' ? 'permitnumber' : 'clientname';
+        query = query.order(sortColumn, { ascending: params.sortOrder !== 'desc' });
+        query = query.order('id', { ascending: true });
+        query = query.range(from, to);
+
+        const { data, count, error } = await query;
+        if (!error && data) {
+          const total = count ?? data.length;
+          return {
+            data: data.map(c => clientFromDb(c)),
+            count: total,
+            totalCount: total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(total / pageSize) || 1
+          };
+        }
+      } catch (err) {
+        console.warn("[DBService] Supabase getClientsPaginated error:", err);
+      }
+    }
+
+    // Call local backend with exact batch parameters to limit egress
+    try {
+      const qParams = new URLSearchParams();
+      qParams.set('page', String(page));
+      qParams.set('pageSize', String(pageSize));
+      if (params.search && params.search.trim()) qParams.set('search', params.search.trim());
+      if (params.category && params.category !== 'All') qParams.set('category', params.category);
+      if (params.status && params.status !== 'All') qParams.set('status', params.status);
+      if (params.levyInfo && params.levyInfo !== 'All') qParams.set('levyInfo', params.levyInfo);
+      if (params.sortBy) qParams.set('sortBy', params.sortBy);
+      if (params.sortOrder) qParams.set('sortOrder', params.sortOrder);
+
+      const res = await fetch(`/api/clients?${qParams.toString()}`);
+      if (res.ok) {
+        const paginatedData = await res.json();
+        if (paginatedData && Array.isArray(paginatedData.data)) {
+          return paginatedData;
+        }
+      }
+    } catch (e) {
+      console.warn("[DBService] Local API getClientsPaginated error:", e);
+    }
+
+    // Fallback to local / memory filtered pagination if network is unavailable
+    const all = clientsMemoryCache && Array.isArray(clientsMemoryCache) 
+      ? clientsMemoryCache 
+      : getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
+    let filtered = all;
+
+    if (params.search && params.search.trim()) {
+      filtered = filtered.filter(c => 
+        searchMatches(c.customerNumber, params.search) ||
+        searchMatches(c.clientName, params.search) ||
+        searchMatches(c.premiseName, params.search) ||
+        searchMatches(c.permitNumber, params.search) ||
+        searchMatches(c.location, params.search) ||
+        searchMatches(c.county, params.search)
+      );
+    }
+
+    if (params.category && params.category !== 'All') {
+      filtered = filtered.filter(c => 
+        String(c.premiseCategory || '').toLowerCase().includes(params.category!.toLowerCase())
+      );
+    }
+
+    if (params.levyInfo && params.levyInfo !== 'All') {
+      filtered = filtered.filter(c => c.levyInfo === params.levyInfo);
+    }
+
+    if (params.status === 'operating') {
+      filtered = filtered.filter(c => c.operationalStatus === 'operating');
+    } else if (params.status === 'closed') {
+      filtered = filtered.filter(c => c.operationalStatus === 'closed');
+    }
+
+    const total = filtered.length;
+    const paged = filtered.slice(from, from + pageSize);
+
+    return {
+      data: paged,
+      count: total,
+      totalCount: total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize) || 1
+    };
+  },
+
   async saveClient(clientRecord: LicensedClient): Promise<void> {
-    const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
     const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
 
-    const pRec = cleanPermit(clientRecord.permitNumber || clientRecord.id);
     const cRec = cleanStr(clientRecord.clientName);
     const premRec = cleanStr(clientRecord.premiseName);
+    const custRec = cleanStr(clientRecord.customerNumber);
     const recId = String(clientRecord.id || '').trim();
 
     // 1. Synchronize in-place in local storage cache first to guarantee 0ms consistency
@@ -2448,14 +2072,18 @@ export const DBService = {
       try {
         const items = clientsMemoryCache || getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
         const matchIdx = items.findIndex(i => {
+          // Identify by customer number or unique ID first to avoid permit collision
+          const iCust = cleanStr(i.customerNumber);
+          if (custRec && iCust && custRec === iCust) return true;
           const iId = String(i.id || '').trim();
           if (recId && iId && recId === iId) return true;
-          const iPermit = cleanPermit(i.permitNumber || i.id);
-          if (pRec && iPermit && (pRec === iPermit || pRec.includes(iPermit) || iPermit.includes(pRec))) return true;
           const iName = cleanStr(i.clientName);
           const iPrem = cleanStr(i.premiseName);
+          const iLoc = cleanStr(i.location);
+          const locRec = cleanStr(clientRecord.location);
+          // Match by client + premise + location
+          if (cRec && iName && cRec === iName && premRec && iPrem && premRec === iPrem && locRec && iLoc && locRec === iLoc) return true;
           if (cRec && iName && cRec === iName && premRec && iPrem && premRec === iPrem) return true;
-          if (cRec && iName && cRec === iName) return true;
           return false;
         });
 
@@ -2463,13 +2091,13 @@ export const DBService = {
           matchedRowId = items[matchIdx].id || clientRecord.id;
           clientRecord.id = matchedRowId;
           items[matchIdx] = { ...items[matchIdx], ...clientRecord, id: matchedRowId };
-          // Remove any accidental remaining duplicate rows
+          // Remove any accidental remaining duplicate rows matching the exact same client entity
           const deduplicated = items.filter((item, idx) => {
             if (idx === matchIdx) return true;
             const otherId = String(item.id || '').trim();
-            const otherPermit = cleanPermit(item.permitNumber || item.id);
+            const otherCust = cleanStr(item.customerNumber);
             if (matchedRowId && otherId && matchedRowId === otherId) return false;
-            if (pRec && otherPermit && pRec === otherPermit) return false;
+            if (custRec && otherCust && custRec === otherCust) return false;
             return true;
           });
           clientsMemoryCache = deduplicated;
@@ -2683,21 +2311,6 @@ export const DBService = {
       return returnsMemoryCache;
     }
 
-    if (!forceFresh) {
-      const cached = localStorage.getItem('kdb_returns_cache');
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const mapped = parsed.map(r => returnFromDb(r));
-            returnsMemoryCache = mapped;
-            returnsCacheTimestamp = now;
-            return mapped;
-          }
-        } catch (_) {}
-      }
-    }
-
     if (returnsInFlightPromise) {
       return returnsInFlightPromise;
     }
@@ -2705,7 +2318,7 @@ export const DBService = {
     const fetchReturnsPromise = (async (): Promise<ClientReturn[]> => {
       const fetchLocal = async () => {
         const data = await safeFetchJson<any[]>('/api/returns');
-        if (data && Array.isArray(data)) {
+        if (data && Array.isArray(data) && data.length > 0) {
           const mapped = data.map(r => returnFromDb(r));
           returnsMemoryCache = mapped;
           returnsCacheTimestamp = Date.now();
@@ -2725,20 +2338,36 @@ export const DBService = {
       }
 
       try {
-        const { data, error } = await client
-          .from('client_returns')
-          .select('*');
-        
-        if (error) {
-          console.warn("[DBService] Supabase getReturns failed, falling back to local. Error:", error);
-          return await fetchLocal();
+        let allReturnsData: any[] = [];
+        let from = 0;
+        const pageSize = 1000;
+        while (true) {
+          const { data, error } = await client
+            .from('client_returns')
+            .select('*')
+            .order('year', { ascending: false })
+            .order('id', { ascending: true })
+            .range(from, from + pageSize - 1);
+          
+          if (error) {
+            console.warn("[DBService] Supabase getReturns page failed:", error);
+            break;
+          }
+          if (!data || data.length === 0) break;
+          allReturnsData.push(...data);
+          if (data.length < pageSize) break;
+          from += pageSize;
         }
 
-        const mapped = (data || []).map(r => returnFromDb(r));
-        returnsMemoryCache = mapped;
-        returnsCacheTimestamp = Date.now();
-        safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
-        return mapped;
+        if (allReturnsData.length > 0) {
+          const mapped = allReturnsData.map(r => returnFromDb(r));
+          returnsMemoryCache = mapped;
+          returnsCacheTimestamp = Date.now();
+          safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
+          return mapped;
+        }
+
+        return await fetchLocal();
       } catch (e) {
         console.warn("[DBService] Supabase getReturns exception, falling back to local. Error:", e);
         return await fetchLocal();
@@ -2749,6 +2378,171 @@ export const DBService = {
 
     returnsInFlightPromise = fetchReturnsPromise;
     return fetchReturnsPromise;
+  },
+
+  async getReturnsPaginated(params: ReturnQueryParams = {}): Promise<PaginatedReturnsResult> {
+    const page = Math.max(1, params.page || 1);
+    const pageSize = [10, 25, 50, 100].includes(Number(params.pageSize)) ? Number(params.pageSize) : 25;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        let query = client.from('client_returns').select('*', { count: 'exact' });
+
+        if (params.clientId) {
+          query = query.eq('clientid', params.clientId);
+        }
+
+        if (params.year && params.year !== 'All') {
+          query = query.eq('year', Number(params.year));
+        }
+
+        if (params.month && params.month !== 'All') {
+          query = query.ilike('period', params.month.trim());
+        }
+
+        if (params.status && params.status !== 'All') {
+          query = query.eq('paymentstatus', params.status);
+        }
+
+        if (params.search && params.search.trim()) {
+          const term = `%${params.search.trim()}%`;
+          query = query.or(`clientname.ilike.${term},txnref.ilike.${term},comments.ilike.${term}`);
+        }
+
+        const sortColumn = params.sortBy === 'returndate' ? 'returndate' : 'year';
+        query = query.order(sortColumn, { ascending: params.sortOrder === 'asc' });
+        query = query.order('id', { ascending: true });
+        query = query.range(from, to);
+
+        const { data, count, error } = await query;
+        if (!error && data) {
+          const total = count ?? data.length;
+          const mapped = data.map(r => returnFromDb(r));
+          return {
+            data: mapped,
+            count: total,
+            totalCount: total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(total / pageSize) || 1
+          };
+        }
+      } catch (err) {
+        console.warn("[DBService] Supabase getReturnsPaginated error:", err);
+      }
+    }
+
+    // Call local backend with exact batch parameters to limit egress
+    try {
+      const qParams = new URLSearchParams();
+      qParams.set('page', String(page));
+      qParams.set('pageSize', String(pageSize));
+      if (params.search && params.search.trim()) qParams.set('search', params.search.trim());
+      if (params.clientId) qParams.set('clientId', params.clientId);
+      if (params.year && params.year !== 'All') qParams.set('year', params.year);
+      if (params.month && params.month !== 'All') qParams.set('month', params.month);
+      if (params.status && params.status !== 'All') qParams.set('status', params.status);
+      if (params.sortBy) qParams.set('sortBy', params.sortBy);
+      if (params.sortOrder) qParams.set('sortOrder', params.sortOrder);
+
+      const res = await fetch(`/api/returns?${qParams.toString()}`);
+      if (res.ok) {
+        const paginatedData = await res.json();
+        if (paginatedData && Array.isArray(paginatedData.data)) {
+          return paginatedData;
+        }
+      }
+    } catch (e) {
+      console.warn("[DBService] Local API getReturnsPaginated error:", e);
+    }
+
+    // Fallback to local / memory filtered pagination
+    const all = returnsMemoryCache && Array.isArray(returnsMemoryCache)
+      ? returnsMemoryCache
+      : getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
+    let filtered = all;
+
+    if (params.clientId) {
+      filtered = filtered.filter(r => r.clientId === params.clientId);
+    }
+
+    if (params.year && params.year !== 'All') {
+      filtered = filtered.filter(r => String(r.year) === String(params.year));
+    }
+
+    if (params.month && params.month !== 'All') {
+      filtered = filtered.filter(r => (r.period || '').trim().toLowerCase() === params.month!.trim().toLowerCase());
+    }
+
+    if (params.status && params.status !== 'All') {
+      filtered = filtered.filter(r => r.paymentStatus === params.status);
+    }
+
+    if (params.search && params.search.trim()) {
+      filtered = filtered.filter(r => 
+        searchMatches(r.clientName, params.search) ||
+        searchMatches(r.txnRef, params.search) ||
+        searchMatches(r.comments, params.search)
+      );
+    }
+
+    const total = filtered.length;
+    const paged = filtered.slice(from, from + pageSize);
+
+    return {
+      data: paged,
+      count: total,
+      totalCount: total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize) || 1
+    };
+  },
+
+  async getHubMetrics(): Promise<{ totalClients: number; operatingClients: number; totalReturns: number; totalVolume: number; totalOutstanding: number }> {
+    const client = await getSupabase();
+    if (client) {
+      try {
+        const [clientsCountRes, operatingClientsRes, returnsCountRes] = await Promise.all([
+          client.from('licensed_clients').select('*', { count: 'exact', head: true }),
+          client.from('licensed_clients').select('*', { count: 'exact', head: true }).eq('operationalstatus', 'operating'),
+          client.from('client_returns').select('*', { count: 'exact', head: true })
+        ]);
+        const totalClients = clientsCountRes.count ?? 0;
+        const operatingClients = operatingClientsRes.count ?? 0;
+        const totalReturns = returnsCountRes.count ?? 0;
+
+        return {
+          totalClients,
+          operatingClients,
+          totalReturns,
+          totalVolume: 0,
+          totalOutstanding: 0
+        };
+      } catch (err) {
+        console.warn("[DBService] Supabase getHubMetrics error:", err);
+      }
+    }
+
+    try {
+      const res = await fetch('/api/hub-summary');
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+
+    const localClients = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache') || [];
+    const localReturns = getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache') || [];
+    return {
+      totalClients: localClients.length,
+      operatingClients: localClients.filter(c => c.operationalStatus === 'operating').length,
+      totalReturns: localReturns.length,
+      totalVolume: localReturns.reduce((sum, r) => sum + (r.qty || 0), 0),
+      totalOutstanding: localReturns.reduce((sum, r) => sum + (r.outstandingBalance || 0), 0)
+    };
   },
 
   async saveReturn(clientReturn: ClientReturn): Promise<void> {

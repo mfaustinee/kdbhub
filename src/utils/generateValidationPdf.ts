@@ -396,9 +396,18 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
     doc.setFontSize(9);
     doc.text("Compliance Officer Observations & Comments:", 20, currentY);
     doc.setFont("helvetica", "normal");
-    const splitComments = doc.splitTextToSize(data.comments, 170);
-    doc.text(splitComments, 20, currentY + 4);
-    currentY += Math.max(splitComments.length * 4.5, 6) + 4;
+    currentY += 5;
+
+    const commentParas = String(data.comments || '').split('\n').filter(p => p.trim().length > 0);
+    const effectiveComments = commentParas.length > 0 ? commentParas : [String(data.comments || '')];
+
+    effectiveComments.forEach((para) => {
+      checkPageBreak(12);
+      const splitLines = doc.splitTextToSize(para.trim(), 170);
+      doc.text(splitLines, 20, currentY, { lineHeightFactor: 1.45 });
+      currentY += (splitLines.length * 5.2) + 2.5;
+    });
+    currentY += 2;
   }
 
   if (data.recommendedActions) {
@@ -407,17 +416,27 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
     doc.setFontSize(9);
     doc.text("Corrective Actions & Directives:", 20, currentY);
     doc.setFont("helvetica", "normal");
-    const splitActions = doc.splitTextToSize(data.recommendedActions, 170);
-    doc.text(splitActions, 20, currentY + 4);
-    currentY += Math.max(splitActions.length * 4.5, 6) + 4;
+    currentY += 5;
+
+    const actionParas = String(data.recommendedActions || '').split('\n').filter(p => p.trim().length > 0);
+    const effectiveActions = actionParas.length > 0 ? actionParas : [String(data.recommendedActions || '')];
+
+    effectiveActions.forEach((directive) => {
+      checkPageBreak(12);
+      const splitLines = doc.splitTextToSize(directive.trim(), 170);
+      doc.text(splitLines, 20, currentY, { lineHeightFactor: 1.45 });
+      currentY += (splitLines.length * 5.2) + 2.5;
+    });
+    currentY += 2;
 
     if (data.actionDueDate || data.actionOwner) {
+      checkPageBreak(12);
       doc.setFontSize(8);
       doc.setFont("helvetica", "italic");
       const metaText = `Resolution Date: ${data.actionDueDate || 'N/A'}  |  Responsible Party: ${data.actionOwner || 'DBO Representative'}`;
       doc.text(metaText, 20, currentY);
       doc.setFont("helvetica", "normal");
-      currentY += 6;
+      currentY += 7;
     }
   }
 

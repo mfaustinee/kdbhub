@@ -48,6 +48,46 @@ export const isSupabaseDisabled = (): boolean => {
   return false;
 };
 
+export const getStoredSupabaseCredentials = (): { url: string; key: string } => {
+  if (typeof window === 'undefined') return { url: '', key: '' };
+  const url = localStorage.getItem('kdb_supabase_url') || localStorage.getItem('VITE_SUPABASE_URL') || '';
+  const key = localStorage.getItem('kdb_supabase_anon_key') || localStorage.getItem('VITE_SUPABASE_ANON_KEY') || '';
+  return { url: url.trim(), key: key.trim() };
+};
+
+export const setCustomSupabaseCredentials = (url: string, key: string): SupabaseClient | null => {
+  const cleanUrl = (url || '').trim();
+  const cleanKey = (key || '').trim();
+  if (typeof window !== 'undefined') {
+    if (cleanUrl) {
+      localStorage.setItem('kdb_supabase_url', cleanUrl);
+      localStorage.setItem('VITE_SUPABASE_URL', cleanUrl);
+    } else {
+      localStorage.removeItem('kdb_supabase_url');
+      localStorage.removeItem('VITE_SUPABASE_URL');
+    }
+    if (cleanKey) {
+      localStorage.setItem('kdb_supabase_anon_key', cleanKey);
+      localStorage.setItem('VITE_SUPABASE_ANON_KEY', cleanKey);
+    } else {
+      localStorage.removeItem('kdb_supabase_anon_key');
+      localStorage.removeItem('VITE_SUPABASE_ANON_KEY');
+    }
+  }
+
+  if (cleanUrl && cleanKey) {
+    supabaseInstance = createSafeSupabaseClient(cleanUrl, cleanKey);
+    if (typeof window !== 'undefined') {
+      (window as any).__supabaseInstance = supabaseInstance;
+    }
+    initPromise = Promise.resolve(supabaseInstance);
+    return supabaseInstance;
+  }
+  supabaseInstance = null;
+  initPromise = null;
+  return null;
+};
+
 export const initSupabase = async (): Promise<SupabaseClient | null> => {
   if (isSupabaseDisabled()) {
     console.info('[Supabase] Running in local offline mode (zero egress). Supabase client is disabled.');
@@ -55,7 +95,7 @@ export const initSupabase = async (): Promise<SupabaseClient | null> => {
   }
 
   if (supabaseInstance) return supabaseInstance;
-  if ((window as any).__supabaseInstance) {
+  if (typeof window !== 'undefined' && (window as any).__supabaseInstance) {
     supabaseInstance = (window as any).__supabaseInstance;
     return supabaseInstance;
   }
@@ -63,16 +103,21 @@ export const initSupabase = async (): Promise<SupabaseClient | null> => {
 
   initPromise = (async () => {
     try {
-      let env = (window as any)._env_;
-      if (!env) {
+      let env = typeof window !== 'undefined' ? (window as any)._env_ : null;
+      if (!env && typeof fetch !== 'undefined') {
         try {
           const res = await fetch('/api/config');
           if (res.ok) {
-            env = await res.json();
-            (window as any)._env_ = env;
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              env = await res.json();
+              if (typeof window !== 'undefined') {
+                (window as any)._env_ = env;
+              }
+            }
           }
         } catch (fetchErr) {
-          console.warn('[Supabase] Config fetch error:', fetchErr);
+          // Expected in purely static client-only deployments
         }
       }
 
@@ -81,12 +126,27 @@ export const initSupabase = async (): Promise<SupabaseClient | null> => {
         return null;
       }
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || env?.VITE_SUPABASE_URL || '';
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || env?.VITE_SUPABASE_ANON_KEY || '';
+      const stored = getStoredSupabaseCredentials();
+
+      const supabaseUrl = 
+        import.meta.env.VITE_SUPABASE_URL || 
+        env?.VITE_SUPABASE_URL || 
+        env?.SUPABASE_URL || 
+        stored.url || 
+        '';
+
+      const supabaseKey = 
+        import.meta.env.VITE_SUPABASE_ANON_KEY || 
+        env?.VITE_SUPABASE_ANON_KEY || 
+        env?.SUPABASE_ANON_KEY || 
+        stored.key || 
+        '';
 
       if (supabaseUrl && supabaseKey) {
         supabaseInstance = createSafeSupabaseClient(supabaseUrl, supabaseKey);
-        (window as any).__supabaseInstance = supabaseInstance;
+        if (typeof window !== 'undefined') {
+          (window as any).__supabaseInstance = supabaseInstance;
+        }
         console.log('[Supabase] Client initialized successfully:', supabaseUrl);
         return supabaseInstance;
       } else {
