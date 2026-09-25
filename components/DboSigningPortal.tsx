@@ -15,10 +15,11 @@ import {
   Loader2, 
   Check,
   Maximize2,
-  Download
+  Download,
+  BookmarkCheck
 } from 'lucide-react';
 import { DBService } from '../services/db';
-import { ValidationDraft } from '../types';
+import { ValidationDraft, DboPremiseSignature } from '../types';
 import { generateValidationPdfBlobUrl } from '../src/utils/generateValidationPdf';
 
 export const DboSigningPortal: React.FC = () => {
@@ -53,6 +54,11 @@ export const DboSigningPortal: React.FC = () => {
   // State for signature pad
   const sigPadRef = useRef<SignatureCanvas | null>(null);
   const [isPadEmpty, setIsPadEmpty] = useState(true);
+
+  // Stored DBO Premise Signatures state (Zero-egress cache-first)
+  const [storedSignatures, setStoredSignatures] = useState<DboPremiseSignature[]>([]);
+  const [selectedSavedSigId, setSelectedSavedSigId] = useState<string | null>(null);
+  const [isLoadingSavedSigs, setIsLoadingSavedSigs] = useState(false);
 
   // Handle high-DPI (Retina) scaling on mount & resize so signatures are crisp and coordinates don't drift
   useEffect(() => {
@@ -200,6 +206,73 @@ export const DboSigningPortal: React.FC = () => {
     return () => clearInterval(timer);
   }, [remainingSeconds, isExpired, isSuccess, isAlreadySigned]);
 
+  // Fetch available stored signatures for this draft's premise
+  useEffect(() => {
+    let isCancelled = false;
+    const raw = draft?.rawData || draft?.raw_data || {};
+    const form = raw.formData || {};
+    const pName = (draft?.premiseName || form.premiseName || '').trim();
+    const pNo = (draft?.permitNo || form.permitNo || '').trim();
+
+    if (!pName && !pNo) {
+      setStoredSignatures([]);
+      return;
+    }
+
+    const loadPremiseSignatures = async () => {
+      setIsLoadingSavedSigs(true);
+      try {
+        const sigs = await DBService.getDboSignaturesForPremise(pName, pNo);
+        if (!isCancelled) {
+          setStoredSignatures(Array.isArray(sigs) ? sigs : []);
+        }
+      } catch (err) {
+        console.warn("Could not load stored premise signatures:", err);
+      } finally {
+        if (!isCancelled) setIsLoadingSavedSigs(false);
+      }
+    };
+
+    loadPremiseSignatures();
+
+    const handleSigUpdated = () => {
+      loadPremiseSignatures();
+    };
+    window.addEventListener('kdb_dbo_signatures_updated', handleSigUpdated);
+    return () => {
+      isCancelled = true;
+      window.removeEventListener('kdb_dbo_signatures_updated', handleSigUpdated);
+    };
+  }, [draft]);
+
+  const handleApplySavedSignature = (sig: DboPremiseSignature) => {
+    if (sig.repName) {
+      setConfirmationName(sig.repName);
+    }
+    if (sig.designation) {
+      setDesignation(sig.designation);
+    }
+    if (sig.signatureData) {
+      setDboSignature(sig.signatureData);
+      setIsPadEmpty(false);
+      if (sigPadRef.current) {
+        try {
+          sigPadRef.current.fromDataURL(sig.signatureData);
+        } catch (_) {}
+      }
+    }
+    setSelectedSavedSigId(sig.id);
+  };
+
+  const handleClearSavedSignature = () => {
+    setSelectedSavedSigId(null);
+    setDboSignature('');
+    setIsPadEmpty(true);
+    if (sigPadRef.current) {
+      sigPadRef.current.clear();
+    }
+  };
+
   const formatCountdown = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -211,6 +284,7 @@ export const DboSigningPortal: React.FC = () => {
       sigPadRef.current.clear();
     }
     setDboSignature('');
+    setSelectedSavedSigId(null);
     setIsPadEmpty(true);
   };
 
@@ -344,6 +418,25 @@ export const DboSigningPortal: React.FC = () => {
       };
 
       await DBService.saveValidationDraft(updatedDraft);
+
+      // Cache / remember this signature for this premise to lowest egress
+      const targetPremise = draft.premiseName || form.premiseName;
+      if (finalSignature && targetPremise) {
+        try {
+          await DBService.saveDboSignature({
+            id: selectedSavedSigId || `dbo-sig-${Date.now()}`,
+            premiseName: targetPremise,
+            permitNumber: draft.permitNo || form.permitNo || '',
+            clientName: draft.dboName || form.dboName || '',
+            repName: confirmationName.trim(),
+            designation: designation.trim() || 'DBO Representative',
+            signatureData: finalSignature
+          });
+        } catch (sigErr) {
+          console.warn("Non-fatal note: could not cache premise signature:", sigErr);
+        }
+      }
+
       setIsSuccess(true);
     } catch (err: any) {
       console.error("Failed to submit DBO signature:", err);
@@ -704,6 +797,88 @@ export const DboSigningPortal: React.FC = () => {
               </span>
             </label>
           </div>
+
+          {/* Saved DBO Representative Signatures for this Premise (Zero-egress cache-first) */}
+          {storedSignatures.length > 0 && (
+            <div className="p-4 bg-gradient-to-r from-blue-50/90 via-indigo-50/40 to-white border border-blue-200 rounded-2xl shadow-xs space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <BookmarkCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span className="text-xs font-bold text-blue-950 uppercase tracking-tight">
+                    Saved DBO Representative Signatures for this Premise
+                  </span>
+                  <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                    Auto-Fill Available
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-500 font-medium">
+                  {storedSignatures.length} {storedSignatures.length === 1 ? 'record' : 'records'} found
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-normal">
+                Click <strong>"Use Saved Signature"</strong> below to automatically populate the signing canvas with a previously used signature, official name, and designation.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                {storedSignatures.map((sig) => {
+                  const isSelected = selectedSavedSigId === sig.id || (confirmationName === sig.repName && dboSignature === sig.signatureData);
+                  return (
+                    <div
+                      key={sig.id}
+                      className={`p-3 rounded-xl border transition-all flex items-center justify-between gap-3 text-xs ${
+                        isSelected
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                          : 'bg-white text-slate-800 border-slate-200 hover:border-blue-300 hover:bg-blue-50/30'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {sig.signatureData && (
+                          <img
+                            src={sig.signatureData}
+                            alt="Saved signature"
+                            className="h-9 w-16 object-contain bg-white rounded-md border border-slate-200 px-1 shrink-0"
+                          />
+                        )}
+                        <div className="min-w-0 truncate">
+                          <div className={`font-bold truncate ${isSelected ? 'text-white' : 'text-slate-900'}`}>
+                            {sig.repName}
+                          </div>
+                          <div className={`text-[10px] truncate ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
+                            {sig.designation || 'DBO Representative'}
+                            {sig.updatedAt ? ` • ${new Date(sig.updatedAt).toLocaleDateString()}` : ''}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {isSelected ? (
+                          <button
+                            type="button"
+                            disabled={isExpired}
+                            onClick={handleClearSavedSignature}
+                            className="px-2.5 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                            title="Clear selected signature to sign afresh"
+                          >
+                            Clear
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={isExpired}
+                            onClick={() => handleApplySavedSignature(sig)}
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs flex items-center gap-1.5"
+                          >
+                            <BookmarkCheck className="w-3.5 h-3.5" />
+                            <span>Use Saved Signature</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* DBO Name and Designation (Mandatory manual entry) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
