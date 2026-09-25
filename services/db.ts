@@ -9,6 +9,7 @@ import {
   getIndividualValidationsCount, 
   ValidationDraft, 
   AuthoritySignature, 
+  DboPremiseSignature,
   ScopeDisclosureRecord,
   ClientQueryParams,
   PaginatedResult,
@@ -1843,6 +1844,243 @@ export const DBService = {
     return reordered;
   },
 
+  async getDboSignatures(forceRefresh = false): Promise<DboPremiseSignature[]> {
+    const cached = localStorage.getItem('kdb_dbo_signatures');
+    let localList: DboPremiseSignature[] = [];
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) localList = parsed;
+      } catch (_) {}
+    }
+
+    // 0-network egress: return cached signatures immediately unless forceRefresh is true
+    if (localList.length > 0 && !forceRefresh) {
+      return localList;
+    }
+
+    const fetchApi = async (): Promise<DboPremiseSignature[]> => {
+      try {
+        const res = await safeFetchJson<DboPremiseSignature[]>('/api/dbo-signatures');
+        if (res && Array.isArray(res)) {
+          safeSetLocalStorage('kdb_dbo_signatures', JSON.stringify(res));
+          return res;
+        }
+      } catch (_) {}
+      return localList;
+    };
+
+    const client = await getSupabase();
+    if (!client) {
+      return await fetchApi();
+    }
+
+    try {
+      const { data, error } = await client
+        .from('dbo_premise_signatures')
+        .select('id, premise_name, permit_number, client_name, rep_name, designation, signature_data, stamp_data, created_at, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(25);
+
+      if (!error && Array.isArray(data)) {
+        const mapped: DboPremiseSignature[] = data.map((r: any) => ({
+          id: r.id,
+          premiseName: r.premise_name || '',
+          permitNumber: r.permit_number || '',
+          clientName: r.client_name || '',
+          repName: r.rep_name || '',
+          designation: r.designation || '',
+          signatureData: r.signature_data || '',
+          stampData: r.stamp_data || '',
+          createdAt: r.created_at,
+          updatedAt: r.updated_at
+        }));
+        safeSetLocalStorage('kdb_dbo_signatures', JSON.stringify(mapped));
+        return mapped;
+      }
+    } catch (sbErr) {
+      console.warn("[DBService] Supabase getDboSignatures exception:", sbErr);
+    }
+
+    return await fetchApi();
+  },
+
+  async getDboSignaturesForPremise(premiseName: string, permitNumber?: string): Promise<DboPremiseSignature[]> {
+    const cleanP = (premiseName || '').toLowerCase().trim();
+    const cleanNo = cleanPermitNumber(permitNumber || '');
+    if (!cleanP && !cleanNo) return [];
+
+    // 1. Ultra-fast local cache check (0 network egress, 0ms latency, 0 Postgres usage)
+    const cached = localStorage.getItem('kdb_dbo_signatures');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const matched = parsed.filter((sig: DboPremiseSignature) => {
+            const sPrem = (sig.premiseName || '').toLowerCase().trim();
+            const sNo = cleanPermitNumber(sig.permitNumber || '');
+            if (cleanNo && sNo && (cleanNo === sNo || sNo.includes(cleanNo) || cleanNo.includes(sNo))) return true;
+            if (cleanP && sPrem && (cleanP === sPrem || sPrem.includes(cleanP) || cleanP.includes(sPrem))) return true;
+            return false;
+          });
+          if (matched.length > 0) return matched;
+        }
+      } catch (_) {}
+    }
+
+    // Helper to merge into local cache to prevent repeated network egress
+    const cacheItems = (newItems: DboPremiseSignature[]) => {
+      try {
+        const existing = JSON.parse(localStorage.getItem('kdb_dbo_signatures') || '[]');
+        const merged = [...newItems];
+        for (const it of existing) {
+          if (!merged.some(m => m.id === it.id)) {
+            merged.push(it);
+          }
+        }
+        safeSetLocalStorage('kdb_dbo_signatures', JSON.stringify(merged));
+      } catch (_) {}
+    };
+
+    // 2. Targeted query with Supabase: filter by premise/permit and limit to 5 records to minimize egress
+    const client = await getSupabase();
+    if (client) {
+      try {
+        let query = client
+          .from('dbo_premise_signatures')
+          .select('id, premise_name, permit_number, client_name, rep_name, designation, signature_data, stamp_data, created_at, updated_at');
+
+        if (cleanP && cleanNo) {
+          query = query.or(`premise_name.ilike.%${cleanP}%,permit_number.ilike.%${cleanNo}%`);
+        } else if (cleanP) {
+          query = query.ilike('premise_name', `%${cleanP}%`);
+        } else if (cleanNo) {
+          query = query.ilike('permit_number', `%${cleanNo}%`);
+        }
+
+        const { data, error } = await query.order('updated_at', { ascending: false }).limit(5);
+        if (!error && Array.isArray(data) && data.length > 0) {
+          const mapped: DboPremiseSignature[] = data.map((r: any) => ({
+            id: r.id,
+            premiseName: r.premise_name || '',
+            permitNumber: r.permit_number || '',
+            clientName: r.client_name || '',
+            repName: r.rep_name || '',
+            designation: r.designation || '',
+            signatureData: r.signature_data || '',
+            stampData: r.stamp_data || '',
+            createdAt: r.created_at,
+            updatedAt: r.updated_at
+          }));
+          cacheItems(mapped);
+          return mapped;
+        }
+      } catch (sbErr) {
+        console.warn("[DBService] Supabase getDboSignaturesForPremise note:", sbErr);
+      }
+    }
+
+    // 3. Fallback to local server API with targeted query parameters
+    try {
+      const q = new URLSearchParams();
+      if (cleanP) q.set('premise', cleanP);
+      if (cleanNo) q.set('permit', cleanNo);
+      const res = await safeFetchJson<DboPremiseSignature[]>(`/api/dbo-signatures?${q.toString()}`);
+      if (res && Array.isArray(res)) {
+        cacheItems(res);
+        return res;
+      }
+    } catch (_) {}
+
+    return [];
+  },
+
+  async saveDboSignature(signature: DboPremiseSignature): Promise<DboPremiseSignature> {
+    const nowIso = new Date().toISOString();
+    const sigToSave: DboPremiseSignature = {
+      ...signature,
+      id: signature.id || `dbo-sig-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      createdAt: signature.createdAt || nowIso,
+      updatedAt: nowIso
+    };
+
+    const current = await this.getDboSignatures();
+    const idx = current.findIndex(s => 
+      (s.id && s.id === sigToSave.id) ||
+      ((s.premiseName || '').toLowerCase().trim() === (sigToSave.premiseName || '').toLowerCase().trim() &&
+       (s.repName || '').toLowerCase().trim() === (sigToSave.repName || '').toLowerCase().trim())
+    );
+    let updatedList: DboPremiseSignature[];
+    if (idx >= 0) {
+      updatedList = [...current];
+      updatedList[idx] = { ...updatedList[idx], ...sigToSave };
+    } else {
+      updatedList = [sigToSave, ...current];
+    }
+    safeSetLocalStorage('kdb_dbo_signatures', JSON.stringify(updatedList));
+
+    try {
+      await fetch('/api/dbo-signatures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sigToSave)
+      });
+    } catch (e) {
+      console.warn("[DBService] /api/dbo-signatures save error:", e);
+    }
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        const row = {
+          id: sigToSave.id,
+          premise_name: sigToSave.premiseName,
+          permit_number: sigToSave.permitNumber || '',
+          client_name: sigToSave.clientName || '',
+          rep_name: sigToSave.repName,
+          designation: sigToSave.designation || '',
+          signature_data: sigToSave.signatureData,
+          stamp_data: sigToSave.stampData || '',
+          updated_at: nowIso
+        };
+        await client.from('dbo_premise_signatures').upsert([row]);
+      } catch (sbErr: any) {
+        console.warn("[DBService] Supabase dbo_premise_signatures upsert notice:", sbErr?.message);
+      }
+    }
+
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kdb_dbo_signatures_updated', { detail: sigToSave }));
+      }
+    } catch (_) {}
+
+    return sigToSave;
+  },
+
+  async deleteDboSignature(id: string): Promise<void> {
+    const current = await this.getDboSignatures();
+    const updated = current.filter(s => s.id !== id);
+    safeSetLocalStorage('kdb_dbo_signatures', JSON.stringify(updated));
+
+    try {
+      await fetch(`/api/dbo-signatures/${id}`, { method: 'DELETE' });
+    } catch (_) {}
+
+    const client = await getSupabase();
+    if (client) {
+      try {
+        await client.from('dbo_premise_signatures').delete().eq('id', id);
+      } catch (_) {}
+    }
+
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kdb_dbo_signatures_updated', { detail: { deletedId: id } }));
+      }
+    } catch (_) {}
+  },
+
   async getClients(forceFresh: boolean = false): Promise<LicensedClient[]> {
     const deduplicateClients = (list: LicensedClient[]): LicensedClient[] => {
       const unique: LicensedClient[] = [];
@@ -2745,7 +2983,8 @@ export const DBService = {
       validatorName: '',
       validatedAt: '',
       status: 'Approved',
-      remarks: ''
+      remarks: '',
+      pdfPath: ''
     };
 
     const fetchLocal = async (): Promise<DataValidation[]> => {
@@ -2783,8 +3022,15 @@ export const DBService = {
 
       const mapped1 = list1.map(r => {
         const item = fromDb(r, template);
-        const mCount = r.months_count || r.monthsCount || (Array.isArray(r.raw_data?.sales) && r.raw_data.sales.length > 0 ? r.raw_data.sales.length : undefined) || getIndividualValidationsCount(item);
-        return { ...item, monthsCount: mCount };
+        const raw = typeof r.raw_data === 'string' ? (() => { try { return JSON.parse(r.raw_data); } catch { return {}; } })() : (r.raw_data || {});
+        const mCount = r.months_count || r.monthsCount || (Array.isArray(raw?.sales) && raw.sales.length > 0 ? raw.sales.length : undefined) || getIndividualValidationsCount(item);
+        const pdfP = r.pdf_path || r.pdfpath || r.pdf || raw.pdf_path || raw.pdfPath || raw.pdf || item.pdfPath || '';
+        return { 
+          ...item, 
+          monthsCount: mCount,
+          pdfPath: pdfP,
+          rawData: raw
+        };
       });
 
       const mapped2 = list2.map(r => {

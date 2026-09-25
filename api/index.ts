@@ -18,6 +18,7 @@ const CLOSURES_FILE = path.join(DATA_DIR, "closures.json");
 const DEBTORS_FILE = path.join(DATA_DIR, "debtors.json");
 const STAFF_FILE = path.join(DATA_DIR, "staff.json");
 const AUTHORITY_SIGNATURES_FILE = path.join(DATA_DIR, "authority_signatures.json");
+const DBO_SIGNATURES_FILE = path.join(DATA_DIR, "dbo_signatures.json");
 const CLIENTS_FILE = path.join(DATA_DIR, "clients.json");
 const RETURNS_FILE = path.join(DATA_DIR, "returns.json");
 const VALIDATIONS_FILE = path.join(DATA_DIR, "validations.json");
@@ -1488,6 +1489,135 @@ Allow: /cessations
       } catch (error: any) {
         logToFile(`CRITICAL Error saving authority signatures: ${error.message}`);
         res.status(500).json({ error: "Failed to save authority signatures", details: error.message });
+      }
+    });
+
+    logToFile("[Server] Registering DBO premise signatures routes...");
+    app.get("/api/dbo-signatures", async (req, res) => {
+      try {
+        if (!fs.existsSync(DBO_SIGNATURES_FILE)) {
+          return res.json([]);
+        }
+        const data = await fs.promises.readFile(DBO_SIGNATURES_FILE, "utf-8");
+        try {
+          const parsed = JSON.parse(data);
+          let list = Array.isArray(parsed) ? parsed : [];
+          const premise = (req.query.premise as string || '').trim().toLowerCase();
+          const permit = (req.query.permit as string || '').trim().toLowerCase();
+          if (premise || permit) {
+            list = list.filter((item: any) => {
+              const pName = (item.premiseName || item.premise_name || '').toLowerCase();
+              const pNo = (item.permitNumber || item.permit_number || '').toLowerCase();
+              if (permit && pNo && (pNo === permit || pNo.includes(permit) || permit.includes(pNo))) return true;
+              if (premise && pName && (pName === premise || pName.includes(premise) || premise.includes(pName))) return true;
+              return false;
+            });
+          }
+          res.json(list);
+        } catch {
+          res.json([]);
+        }
+      } catch (error: any) {
+        logToFile(`Error reading DBO premise signatures: ${error.message}`);
+        res.status(500).json({ error: "Failed to read DBO signatures" });
+      }
+    });
+
+    app.post("/api/dbo-signatures", async (req, res) => {
+      try {
+        const payload = req.body;
+        if (!payload || !payload.premiseName || !payload.signatureData) {
+          return res.status(400).json({ error: "premiseName and signatureData are required" });
+        }
+
+        let list: any[] = [];
+        if (fs.existsSync(DBO_SIGNATURES_FILE)) {
+          try {
+            const raw = await fs.promises.readFile(DBO_SIGNATURES_FILE, "utf-8");
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) list = parsed;
+          } catch (_) {}
+        }
+
+        const nowIso = new Date().toISOString();
+        const id = payload.id || `dbo-sig-${Date.now()}`;
+        const record = {
+          id,
+          premiseName: payload.premiseName,
+          permitNumber: payload.permitNumber || '',
+          clientName: payload.clientName || '',
+          repName: payload.repName || payload.confirmationName || '',
+          designation: payload.designation || '',
+          signatureData: payload.signatureData,
+          stampData: payload.stampData || '',
+          createdAt: payload.createdAt || nowIso,
+          updatedAt: nowIso
+        };
+
+        // Match existing entry for premise and representative to update or append
+        const idx = list.findIndex((item: any) => 
+          (item.id && item.id === record.id) ||
+          ((item.premiseName || '').toLowerCase().trim() === record.premiseName.toLowerCase().trim() &&
+           (item.repName || '').toLowerCase().trim() === record.repName.toLowerCase().trim())
+        );
+
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...record };
+        } else {
+          list.unshift(record);
+        }
+
+        await fs.promises.writeFile(DBO_SIGNATURES_FILE, JSON.stringify(list, null, 2));
+        logToFile(`Successfully saved DBO signature for ${record.premiseName} (${record.repName})`);
+
+        // Async sync to Supabase if available
+        if (sUrl && sKey) {
+          try {
+            const serverSupabase = createClient(sUrl, sKey);
+            const row = {
+              id: record.id,
+              premise_name: record.premiseName,
+              permit_number: record.permitNumber,
+              client_name: record.clientName,
+              rep_name: record.repName,
+              designation: record.designation,
+              signature_data: record.signatureData,
+              stamp_data: record.stampData,
+              updated_at: nowIso
+            };
+            await serverSupabase.from('dbo_premise_signatures').upsert([row]);
+          } catch (sbErr: any) {
+            logToFile(`Supabase dbo_premise_signatures upsert notice: ${sbErr.message}`);
+          }
+        }
+
+        res.json({ success: true, signature: record });
+      } catch (error: any) {
+        logToFile(`Error saving DBO signature: ${error.message}`);
+        res.status(500).json({ error: "Failed to save DBO signature", details: error.message });
+      }
+    });
+
+    app.delete("/api/dbo-signatures/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!fs.existsSync(DBO_SIGNATURES_FILE)) {
+          return res.json({ success: true });
+        }
+        const raw = await fs.promises.readFile(DBO_SIGNATURES_FILE, "utf-8");
+        const list = JSON.parse(raw);
+        const filtered = Array.isArray(list) ? list.filter((s: any) => s.id !== id) : [];
+        await fs.promises.writeFile(DBO_SIGNATURES_FILE, JSON.stringify(filtered, null, 2));
+
+        if (sUrl && sKey) {
+          try {
+            const serverSupabase = createClient(sUrl, sKey);
+            await serverSupabase.from('dbo_premise_signatures').delete().eq('id', id);
+          } catch (_) {}
+        }
+        res.json({ success: true });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to delete DBO signature" });
       }
     });
 

@@ -673,3 +673,17 @@ export interface PaginatedReturnsResult extends PaginatedResult<ClientReturn> {
   };
 }
 
+export interface DboPremiseSignature {
+  id: string;
+  premiseName: string;
+  permitNumber?: string;
+  clientName?: string;
+  repName: string;
+  designation?: string;
+  signatureData: string; // Base64 data URL
+  stampData?: string;    // Base64 stamp image
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+

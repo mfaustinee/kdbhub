@@ -326,6 +326,26 @@ CREATE TABLE IF NOT EXISTS authority_signatures (
 CREATE INDEX IF NOT EXISTS idx_authority_signatures_default ON authority_signatures(is_default);
 CREATE INDEX IF NOT EXISTS idx_authority_signatures_order ON authority_signatures(display_order);
 
+-- 13. DBO PREMISE SIGNATURES TABLE (Remembered DBO Representative Signatures per Premise)
+CREATE TABLE IF NOT EXISTS dbo_premise_signatures (
+    id TEXT PRIMARY KEY,
+    premise_name TEXT NOT NULL,
+    permit_number TEXT,
+    client_name TEXT,
+    rep_name TEXT NOT NULL,
+    designation TEXT,
+    signature_data TEXT NOT NULL, -- Base64 data URL
+    stamp_data TEXT,              -- Optional base64 stamp
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for ultra-low egress, fast targeted lookups, and duplicate prevention
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dbo_premise_rep_unique ON dbo_premise_signatures (LOWER(TRIM(premise_name)), LOWER(TRIM(rep_name)));
+CREATE INDEX IF NOT EXISTS idx_dbo_premise_signatures_premise ON dbo_premise_signatures(LOWER(TRIM(premise_name)));
+CREATE INDEX IF NOT EXISTS idx_dbo_premise_signatures_permit ON dbo_premise_signatures(permit_number);
+CREATE INDEX IF NOT EXISTS idx_dbo_premise_signatures_updated_at ON dbo_premise_signatures(updated_at DESC);
+
 -- Staff Config Migration (Ensure officialname, officialtitle, authority_signatures, enabledmodules exist)
 ALTER TABLE staff_config ADD COLUMN IF NOT EXISTS officialname TEXT;
 ALTER TABLE staff_config ADD COLUMN IF NOT EXISTS officialtitle TEXT;
@@ -349,7 +369,7 @@ BEGIN
             'licensed_clients', 'client_returns', 'data_validations', 
             'kdb_validations', 'agreements', 'closures', 'debtors', 
             'staff_config', 'complaints', 'inquiries', 'validation_drafts',
-            'authority_signatures'
+            'authority_signatures', 'dbo_premise_signatures'
           )
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
@@ -364,7 +384,7 @@ BEGIN
     END LOOP;
 END $$;
 
--- 13. ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
+-- 14. ROW LEVEL SECURITY (RLS) POLICIES & PERMISSIONS
 -- Enables public API access (via Supabase anon/authenticated roles) for all application tables
 
 DO $$ 
@@ -374,7 +394,7 @@ DECLARE
         'licensed_clients', 'client_returns', 'data_validations', 
         'kdb_validations', 'agreements', 'closures', 'debtors', 
         'staff_config', 'complaints', 'inquiries', 'validation_drafts',
-        'authority_signatures'
+        'authority_signatures', 'dbo_premise_signatures'
     ];
 BEGIN
     FOREACH tbl IN ARRAY tables LOOP

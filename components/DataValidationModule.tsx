@@ -7,7 +7,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
-import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem, ExceptionStatus, ScopeDisclosureRecord } from '../types';
+import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, DboPremiseSignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem, ExceptionStatus, ScopeDisclosureRecord } from '../types';
 import { FieldChecklistComponent } from './FieldChecklistComponent';
 import { FIELD_CHECKLIST_SECTIONS, hasAnyChecklistValue, getActiveChecklistItems } from './fieldChecklistData';
 import { TransactionReconciliationComponent } from './TransactionReconciliationComponent';
@@ -19,6 +19,7 @@ import { ScopeDisclosureModule } from './ScopeDisclosureModule';
 import { CalculatorApp, formatPaymentMonthYear } from './CalculatorApp';
 import { 
   ClipboardCheck, 
+  BookmarkCheck,
   Database, 
   CheckCircle2, 
   AlertCircle, 
@@ -1042,6 +1043,83 @@ export function DataValidationModule() {
     };
   }, []);
 
+  // Remembered DBO Premise Signatures state & handlers
+  const [rememberedDboSigs, setRememberedDboSigs] = useState<DboPremiseSignature[]>([]);
+  const [selectedRememberedSigId, setSelectedRememberedSigId] = useState<string | null>(null);
+  const [isSavingRememberedSig, setIsSavingRememberedSig] = useState(false);
+
+  useEffect(() => {
+    let isCancelled = false;
+    const pName = (formData.premiseName || '').trim();
+    const pNo = (formData.permitNo || '').trim();
+
+    if (!pName && !pNo) {
+      setRememberedDboSigs([]);
+      return;
+    }
+
+    const loadPremiseSigs = async () => {
+      try {
+        const sigs = await DBService.getDboSignaturesForPremise(pName, pNo);
+        if (!isCancelled) {
+          setRememberedDboSigs(Array.isArray(sigs) ? sigs : []);
+        }
+      } catch (err) {
+        console.warn('Error loading DBO premise signatures:', err);
+      }
+    };
+    loadPremiseSigs();
+
+    const handleDboSigUpdate = () => {
+      loadPremiseSigs();
+    };
+    window.addEventListener('kdb_dbo_signatures_updated', handleDboSigUpdate);
+    return () => {
+      isCancelled = true;
+      window.removeEventListener('kdb_dbo_signatures_updated', handleDboSigUpdate);
+    };
+  }, [formData.premiseName, formData.permitNo]);
+
+  const handleApplyRememberedDboSignature = (sig: DboPremiseSignature) => {
+    setFormData(prev => ({
+      ...prev,
+      confirmationName: sig.repName || prev.confirmationName,
+      designation: sig.designation || prev.designation,
+      dboSignature: sig.signatureData || prev.dboSignature,
+      dboStamp: sig.stampData || prev.dboStamp
+    }));
+    setSelectedRememberedSigId(sig.id);
+  };
+
+  const handleClearRememberedSelection = () => {
+    setSelectedRememberedSigId(null);
+    clearField('dboSignature');
+  };
+
+  const handleExplicitSaveDboSignature = async () => {
+    if (!formData.dboSignature) return;
+    setIsSavingRememberedSig(true);
+    try {
+      await DBService.saveDboSignature({
+        id: selectedRememberedSigId || `dbo-sig-${Date.now()}`,
+        premiseName: formData.premiseName || 'Premise',
+        permitNumber: formData.permitNo || '',
+        clientName: formData.dboName || '',
+        repName: formData.confirmationName || 'DBO Representative',
+        designation: formData.designation || 'Proprietor',
+        signatureData: formData.dboSignature,
+        stampData: formData.dboStamp || undefined
+      });
+      const refreshed = await DBService.getDboSignaturesForPremise(formData.premiseName, formData.permitNo);
+      setRememberedDboSigs(refreshed);
+      setStatus({ type: 'success', message: 'DBO signature remembered for this premise!' });
+    } catch (err) {
+      console.warn('Failed to save DBO signature:', err);
+    } finally {
+      setIsSavingRememberedSig(false);
+    }
+  };
+
   // 5-Minute Countdown timer for DBO remote signing link
   useEffect(() => {
     if (!signingExpiresAtTimestamp) {
@@ -1295,6 +1373,8 @@ export function DataValidationModule() {
     const pNorm = normStr(pName);
     const pNoNorm = normStr(pNo);
     const dboNorm = normStr(dbo);
+    const cleanPermit = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+    const pNoClean = cleanPermit(pNo);
 
     const allExtractedMonths: {
       period: string;
@@ -1314,25 +1394,28 @@ export function DataValidationModule() {
         if (!v) return;
         const raw = typeof v.raw_data === 'string' ? (() => { try { return JSON.parse(v.raw_data); } catch { return {}; } })() : (v.rawData || v.raw_data || {});
         const vPName = normStr(v.premiseName || v.premise_name || raw.premiseName || raw.premise_name);
-        const vPNo = normStr(v.permitNo || v.permit_no || v.clientId || raw.permitNo || raw.permit_no);
+        const vPNo = normStr(v.permitNo || v.permit_no || raw.permitNo || raw.permit_no);
+        const vPNoClean = cleanPermit(v.permitNo || v.permit_no || raw.permitNo || raw.permit_no);
         const vDbo = normStr(v.clientName || v.dbo_name || raw.dboName || raw.dbo_name || raw.clientName);
         const vBranch = v.branch || raw.branch || '';
         const vLocation = v.location || raw.location || '';
         const rawPName = v.premiseName || v.premise_name || raw.premiseName || '';
         const rawPNo = v.permitNo || v.permit_no || raw.permitNo || '';
 
-        // Strict Premise Matching: When a premise name is entered, match the exact premise name
-        let isMatch = false;
-        if (pNorm) {
-          isMatch = vPName === pNorm;
-        } else if (pNoNorm) {
-          isMatch = vPNo === pNoNorm;
-        } else if (dboNorm) {
-          isMatch = vDbo === dboNorm;
-        }
+        // Match Logic:
+        // 1. Authoritative Permit Number Match (permit number validates in field; customer number is internal)
+        const permitMatch = Boolean(pNoClean && vPNoClean && (pNoClean === vPNoClean || (pNoClean.length >= 4 && (vPNoClean.includes(pNoClean) || pNoClean.includes(vPNoClean)))));
+
+        // 2. Premise Name Match (exact or meaningful partial)
+        const premiseMatch = Boolean(pNorm && vPName && (pNorm === vPName || (pNorm.length >= 4 && vPName.length >= 4 && (vPName.includes(pNorm) || pNorm.includes(vPName)))));
+
+        // 3. DBO Name + Location/Premise Match
+        const dboMatch = Boolean(dboNorm && vDbo && (dboNorm === vDbo || (dboNorm.length >= 5 && (vDbo.includes(dboNorm) || dboNorm.includes(vDbo)))) && (premiseMatch || (vLocation && normStr(formData.location) && normStr(formData.location) === normStr(vLocation))));
+
+        const isMatch = permitMatch || premiseMatch || dboMatch;
 
         if (isMatch) {
-          const pdfRef = v.pdfPath || v.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf;
+          const pdfRef = v.pdfPath || v.pdf_path || raw.pdf_path || raw.pdfPath || raw.pdf || raw.fileName;
           let fullPeriod = v.period || v.validation_period || raw.validationPeriod || raw.period || '';
           if (fullPeriod) {
             fullPeriod = fullPeriod.trim();
@@ -1357,10 +1440,20 @@ export function DataValidationModule() {
           );
 
           if (fullPeriod) {
+            const dateScore = Math.max(
+              getPeriodTimestamp(fullPeriod, v.validatedAt || v.date || raw.date),
+              v.validatedAt ? new Date(v.validatedAt).getTime() : 0,
+              v.date ? new Date(v.date).getTime() : 0,
+              raw.date ? new Date(raw.date).getTime() : 0,
+              raw.timestamp ? new Date(raw.timestamp).getTime() : 0,
+              raw.submittedAt ? new Date(raw.submittedAt).getTime() : 0,
+              raw.created_at ? new Date(raw.created_at).getTime() : 0
+            );
+
             allExtractedMonths.push({
               period: fullPeriod,
               pdfPath: pdfRef,
-              score: getPeriodTimestamp(fullPeriod, v.validatedAt || v.date || raw.date),
+              score: isNaN(dateScore) ? 0 : dateScore,
               rawData: raw,
               matchedPremise: rawPName || pName,
               matchedPermit: rawPNo || pNo,
@@ -1377,13 +1470,31 @@ export function DataValidationModule() {
     const deduplicated: Record<string, any> = {};
     allExtractedMonths.forEach(m => {
       const key = `${m.period.toLowerCase().trim()}_${(m.matchedPremise || '').toLowerCase().trim()}`;
-      if (!deduplicated[key] || (!deduplicated[key].pdfPath && m.pdfPath) || m.score > deduplicated[key].score) {
-        deduplicated[key] = m;
+      const existing = deduplicated[key];
+      if (!existing) {
+        deduplicated[key] = { ...m };
+      } else {
+        // Retain and prioritize any valid PDF attachment
+        const bestPdf = m.pdfPath || existing.pdfPath;
+        if (m.score > existing.score) {
+          deduplicated[key] = { ...m, pdfPath: bestPdf };
+        } else {
+          existing.pdfPath = bestPdf;
+        }
+        // Merge rawData to preserve base64 pdf data
+        if (m.rawData || existing.rawData) {
+          deduplicated[key].rawData = {
+            ...(existing.rawData || {}),
+            ...(m.rawData || {}),
+            pdf: m.rawData?.pdf || existing.rawData?.pdf,
+            pdfPath: bestPdf
+          };
+        }
       }
     });
 
     const sortedList = Object.values(deduplicated).sort((a: any, b: any) => b.score - a.score);
-    return sortedList.slice(0, 6).map((m: any) => ({
+    return sortedList.slice(0, 10).map((m: any) => ({
       month: '', year: '', date: '',
       fullPeriod: m.period,
       displayString: m.period.replace(/(\b\d{4}\b)\s+\1/g, '$1'),
@@ -1466,20 +1577,20 @@ export function DataValidationModule() {
                         (searchTokens.length > 0 && searchTokens.some(tok => cDbo.includes(tok)));
 
         if (isMatch) {
-          const key = `${c.premiseName || ''}-${c.id || ''}`.toLowerCase().trim();
+          const key = `${c.premiseName || ''}-${c.permitNumber || (c as any).permit_number || c.id || ''}`.toLowerCase().trim();
           if (!uniqueMap[key]) {
             uniqueMap[key] = {
               dbo_name: c.clientName,
               premise_name: c.premiseName,
               category: c.premiseCategory,
-              permit_no: c.id,
+              permit_no: c.permitNumber || (c as any).permit_number || '',
               location: c.location,
               county: toSentenceCase(c.county || 'Kericho'),
               raw_data: {
                 dboName: c.clientName,
                 premiseName: c.premiseName,
                 category: c.premiseCategory,
-                permitNo: c.id,
+                permitNo: c.permitNumber || (c as any).permit_number || '',
                 location: c.location,
                 county: toSentenceCase(c.county || 'Kericho'),
                 contacts: c.tel,
@@ -1527,19 +1638,36 @@ export function DataValidationModule() {
         let sbVals: any[] = [];
         if (supabase) {
           try {
+            const cleanQueryVal = (str: string) => str.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
             const searchTerms: string[] = [];
-            if (pName && pName.length >= 2) searchTerms.push(`premise_name.ilike.%${pName.replace(/["']/g, '').trim()}%`);
-            if (pNo && pNo.length >= 2) searchTerms.push(`permit_no.ilike.%${pNo.replace(/["']/g, '').trim()}%`);
-            if (dbo && dbo.length >= 2) searchTerms.push(`dbo_name.ilike.%${dbo.replace(/["']/g, '').trim()}%`);
+            const cleanP = cleanQueryVal(pName);
+            const cleanNo = cleanQueryVal(pNo);
+            const cleanDbo = cleanQueryVal(dbo);
+            if (cleanP.length >= 2) searchTerms.push(`premise_name.ilike.%${cleanP}%`);
+            if (cleanNo.length >= 2) searchTerms.push(`permit_no.ilike.%${cleanNo}%`);
+            if (cleanDbo.length >= 2) searchTerms.push(`dbo_name.ilike.%${cleanDbo}%`);
             
             if (searchTerms.length > 0) {
-              const { data: sbData } = await supabase
-                .from('kdb_validations')
-                .select('*')
-                .or(searchTerms.join(','))
-                .order('date', { ascending: false })
-                .limit(25);
-              if (Array.isArray(sbData)) sbVals = sbData;
+              const [sbKdbRes, sbDataRes] = await Promise.allSettled([
+                supabase
+                  .from('kdb_validations')
+                  .select('*')
+                  .or(searchTerms.join(','))
+                  .order('date', { ascending: false })
+                  .limit(25),
+                supabase
+                  .from('data_validations')
+                  .select('*')
+                  .or(searchTerms.join(','))
+                  .order('date', { ascending: false })
+                  .limit(25)
+              ]);
+              if (sbKdbRes.status === 'fulfilled' && Array.isArray(sbKdbRes.value?.data)) {
+                sbVals.push(...sbKdbRes.value.data);
+              }
+              if (sbDataRes.status === 'fulfilled' && Array.isArray(sbDataRes.value?.data)) {
+                sbVals.push(...sbDataRes.value.data);
+              }
             }
           } catch (spErr) {
             console.warn('[fetchHistory] Supabase direct query note:', spErr);
@@ -1564,10 +1692,22 @@ export function DataValidationModule() {
       }
     };
 
+    const handleValidationsUpdated = () => {
+      if (isMounted) {
+        fetchRemoteHistory();
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('kdb_validations_updated', handleValidationsUpdated);
+    }
+
     const timer = setTimeout(fetchRemoteHistory, 350);
     return () => {
       isMounted = false;
       clearTimeout(timer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('kdb_validations_updated', handleValidationsUpdated);
+      }
     };
   }, [formData.premiseName, formData.permitNo, formData.dboName]);
 
@@ -2575,7 +2715,7 @@ export function DataValidationModule() {
       setFormData(prev => ({
         ...prev,
         premiseName: selectedClient.premiseName || '',
-        permitNo: selectedClient.id || '',
+        permitNo: selectedClient.permitNumber || (selectedClient as any).permit_number || '',
         category: selectedClient.premiseCategory || 'Milk Bar',
         location: selectedClient.location || '',
         county: toSentenceCase(selectedClient.county || 'Kericho'),
@@ -2745,7 +2885,7 @@ export function DataValidationModule() {
 
     // 1. Try exact permit match
     if (pTerm) {
-      const match = activeClients.find(c => cleanPermit(c.id) === pTerm || cleanPermit(c.permitNumber) === pTerm);
+      const match = activeClients.find(c => cleanPermit(c.permitNumber || (c as any).permit_number || '') === pTerm);
       if (match) return match;
     }
 
@@ -2758,7 +2898,7 @@ export function DataValidationModule() {
     // 3. Try partial/relaxed permit match
     if (pTerm) {
       const match = activeClients.find(c => {
-        const cP = cleanPermit(c.id) || cleanPermit(c.permitNumber);
+        const cP = cleanPermit(c.permitNumber || (c as any).permit_number || '');
         return cP && (cP.includes(pTerm) || pTerm.includes(cP));
       });
       if (match) return match;
@@ -2781,8 +2921,8 @@ export function DataValidationModule() {
       formToUse.premiseName = client.premiseName;
       formUpdated = true;
     }
-    if (!formToUse.permitNo && (client.permitNumber || client.id)) {
-      formToUse.permitNo = client.permitNumber || client.id;
+    if (!formToUse.permitNo && (client.permitNumber || (client as any).permit_number)) {
+      formToUse.permitNo = client.permitNumber || (client as any).permit_number || '';
       formUpdated = true;
     }
     if (!formToUse.location && client.location) {
@@ -2862,7 +3002,7 @@ export function DataValidationModule() {
     const points = [
       { key: 'dboName', label: '1. Name of DBO (clientname)', validationVal: formToUse.dboName || '', clientVal: client.clientName || '' },
       { key: 'premiseName', label: '2. Premise / Branch Name (premisename)', validationVal: formToUse.premiseName || '', clientVal: client.premiseName || '' },
-      { key: 'permitNo', label: '3. Permit Number (permitnumber)', validationVal: formToUse.permitNo || '', clientVal: client.permitNumber || client.id || '' },
+      { key: 'permitNo', label: '3. Permit Number (permitnumber)', validationVal: formToUse.permitNo || '', clientVal: client.permitNumber || (client as any).permit_number || '' },
       { key: 'location', label: '4. Location / Branch Address (location)', validationVal: formToUse.location || '', clientVal: client.location || '' },
       { key: 'category', label: '5. Category (premisecategory)', validationVal: formToUse.category || '', clientVal: client.premiseCategory || '' },
       { key: 'contacts', label: '6. Contacts (tel / contactperson)', validationVal: formToUse.contacts || '', clientVal: client.tel || client.contactPerson || '' },
@@ -3408,8 +3548,9 @@ export function DataValidationModule() {
       return true;
     } else if (s === 5) {
       // Step 5: Comments & Recommended Corrective Actions
-      if (!formData.actionOwner || formData.actionOwner.trim() === '') {
-        setStatus({ type: 'error', message: 'Responsible Person / DBO Representative is mandatory before proceeding to Step 6.' });
+      const hasCorrectiveActions = (formData.recommendedActions || '').trim() !== '';
+      if (hasCorrectiveActions && (!formData.actionOwner || formData.actionOwner.trim() === '')) {
+        setStatus({ type: 'error', message: 'Responsible Person / DBO Representative is mandatory when corrective actions are issued.' });
         return false;
       }
       return true;
@@ -3987,7 +4128,29 @@ export function DataValidationModule() {
         return;
       }
 
-      // 4. Fallback: search local DBService validations for inline PDF base64 string or matching record
+      // 4. Fallback: search lastCollections and local DBService validations for inline PDF base64 string or matching record
+      const colMatch = lastCollections.find(c => 
+        c.pdfPath === path || 
+        c.rawData?.pdf_path === path || 
+        c.rawData?.pdfPath === path ||
+        c.rawData?.fileName === path
+      );
+      const colInline = colMatch?.rawData?.pdf || colMatch?.rawData?.pdfData;
+      if (colInline) {
+        if (colInline.startsWith('data:')) {
+          try {
+            const blob = dataURIToBlob(colInline);
+            const blobUrl = URL.createObjectURL(blob);
+            setPdfModalUrl(blobUrl);
+            return;
+          } catch (convErr) {
+            console.warn('Could not convert collection data URI to blob:', convErr);
+          }
+        }
+        setPdfModalUrl(colInline);
+        return;
+      }
+
       const allVals = await DBService.getValidations();
       const safeAllVals = Array.isArray(allVals) ? allVals : [];
       const match = safeAllVals.find(v => 
@@ -3995,7 +4158,8 @@ export function DataValidationModule() {
         v.id === path || 
         (v.rawData as any)?.pdf_path === path || 
         (v.rawData as any)?.pdfPath === path ||
-        (v.rawData as any)?.pdf === path
+        (v.rawData as any)?.pdf === path ||
+        (v.rawData as any)?.fileName === path
       );
 
       const inline = match?.pdfPath || (match?.rawData as any)?.pdf || (match?.rawData as any)?.pdfData;
@@ -4054,8 +4218,9 @@ export function DataValidationModule() {
       setIsSubmitting(false);
       return;
     }
-    if (!formData.actionOwner || formData.actionOwner.trim() === '') {
-      setStatus({ type: 'error', message: 'Responsible Person / DBO Representative is mandatory before submitting.' });
+    const hasCorrectiveActions = (formData.recommendedActions || '').trim() !== '';
+    if (hasCorrectiveActions && (!formData.actionOwner || formData.actionOwner.trim() === '')) {
+      setStatus({ type: 'error', message: 'Responsible Person / DBO Representative is mandatory when corrective actions are issued.' });
       setIsSubmitting(false);
       return;
     }
@@ -4405,14 +4570,53 @@ export function DataValidationModule() {
         })
       ]);
 
+      // Immediately update validation history with newly saved validation and attached PDF
+      const currentCache = DBService.getCachedValidations();
+      const immediateHist = extractPremiseHistory(
+        [dataValObject, ...(Array.isArray(currentCache) ? currentCache : [])],
+        updatedData.premiseName || formData.premiseName,
+        updatedData.permitNo || formData.permitNo,
+        updatedData.dboName || formData.dboName
+      );
+      if (immediateHist.length > 0) {
+        setLastCollections(immediateHist);
+      }
+
       // Revalidate cache in background without blocking UI
-      setTimeout(() => {
-        DBService.getValidations(true).catch(e => console.warn('Background getValidations error:', e));
-      }, 50);
+      setTimeout(async () => {
+        try {
+          const fresh = await DBService.getValidations(true);
+          const computed = extractPremiseHistory(
+            fresh,
+            updatedData.premiseName || formData.premiseName,
+            updatedData.permitNo || formData.permitNo,
+            updatedData.dboName || formData.dboName
+          );
+          if (computed.length > 0) {
+            setLastCollections(computed);
+          }
+        } catch (e) {
+          console.warn('Background getValidations error:', e);
+        }
+      }, 100);
 
       if (submitRes.ok) {
         setStatus({ type: 'success', message: 'Data successfully synced! Your PDF is downloading...' });
         
+        // Automatically remember DBO representative signature for this premise
+        if (formData.dboSignature && (formData.confirmationName || formData.designation)) {
+          DBService.saveDboSignature({
+            id: selectedRememberedSigId || `dbo-sig-${Date.now()}`,
+            premiseName: updatedData.premiseName || formData.premiseName,
+            permitNumber: updatedData.permitNo || formData.permitNo,
+            clientName: updatedData.dboName || formData.dboName,
+            repName: formData.confirmationName || 'DBO Representative',
+            designation: formData.designation || 'Proprietor',
+            signatureData: formData.dboSignature,
+            stampData: formData.dboStamp || undefined
+          }).catch(err => console.warn('Could not auto-save DBO signature for premise:', err));
+        }
+
         // Trigger PDF Download
         const link = document.createElement('a');
         link.href = pdf;
@@ -6332,54 +6536,57 @@ export function DataValidationModule() {
                                         Recent Validations:
                                       </div>
                                       <div className="flex flex-wrap gap-2">
-                                        {activeList.slice(0, 4).map((c, i) => (
-                                          <div
-                                            key={i}
-                                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] ${
-                                              c.isBranchFacility
-                                                ? 'bg-amber-50/80 border-amber-200 text-amber-900'
-                                                : 'bg-white border-blue-200 text-blue-900 shadow-xs'
-                                            }`}
-                                          >
-                                            <span className={`text-[8px] font-black uppercase px-1 py-0.2 rounded ${
-                                              c.isBranchFacility
-                                                ? 'bg-amber-200 text-amber-900'
-                                                : 'bg-blue-100 text-blue-800'
-                                            }`}>
-                                              {c.isBranchFacility ? 'Branch' : 'Main'}
-                                            </span>
-                                            <span className="font-bold">{c.displayString}</span>
-                                            {c.matchedPremise && c.matchedPremise !== formData.premiseName && (
-                                              <span className="text-[9px] text-slate-500 font-medium">
-                                                ({c.matchedPremise})
+                                        {activeList.slice(0, 8).map((c, i) => {
+                                          const pdfRef = c.pdfPath || c.rawData?.pdf || c.rawData?.pdfPath || c.rawData?.pdf_path;
+                                          return (
+                                            <div
+                                              key={i}
+                                              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[10px] ${
+                                                c.isBranchFacility
+                                                  ? 'bg-amber-50/80 border-amber-200 text-amber-900'
+                                                  : 'bg-white border-blue-200 text-blue-900 shadow-xs'
+                                              }`}
+                                            >
+                                              <span className={`text-[8px] font-black uppercase px-1 py-0.2 rounded ${
+                                                c.isBranchFacility
+                                                  ? 'bg-amber-200 text-amber-900'
+                                                  : 'bg-blue-100 text-blue-800'
+                                              }`}>
+                                                {c.isBranchFacility ? 'Branch' : 'Main'}
                                               </span>
-                                            )}
-                                            <div className="flex items-center gap-1 ml-1">
-                                              {c.pdfPath && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => viewPdf(c.pdfPath!)}
-                                                  className="text-[9px] bg-blue-100 hover:bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
-                                                  title="View PDF"
-                                                >
-                                                  <FileText className="w-2.5 h-2.5" />
-                                                  PDF
-                                                </button>
+                                              <span className="font-bold">{c.displayString}</span>
+                                              {c.matchedPremise && c.matchedPremise !== formData.premiseName && (
+                                                <span className="text-[9px] text-slate-500 font-medium">
+                                                  ({c.matchedPremise})
+                                                </span>
                                               )}
-                                              {c.rawData && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleRecallSubmission(c.rawData)}
-                                                  className="text-[9px] bg-amber-100 hover:bg-amber-200 text-amber-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold"
-                                                  title="Amend this submission"
-                                                >
-                                                  <Edit2 className="w-2.5 h-2.5" />
-                                                  Amend
-                                                </button>
-                                              )}
+                                              <div className="flex items-center gap-1 ml-1">
+                                                {pdfRef && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => viewPdf(pdfRef)}
+                                                    className="text-[9px] bg-blue-100 hover:bg-blue-200 text-blue-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold cursor-pointer"
+                                                    title="View PDF attachment"
+                                                  >
+                                                    <FileText className="w-2.5 h-2.5" />
+                                                    PDF
+                                                  </button>
+                                                )}
+                                                {c.rawData && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleRecallSubmission(c.rawData)}
+                                                    className="text-[9px] bg-amber-100 hover:bg-amber-200 text-amber-700 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-colors font-semibold cursor-pointer"
+                                                    title="Amend this submission"
+                                                  >
+                                                    <Edit2 className="w-2.5 h-2.5" />
+                                                    Amend
+                                                  </button>
+                                                )}
+                                              </div>
                                             </div>
-                                          </div>
-                                        ))}
+                                          );
+                                        })}
                                       </div>
                                     </div>
                                   </div>
@@ -8867,6 +9074,101 @@ export function DataValidationModule() {
                           </div>
                         )}
 
+                        {/* Saved / Remembered DBO Representative Signatures for this Premise (Optional) */}
+                        {rememberedDboSigs.length > 0 && (
+                          <div className="p-3.5 bg-gradient-to-r from-blue-50/90 via-indigo-50/40 to-white border border-blue-200 rounded-2xl shadow-xs space-y-2.5">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2">
+                                <BookmarkCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                                <span className="text-xs font-bold text-blue-950 uppercase tracking-tight">
+                                  Saved DBO Representative Signatures for this Premise
+                                </span>
+                                <span className="text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                                  Optional
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-medium">
+                                {rememberedDboSigs.length} {rememberedDboSigs.length === 1 ? 'record' : 'records'} available
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 leading-normal">
+                              You can optionally select a previously recorded representative signature for this premise to append it directly, or enter/draw a new signature below.
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                              {rememberedDboSigs.map((sig) => {
+                                const isSelected = selectedRememberedSigId === sig.id || (formData.confirmationName === sig.repName && formData.dboSignature === sig.signatureData);
+                                return (
+                                  <div
+                                    key={sig.id}
+                                    className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-2.5 text-xs ${
+                                      isSelected
+                                        ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                                        : 'bg-white text-slate-800 border-slate-200 hover:border-blue-300 hover:bg-blue-50/30'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      {sig.signatureData && (
+                                        <img
+                                          src={sig.signatureData}
+                                          alt="Saved signature"
+                                          className="h-8 w-14 object-contain bg-white rounded-md border border-slate-200 px-1 shrink-0"
+                                        />
+                                      )}
+                                      <div className="min-w-0 truncate">
+                                        <div className={`font-bold truncate ${isSelected ? 'text-white' : 'text-slate-900'}`}>
+                                          {sig.repName}
+                                        </div>
+                                        <div className={`text-[10px] truncate ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
+                                          {sig.designation || 'DBO Representative'}
+                                          {sig.updatedAt ? ` • ${new Date(sig.updatedAt).toLocaleDateString()}` : ''}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      {isSelected ? (
+                                        <button
+                                          type="button"
+                                          onClick={handleClearRememberedSelection}
+                                          className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                                          title="Clear selected signature to sign afresh"
+                                        >
+                                          Clear
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleApplyRememberedDboSignature(sig)}
+                                          className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer shadow-2xs"
+                                        >
+                                          Use Signature
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          if (confirm(`Remove saved signature for ${sig.repName}?`)) {
+                                            await DBService.deleteDboSignature(sig.id);
+                                            setRememberedDboSigs(prev => prev.filter(s => s.id !== sig.id));
+                                            if (selectedRememberedSigId === sig.id) setSelectedRememberedSigId(null);
+                                          }
+                                        }}
+                                        className={`p-1 rounded transition-colors cursor-pointer ${
+                                          isSelected ? 'text-blue-200 hover:text-white' : 'text-slate-400 hover:text-red-500'
+                                        }`}
+                                        title="Delete remembered signature"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="space-y-2">
                           <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">For DBO; Name (Representative)</label>
                           <input
@@ -8905,21 +9207,23 @@ export function DataValidationModule() {
                                       style: { background: 'white' }
                                     }}
                                   />
-                                  <div className="flex justify-between mt-2">
+                                  <div className="flex justify-between items-center mt-2 flex-wrap gap-2">
                                     <button
                                       type="button"
                                       onClick={() => dboSigPad.current?.clear()}
-                                      className="text-[10px] font-bold text-gray-500 hover:text-red-500 flex items-center gap-1"
+                                      className="text-[10px] font-bold text-gray-500 hover:text-red-500 flex items-center gap-1 cursor-pointer"
                                     >
                                       <Trash2 className="w-3 h-3" /> Clear Pad
                                     </button>
-                                    <button
-                                      type="button"
-                                      onClick={saveDboSignature}
-                                      className="text-[10px] font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                                    >
-                                      <PenTool className="w-3 h-3" /> Save Signature
-                                    </button>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={saveDboSignature}
+                                        className="text-[10px] font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <PenTool className="w-3 h-3" /> Save Signature
+                                      </button>
+                                    </div>
                                   </div>
                                 </div>
                                 <div className="text-center">
@@ -8933,15 +9237,36 @@ export function DataValidationModule() {
                                 />
                               </div>
                             ) : (
-                              <div className="relative group">
-                                <img src={formData.dboSignature} alt="DBO Signature" className="h-20 object-contain border rounded-lg bg-white" />
-                                <button
-                                  type="button"
-                                  onClick={() => clearField('dboSignature')}
-                                  className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors cursor-pointer"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
+                              <div className="space-y-2">
+                                <div className="relative group inline-block">
+                                  <img src={formData.dboSignature} alt="DBO Signature" className="h-20 object-contain border rounded-lg bg-white p-1" />
+                                  <button
+                                    type="button"
+                                    onClick={() => clearField('dboSignature')}
+                                    className="absolute -top-2 -right-2 p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-lg transition-colors cursor-pointer"
+                                    title="Remove signature"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <button
+                                    type="button"
+                                    onClick={handleExplicitSaveDboSignature}
+                                    disabled={isSavingRememberedSig}
+                                    className="text-[11px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2.5 py-1 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                                    title="Remember this signature for future validations of this premise"
+                                  >
+                                    {isSavingRememberedSig ? <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> : <BookmarkCheck className="w-3.5 h-3.5 text-blue-600" />}
+                                    <span>Remember for this Premise</span>
+                                  </button>
+                                  {selectedRememberedSigId && (
+                                    <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md font-semibold flex items-center gap-1">
+                                      <Check className="w-3 h-3 text-emerald-600" /> Loaded from Saved Premise Profile
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             )}
                           </div>
