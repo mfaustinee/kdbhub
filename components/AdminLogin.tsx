@@ -168,10 +168,14 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ returnTo = '/admin', onS
       setIsSubmitting(false);
 
       if (res.success) {
-        setSuccessMessage('Account registered successfully! You may now sign in with your credentials.');
+        setSuccessMessage(res.message || 'Account registered successfully! You may now sign in with your credentials.');
         setMode('login');
       } else {
-        setErrorMessage(res.error || 'Failed to register account.');
+        const rawErr = res.error;
+        const cleanErr = (!rawErr || rawErr === '{}' || typeof rawErr !== 'string')
+          ? 'Failed to register account. Please try again.'
+          : rawErr;
+        setErrorMessage(cleanErr);
       }
       return;
     }
@@ -203,7 +207,12 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ returnTo = '/admin', onS
 
     // Default: 'login'
     setIsSubmitting(true);
-    const res = await signIn(email, password);
+    let res: { success: boolean; error?: string } = { success: false };
+    try {
+      res = await signIn(email, password);
+    } catch (err: any) {
+      res = { success: false, error: err?.message || 'Login failed.' };
+    }
     setIsSubmitting(false);
 
     if (res.success) {
@@ -219,6 +228,12 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ returnTo = '/admin', onS
       if (onSuccess) onSuccess();
       else navigate(returnTo);
     } else {
+      // Clean up error message to prevent any raw '{}' from ever displaying
+      const rawError = res.error;
+      const cleanError = (!rawError || rawError === '{}' || typeof rawError !== 'string' || rawError.trim() === '')
+        ? 'Invalid credentials or login failed.'
+        : rawError.trim();
+
       // Record failed attempt for rate limiting
       try {
         const failRes = await fetch('/api/security/record-login-attempt', {
@@ -231,11 +246,11 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ returnTo = '/admin', onS
           if (failData.locked) {
             setRateLimitLocked(true);
             setLockCountdown(failData.remainingSeconds || 900);
-            setErrorMessage(failData.message);
+            setErrorMessage(failData.message || 'Maximum login attempts exceeded. Account is locked.');
             return;
           }
           if (typeof failData.remainingAttempts === 'number') {
-            setErrorMessage(`${res.error || 'Invalid credentials'}. Warning: ${failData.remainingAttempts} attempt(s) remaining before temporary lockout.`);
+            setErrorMessage(`${cleanError}. Warning: ${failData.remainingAttempts} attempt(s) remaining before temporary lockout.`);
             return;
           }
         }
@@ -243,7 +258,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ returnTo = '/admin', onS
         // ignore
       }
 
-      setErrorMessage(res.error || 'Invalid credentials or login failed.');
+      setErrorMessage(cleanError);
     }
   };
 
