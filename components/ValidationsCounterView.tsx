@@ -139,12 +139,20 @@ export const ValidationsCounterView: React.FC<ValidationsCounterViewProps> = ({
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
 
-  // Sync with incoming props or fetch directly
+  // Fetch previous submissions from Supabase on mount and when initialValidations change
+  useEffect(() => {
+    fetchValidations(true);
+  }, []);
+
   useEffect(() => {
     if (initialValidations && initialValidations.length > 0) {
-      setValidationsList(initialValidations);
-    } else {
-      fetchValidations();
+      setValidationsList(prev => {
+        // Merge initialValidations with existing without duplicating
+        const map = new Map<string, DataValidation>();
+        prev.forEach(v => map.set(v.id || `${v.permitNo}-${v.period}`, v));
+        initialValidations.forEach(v => map.set(v.id || `${v.permitNo}-${v.period}`, v));
+        return Array.from(map.values());
+      });
     }
   }, [initialValidations]);
 
@@ -173,10 +181,45 @@ export const ValidationsCounterView: React.FC<ValidationsCounterViewProps> = ({
   }, [selectedBranch]);
 
   // Listen for real-time validation updates from DataValidationModule submission
+  // Records validations immediately a submission is submitted; never records amendments as new submissions
   useEffect(() => {
-    const handleUpdate = () => {
+    const handleUpdate = (e: any) => {
+      if (e?.detail) {
+        const newRecord: DataValidation = e.detail;
+        setValidationsList(prev => {
+          const pNorm = (newRecord.premiseName || (newRecord as any).premise_name || '').toLowerCase().trim();
+          const periodNorm = (newRecord.period || (newRecord as any).validation_period || '').toLowerCase().trim();
+          const yr = Number(newRecord.year) || (newRecord.validatedAt ? new Date(newRecord.validatedAt).getFullYear() : 0);
+
+          // Check if this record already exists (by ID or premise + period + year)
+          const idx = prev.findIndex(item => {
+            if (item.id && newRecord.id && item.id === newRecord.id) return true;
+            const itemP = (item.premiseName || (item as any).premise_name || '').toLowerCase().trim();
+            const itemPeriod = (item.period || (item as any).validation_period || '').toLowerCase().trim();
+            const itemYr = Number(item.year) || (item.validatedAt ? new Date(item.validatedAt).getFullYear() : 0);
+            return itemP === pNorm && itemPeriod === periodNorm && (!yr || !itemYr || yr === itemYr);
+          });
+
+          if (idx >= 0) {
+            // Amendment / overwrite: update in place, NEVER record as a new submission
+            const updated = [...prev];
+            updated[idx] = {
+              ...updated[idx],
+              ...newRecord,
+              pdfPath: newRecord.pdfPath || updated[idx].pdfPath
+            };
+            return updated;
+          } else {
+            // Brand-new submission: record immediately
+            return [newRecord, ...prev];
+          }
+        });
+      }
+
+      // Re-fetch from Supabase in background to maintain full accuracy with remote database
       fetchValidations(true);
     };
+
     window.addEventListener('kdb_validations_updated', handleUpdate);
     const handleStorage = (e: StorageEvent) => {
       if (e.key === 'kdb_validations_last_updated' || e.key === 'kdb_validations_cache') {
@@ -393,10 +436,53 @@ export const ValidationsCounterView: React.FC<ValidationsCounterViewProps> = ({
       return true;
     });
 
-    // 2. Build flat list of individual month records
-    const allRecords: MonthRecordDetail[] = [];
+    // 2. Deduplicate validations: NEVER record amendments as new submissions
+    // A single premise for a specific validation period is only counted as 1 submission.
+    // If an amendment was submitted, it updates/supersedes the original record and is never counted as an extra submission.
+    const deduplicatedValidations: DataValidation[] = [];
+    const seenPremisePeriod = new Map<string, number>();
 
     filteredValidations.forEach(v => {
+      const pNorm = (v.premiseName || (v as any).premise_name || '').toLowerCase().trim();
+      const periodNorm = (v.period || (v as any).validation_period || '').toLowerCase().trim();
+      const yr = Number(v.year) || (v.validatedAt ? new Date(v.validatedAt).getFullYear() : 0);
+      const isAmend = Boolean(
+        (v as any).isAmendment ||
+        v.rawData?.isAmendment ||
+        v.remarks?.toLowerCase().includes('amended') ||
+        v.pdfPath?.toLowerCase().includes('_amended')
+      );
+
+      const key = `${pNorm}:::${periodNorm}:::${yr || ''}`;
+      
+      if (seenPremisePeriod.has(key)) {
+        const existingIdx = seenPremisePeriod.get(key)!;
+        const existing = deduplicatedValidations[existingIdx];
+        const existingIsAmend = Boolean(
+          (existing as any).isAmendment ||
+          existing.rawData?.isAmendment ||
+          existing.remarks?.toLowerCase().includes('amended') ||
+          existing.pdfPath?.toLowerCase().includes('_amended')
+        );
+
+        // If incoming is an amendment, or newer than existing, overwrite existing without increasing count
+        if (isAmend || !existingIsAmend || (v.validatedAt && (!existing.validatedAt || v.validatedAt >= existing.validatedAt))) {
+          deduplicatedValidations[existingIdx] = {
+            ...existing,
+            ...v,
+            pdfPath: v.pdfPath || existing.pdfPath
+          };
+        }
+      } else {
+        seenPremisePeriod.set(key, deduplicatedValidations.length);
+        deduplicatedValidations.push(v);
+      }
+    });
+
+    // 3. Build flat list of individual month records
+    const allRecords: MonthRecordDetail[] = [];
+
+    deduplicatedValidations.forEach(v => {
       const monthsValidated = extractValidatedMonths(v);
       const isBranch = Boolean(
         (v as any).isBranchFacility ||
@@ -406,8 +492,13 @@ export const ValidationsCounterView: React.FC<ValidationsCounterViewProps> = ({
         v.rawData?.validationPremiseMode === 'branch'
       );
 
-      // Find client profile for robust category identification
-      const matchingClient = clientsList.find(c => c.id === v.clientId || c.permitNumber === v.permitNo || c.clientName === v.clientName);
+      // Find client profile for robust category identification (case-insensitive for caps/small-caps equivalence)
+      const vDboClean = (v.clientName || (v as any).dbo_name || (v as any).dboName || '').toLowerCase().trim();
+      const matchingClient = clientsList.find(c => 
+        c.id === v.clientId || 
+        (c.permitNumber && v.permitNo && c.permitNumber.toLowerCase().trim() === v.permitNo.toLowerCase().trim()) || 
+        (c.clientName && vDboClean && c.clientName.toLowerCase().trim() === vDboClean)
+      );
       const rawCat = v.category || (v as any).premisecategory || matchingClient?.premiseCategory || 'Milk Bar';
       
       // Match against ALL_PREMISE_CATEGORIES standard

@@ -163,9 +163,9 @@ export const formatCustomerNumber = (idOrNum?: string, clientName?: string, prem
     if (/^CUST-\d+/i.test(trimmed)) return trimmed.toUpperCase();
     if (/^\d{4,8}$/.test(trimmed)) return `CUST-${trimmed}`;
   }
-  // Generate deterministic 5-digit number from name + premise or random fallback
+  // Generate deterministic 5-digit number from name + premise or random fallback (case-insensitive for caps/small-caps equivalence)
   let hash = 0;
-  const str = `${clientName || ''}::${premiseName || ''}::${idOrNum || ''}`;
+  const str = `${(clientName || '').toLowerCase().trim().replace(/\s+/g, ' ')}::${(premiseName || '').toLowerCase().trim().replace(/\s+/g, ' ')}::${(idOrNum || '').toLowerCase().trim()}`;
   for (let i = 0; i < str.length; i++) {
     hash = (hash << 5) - hash + str.charCodeAt(i);
     hash |= 0;

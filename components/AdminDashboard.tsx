@@ -13,7 +13,7 @@ import { numberToWords } from '../utils/numberToWords';
 import { LicensedClientsModule } from './LicensedClientsModule';
 import { ClientReturnsModule } from './ClientReturnsModule';
 import { ClientsAndReturnsHub } from './ClientsAndReturnsHub';
-import { ReportsModule } from './ReportsModule';
+import { ValidationsCounterView } from './ValidationsCounterView';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
 import { SecuritySettingsCard } from './SecuritySettingsCard';
@@ -66,7 +66,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       case 'clients_returns':
       case 'clients':
       case 'returns': return 'Clients & Returns Hub';
-      case 'reports': return 'Compliance Reports';
+      case 'reports': return 'Validations Counter';
       case 'settings': return 'System Settings';
       default: return 'Admin Workspace';
     }
@@ -1035,8 +1035,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'reports' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
             >
               <div className="flex items-center">
-                <TrendingUp className="w-4 h-4 mr-3 shrink-0" />
-                Compliance Reports
+                <ShieldCheck className="w-4 h-4 mr-3 shrink-0 text-purple-400" />
+                Validations Counter
               </div>
               {tab === 'reports' && <Check className="w-4 h-4 text-emerald-400" />}
             </button>
@@ -1175,11 +1175,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button 
               onClick={() => changeTab('reports')} 
-              title="Compliance Reports"
+              title="Validations Counter"
               className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'reports' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <TrendingUp className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
-              {!isSidebarCollapsed && <span>Reports</span>}
+              <ShieldCheck className={`w-3.5 h-3.5 shrink-0 text-purple-400 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
+              {!isSidebarCollapsed && <span>Validations Counter</span>}
             </button>
 
             <button 
@@ -1773,7 +1773,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {tab === 'reports' && (
         <div className="animate-in fade-in duration-500">
-          <ReportsModule />
+          <ValidationsCounterView />
         </div>
       )}
 

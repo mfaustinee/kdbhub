@@ -11,7 +11,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrearsRow, PricingMode } from './types';
+import { ArrearsRow, PricingMode, ArrearsAppliedRow } from './types';
 import { DEFAULT_PRICE, computeArrearsRows, computeArrearsTotals, getArrearsMForSale, formatPaymentMonthYear } from './utils';
 
 export interface LocalSaleItem {
@@ -27,7 +27,8 @@ export interface CalculatorAppProps {
   initialOfficerName?: string;
   localSales?: LocalSaleItem[];
   validationDate?: string;
-  onApplyToSchedule?: (rows: { month: string; litres: string; amount: string; paymentMonthYear: string }[]) => void;
+  globalUnit?: 'L' | 'Kg' | 'KG';
+  onApplyToSchedule?: (rows: ArrearsAppliedRow[]) => void;
   className?: string;
   defaultExpanded?: boolean;
 }
@@ -37,6 +38,7 @@ export const CalculatorApp: React.FC<CalculatorAppProps> = ({
   initialOfficerName = '',
   localSales = [],
   validationDate,
+  globalUnit = 'L',
   onApplyToSchedule,
   className = '',
   defaultExpanded = false
@@ -50,16 +52,21 @@ export const CalculatorApp: React.FC<CalculatorAppProps> = ({
     return `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}`;
   });
 
-  // Calculate highest m position required by localSales
+  // Calculate highest m position required by under-declared sales ONLY
   const maxCalculatedM = useMemo(() => {
-    if (!localSales || localSales.length === 0) return 3;
+    const underSales = (localSales || []).filter(s => {
+      if (!s.month || s.month.trim() === '') return false;
+      const underNum = parseFloat(String(s.underDeclared || '0').replace(/,/g, ''));
+      return !isNaN(underNum) && underNum > 0;
+    });
+
+    if (underSales.length === 0) return 3;
     let maxM = 0;
-    localSales.forEach(sale => {
-      if (!sale.month || sale.month.trim() === '') return;
+    underSales.forEach(sale => {
       const { m } = getArrearsMForSale(sale.month, sale.year, baseMonth, validationDate);
       if (m > maxM) maxM = m;
     });
-    return Math.max(maxM, localSales.length, 3);
+    return Math.max(maxM, 1);
   }, [localSales, baseMonth, validationDate]);
 
   // Arrears count (m) determined by sales months position or user override
@@ -76,7 +83,7 @@ export const CalculatorApp: React.FC<CalculatorAppProps> = ({
   const [litresMap, setLitresMap] = useState<Record<number, number>>({});
   const [appliedNotification, setAppliedNotification] = useState(false);
 
-  // Compute rows mirroring CSL period and litres declared from local sales
+  // Compute rows mirroring CSL period and under-declared volume from local sales
   const rows = useMemo(() => {
     return computeArrearsRows(
       baseMonth, 
@@ -116,12 +123,15 @@ export const CalculatorApp: React.FC<CalculatorAppProps> = ({
     // Autofill Month/Year to Pay with current Month- Year (e.g. Sept- 2026)
     const defaultPaymentMonthYear = formatPaymentMonthYear();
 
-    const activeRows = rows
+    const activeRows: ArrearsAppliedRow[] = rows
       .filter(r => r.litres > 0 || r.total > 0)
       .map(r => ({
         month: r.month,
         litres: r.litres.toLocaleString(),
-        amount: r.total.toFixed(2),
+        levy: r.levy.toFixed(2),
+        penalty: r.penalty.toFixed(2),
+        cf: r.cf.toFixed(2),
+        amount: r.levy.toFixed(2),
         paymentMonthYear: defaultPaymentMonthYear
       }));
 
@@ -271,7 +281,7 @@ export const CalculatorApp: React.FC<CalculatorAppProps> = ({
                   <tr className="bg-slate-100/80 border-b border-slate-200">
                     <th className="p-3 text-[10px] font-bold text-slate-600 uppercase tracking-wider">CSL Period</th>
                     <th className="p-3 text-[10px] font-bold text-slate-600 uppercase tracking-wider">Arrears (m)</th>
-                    <th className="p-3 text-[10px] font-bold text-slate-600 uppercase tracking-wider">Litres Declared</th>
+                    <th className="p-3 text-[10px] font-bold text-slate-600 uppercase tracking-wider">Under-Declared {globalUnit === 'KG' ? 'Kgs' : 'Litres'}</th>
                     {pricingMode === 'individual' && (
                       <th className="p-3 text-[10px] font-bold text-slate-600 uppercase tracking-wider">Rate (Ksh)</th>
                     )}

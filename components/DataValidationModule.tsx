@@ -135,9 +135,11 @@ interface SalesEntry {
 interface NonComplianceEntry {
   month: string;
   litres: string;
-  amount: string;
+  amount: string; // Recalculated Levy (Kshs)
+  penalty?: string; // Penalty (Kshs)
+  cfFee?: string; // CF Fee (Kshs)
   paymentMonthYear: string;
-  mpesaRef: string;
+  mpesaRef?: string;
   classification?: 'under-declaration' | 'non-declaration';
 }
 
@@ -292,7 +294,7 @@ export const parsePaymentMonthYearToDDMMYYYY = (paymentMonthYearStr?: string): s
 
 export const syncArrearsExceptions = (
   currentExceptions: ExceptionRegisterItem[] = [],
-  nonComplianceList: Array<{ month: string; litres: string; amount: string; paymentMonthYear: string; mpesaRef?: string; classification?: 'under-declaration' | 'non-declaration' }>,
+  nonComplianceList: Array<{ month: string; litres: string; amount: string; penalty?: string; cfFee?: string; paymentMonthYear: string; mpesaRef?: string; classification?: 'under-declaration' | 'non-declaration' }>,
   dboName: string = '',
   unit: string = 'L'
 ): ExceptionRegisterItem[] => {
@@ -1309,9 +1311,11 @@ export function DataValidationModule() {
           return {
             month: displayMonth,
             litres: sale.underDeclared,
-            amount: existing?.amount || '', // Manual entry now
+            amount: existing?.amount || '', // Recalculated levy
+            penalty: existing?.penalty || '', // Penalty
+            cfFee: existing?.cfFee || '', // CF Fee
             paymentMonthYear: existing?.paymentMonthYear || defaultPaymentMonthYear,
-            mpesaRef: existing?.mpesaRef || ''
+            classification: existing?.classification || 'under-declaration'
           };
         })
       : [];
@@ -1334,7 +1338,11 @@ export function DataValidationModule() {
     }
   }, [formData.sales, formData.intakes, formData.category, isBranchFacility, formData.hasLocalSales, formData.dboName, selectedClient, globalUnit]);
 
-  const totalPenalty = formData.nonCompliance.reduce((sum, nc) => sum + (parseFloat(nc.amount) || 0), 0);
+  const totalLevy = formData.nonCompliance.reduce((sum, nc) => sum + (parseFloat(String(nc.amount || '0').replace(/,/g, '')) || 0), 0);
+  const totalPenaltyOnly = formData.nonCompliance.reduce((sum, nc) => sum + (parseFloat(String(nc.penalty || '0').replace(/,/g, '')) || 0), 0);
+  const totalCfFee = formData.nonCompliance.reduce((sum, nc) => sum + (parseFloat(String(nc.cfFee || '0').replace(/,/g, '')) || 0), 0);
+  const totalArrears = totalLevy + totalPenaltyOnly + totalCfFee;
+  const totalPenalty = totalArrears; // backward-compatibility alias for overall arrears
   const validTillDate = useMemo(() => {
     const now = new Date();
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -2994,6 +3002,15 @@ export function DataValidationModule() {
         return cV === cC || cV.includes(cC) || cC.includes(cV);
       }
 
+      if (key === 'dboName') {
+        const nV = (v || '').toLowerCase().trim().replace(/\s+/g, ' ');
+        const nC = (c || '').toLowerCase().trim().replace(/\s+/g, ' ');
+        if (nV === nC) return true;
+        const aV = nV.replace(/[^a-z0-9]/g, '');
+        const aC = nC.replace(/[^a-z0-9]/g, '');
+        return Boolean(aV && aC && aV === aC);
+      }
+
       const cV = cleanStr(v);
       const cC = cleanStr(c);
       return cV === cC || cV.includes(cC) || cC.includes(cV);
@@ -3912,16 +3929,39 @@ export function DataValidationModule() {
           return lastDay.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
         })();
 
+        const totalUnderDeclaredLitres = data.nonCompliance.reduce((acc, nc) => acc + (parseFloat(String(nc.litres || '0').replace(/,/g, '')) || 0), 0);
+        const totalLevyVal = data.nonCompliance.reduce((sum, nc) => sum + (parseFloat(String(nc.amount || '0').replace(/,/g, '')) || 0), 0);
+        const totalPenaltyVal = data.nonCompliance.reduce((sum, nc) => sum + (parseFloat(String(nc.penalty || '0').replace(/,/g, '')) || 0), 0);
+        const totalCfFeeVal = data.nonCompliance.reduce((sum, nc) => sum + (parseFloat(String(nc.cfFee || '0').replace(/,/g, '')) || 0), 0);
+        const totalArrearsVal = totalLevyVal + totalPenaltyVal + totalCfFeeVal;
+
         autoTable(doc, {
           startY: currentY + 5,
-          head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Amount (Kshs)', 'Month/Year to Pay', 'MPESA REF']],
+          head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Recalculated Levy (Kshs)', 'Penalty (Kshs)', 'CF Fee (Kshs)', 'Total Arrears (Kshs)', 'Due Date']],
           body: [
-            ...data.nonCompliance.map(nc => [nc.month, nc.litres, nc.amount, nc.paymentMonthYear, nc.mpesaRef]),
+            ...data.nonCompliance.map(nc => {
+              const lVal = parseFloat(String(nc.amount || '0').replace(/,/g, '')) || 0;
+              const pVal = parseFloat(String(nc.penalty || '0').replace(/,/g, '')) || 0;
+              const cVal = parseFloat(String(nc.cfFee || '0').replace(/,/g, '')) || 0;
+              const tot = lVal + pVal + cVal;
+              return [
+                nc.month,
+                nc.litres,
+                lVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                pVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                cVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                tot.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                nc.paymentMonthYear
+              ];
+            }),
             [
               { content: 'TOTAL', styles: { fontStyle: 'bold' } }, 
-              '', 
-              { content: totalPenalty.toFixed(2), styles: { fontStyle: 'bold' } }, 
-              { content: `Arrears estimate valid through ${validTillDateStr}; figures subject to recalculation thereafter`, colSpan: 2, styles: { fontStyle: 'bold', fontSize: 7, halign: 'right' } }
+              totalUnderDeclaredLitres.toLocaleString() + ` ${globalUnit}`, 
+              { content: totalLevyVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
+              { content: totalPenaltyVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
+              { content: totalCfFeeVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
+              { content: totalArrearsVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
+              { content: `Valid through ${validTillDateStr}`, styles: { fontStyle: 'bold', fontSize: 7, halign: 'right' } }
             ]
           ],
           styles: { fontSize: 8 },
@@ -4101,41 +4141,67 @@ export function DataValidationModule() {
         return;
       }
 
-      const targetPath = path.replace(/^(validationPdfs\/|validation-pdfs\/|ValidationPdfs\/)/i, '').trim();
+      // Clean path: strip leading slashes and any bucket name prefix
+      const cleanPath = path
+        .replace(/^[/]+/, '')
+        .replace(/^(ValidationPdfs|validationPdfs|validation-pdfs)[/]+/i, '')
+        .replace(/^[/]+/, '')
+        .trim();
 
-      // 2. Try Supabase Storage Signed URL across bucket variations
+      // 2. Try Supabase Storage Bucket "ValidationPdfs" (correct case)
       if (supabase) {
-        for (const bucket of ['validationPdfs', 'ValidationPdfs', 'validation-pdfs']) {
+        for (const bucket of ['ValidationPdfs', 'validationPdfs', 'validation-pdfs']) {
           try {
-            const { data, error } = await supabase.storage
+            // First attempt: direct download blob (most reliable across iframes and sandboxes)
+            const { data: blobData, error: downloadError } = await supabase.storage
               .from(bucket)
-              .createSignedUrl(targetPath, 120);
+              .download(cleanPath);
 
-            if (!error && data?.signedUrl) {
-              setPdfModalUrl(data.signedUrl);
+            if (!downloadError && blobData) {
+              const blobUrl = URL.createObjectURL(blobData);
+              setPdfModalUrl(blobUrl);
               return;
             }
+
+            // Second attempt: signed URL
+            const { data: signedData, error: signedError } = await supabase.storage
+              .from(bucket)
+              .createSignedUrl(cleanPath, 3600);
+
+            if (!signedError && signedData?.signedUrl) {
+              setPdfModalUrl(signedData.signedUrl);
+              return;
+            }
+
+            // Third attempt: public URL
+            const { data: publicData } = supabase.storage
+              .from(bucket)
+              .getPublicUrl(cleanPath);
+
+            if (publicData?.publicUrl) {
+              try {
+                const headRes = await fetch(publicData.publicUrl, { method: 'HEAD' });
+                if (headRes.ok) {
+                  setPdfModalUrl(publicData.publicUrl);
+                  return;
+                }
+              } catch {}
+            }
           } catch (e) {
-            console.warn(`Bucket ${bucket} check error:`, e);
+            // Ignore bucket check error and try next
           }
         }
       }
 
-      // 3. Try resolvePdfUrl helper
-      const resolvedUrl = await resolvePdfUrl(path);
-      if (resolvedUrl) {
-        setPdfModalUrl(resolvedUrl);
-        return;
-      }
-
-      // 4. Fallback: search lastCollections and local DBService validations for inline PDF base64 string or matching record
+      // 3. Fallback: search lastCollections for inline PDF base64 string or matching record
       const colMatch = lastCollections.find(c => 
         c.pdfPath === path || 
         c.rawData?.pdf_path === path || 
         c.rawData?.pdfPath === path ||
-        c.rawData?.fileName === path
+        c.rawData?.fileName === path ||
+        (cleanPath && (c.pdfPath?.includes(cleanPath) || c.rawData?.pdf_path?.includes(cleanPath)))
       );
-      const colInline = colMatch?.rawData?.pdf || colMatch?.rawData?.pdfData;
+      const colInline = colMatch?.rawData?.pdf || colMatch?.rawData?.pdfData || colMatch?.rawData?.pdf_data;
       if (colInline) {
         if (colInline.startsWith('data:')) {
           try {
@@ -4151,6 +4217,7 @@ export function DataValidationModule() {
         return;
       }
 
+      // 4. Fallback: search DBService local and Supabase validations for inline PDF base64
       const allVals = await DBService.getValidations();
       const safeAllVals = Array.isArray(allVals) ? allVals : [];
       const match = safeAllVals.find(v => 
@@ -4159,10 +4226,11 @@ export function DataValidationModule() {
         (v.rawData as any)?.pdf_path === path || 
         (v.rawData as any)?.pdfPath === path ||
         (v.rawData as any)?.pdf === path ||
-        (v.rawData as any)?.fileName === path
+        (v.rawData as any)?.fileName === path ||
+        (cleanPath && (v.pdfPath?.includes(cleanPath) || (v.rawData as any)?.pdf_path?.includes(cleanPath)))
       );
 
-      const inline = match?.pdfPath || (match?.rawData as any)?.pdf || (match?.rawData as any)?.pdfData;
+      const inline = match?.pdfPath || (match?.rawData as any)?.pdf || (match?.rawData as any)?.pdfData || (match?.rawData as any)?.pdf_data;
       if (inline) {
         if (inline.startsWith('data:')) {
           try {
@@ -4178,10 +4246,17 @@ export function DataValidationModule() {
         return;
       }
 
-      setStatus({ type: 'error', message: `Could not load PDF document for "${path}".` });
-    } catch (err) {
+      // 5. Try resolvePdfUrl helper as final check
+      const resolvedUrl = await resolvePdfUrl(cleanPath || path);
+      if (resolvedUrl) {
+        setPdfModalUrl(resolvedUrl);
+        return;
+      }
+
+      setStatus({ type: 'error', message: `Could not load PDF document for "${cleanPath || path}". No file found in "ValidationPdfs" storage bucket or validation records.` });
+    } catch (err: any) {
       console.error('Error resolving PDF:', err);
-      setStatus({ type: 'error', message: 'Failed to load PDF preview.' });
+      setStatus({ type: 'error', message: `Failed to load PDF preview: ${err?.message || 'File not available'}` });
     } finally {
       setIsLoadingPdf(false);
     }
@@ -5126,6 +5201,8 @@ export function DataValidationModule() {
             month: v.month,
             litres: v.volume,
             amount: v.amount || '',
+            penalty: '0.00',
+            cfFee: '0.00',
             paymentMonthYear: '',
             mpesaRef: ''
           });
@@ -8257,9 +8334,10 @@ export function DataValidationModule() {
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Classification</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CSL Period</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">{globalUnit === 'L' ? 'Litres' : 'Kilograms'}</th>
-                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Recalculated Amount (Kshs)</th>
-                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Agreed Due Date</th>
-                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Paid/MPESA REF No:</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Recalculated Levy (Kshs)</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Penalty (Kshs)</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">CF Fee (Kshs)</th>
+                                <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider">Due Date</th>
                                 <th className="p-3 text-[10px] font-bold text-blue-600 uppercase tracking-wider text-center w-12">Action</th>
                               </tr>
                             </thead>
@@ -8304,7 +8382,36 @@ export function DataValidationModule() {
                                         newNC[idx].amount = e.target.value;
                                         setFormData(prev => ({ ...prev, nonCompliance: newNC }));
                                       }}
-                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono bg-white"
+                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono bg-white text-blue-900 font-bold"
+                                      title="Recalculated CSL levy"
+                                    />
+                                  </td>
+                                  <td className="p-1">
+                                    <input
+                                      type="text"
+                                      placeholder="0.00"
+                                      value={nc.penalty || ''}
+                                      onChange={(e) => {
+                                        const newNC = [...formData.nonCompliance];
+                                        newNC[idx].penalty = e.target.value;
+                                        setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                      }}
+                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono bg-white text-red-600 font-bold"
+                                      title="Assessed compounding penalty"
+                                    />
+                                  </td>
+                                  <td className="p-1">
+                                    <input
+                                      type="text"
+                                      placeholder="0.00"
+                                      value={nc.cfFee || ''}
+                                      onChange={(e) => {
+                                        const newNC = [...formData.nonCompliance];
+                                        newNC[idx].cfFee = e.target.value;
+                                        setFormData(prev => ({ ...prev, nonCompliance: newNC }));
+                                      }}
+                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs font-mono bg-white text-emerald-700 font-bold"
+                                      title="Banded CF compliance fee"
                                     />
                                   </td>
                                   <td className="p-1">
@@ -8316,7 +8423,7 @@ export function DataValidationModule() {
                                         const newNC = [...formData.nonCompliance];
                                         newNC[idx].paymentMonthYear = val;
                                         
-                                        // Move agreed due date value to the corresponding Arrears exception row due date
+                                        // Move due date value to the corresponding Arrears exception row due date
                                         const updatedExceptions = syncArrearsExceptions(
                                           formData.exceptionRegister || [],
                                           newNC,
@@ -8331,18 +8438,7 @@ export function DataValidationModule() {
                                         }));
                                       }}
                                       className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white font-mono"
-                                    />
-                                  </td>
-                                  <td className="p-1">
-                                    <input
-                                      placeholder="REF NO"
-                                      value={nc.mpesaRef}
-                                      onChange={(e) => {
-                                        const newNC = [...formData.nonCompliance];
-                                        newNC[idx].mpesaRef = e.target.value;
-                                        setFormData(prev => ({ ...prev, nonCompliance: newNC }));
-                                      }}
-                                      className="w-full px-3 py-1.5 rounded-lg border border-blue-100 outline-none text-xs bg-white"
+                                      title="Due Date"
                                     />
                                   </td>
                                   <td className="p-1 text-center">
@@ -8372,23 +8468,32 @@ export function DataValidationModule() {
                               ))}
                               {formData.nonCompliance.length > 0 && (
                                 <tr className="bg-blue-50/70 border-t border-blue-200">
-                                  <td className="p-3 text-xs font-bold text-blue-900">TOTAL</td>
+                                  <td className="p-3 text-xs font-bold text-blue-900" colSpan={2}>TOTAL</td>
                                   <td className="p-3 text-xs font-bold text-blue-800">
-                                    {formData.nonCompliance.reduce((acc, nc) => acc + (parseFloat(nc.litres.replace(/,/g, '')) || 0), 0).toLocaleString()} {globalUnit}
+                                    {formData.nonCompliance.reduce((acc, nc) => acc + (parseFloat(String(nc.litres || '0').replace(/,/g, '')) || 0), 0).toLocaleString()} {globalUnit}
                                   </td>
                                   <td className="p-3 text-xs font-bold text-blue-900 font-mono">
-                                    {totalPenalty.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    {totalLevy.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </td>
-                                  <td colSpan={3} className="p-3 text-xs font-semibold text-blue-800 text-right">
-                                    <span className="bg-blue-100/80 text-blue-900 px-2.5 py-1 rounded-md border border-blue-200 inline-block">
-                                      Arrears estimate valid through {validTillDate}; figures subject to recalculation thereafter
+                                  <td className="p-3 text-xs font-bold text-red-600 font-mono">
+                                    {totalPenaltyOnly.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="p-3 text-xs font-bold text-emerald-700 font-mono">
+                                    {totalCfFee.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td colSpan={2} className="p-3 text-xs font-semibold text-blue-900 text-right">
+                                    <span className="font-bold text-blue-950 font-mono text-xs mr-2">
+                                      Total Arrears: Kshs {totalArrears.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                    <span className="bg-blue-100/80 text-blue-900 px-2 py-0.5 rounded text-[10px] border border-blue-200 inline-block">
+                                      Valid through {validTillDate}
                                     </span>
                                   </td>
                                 </tr>
                               )}
                               {formData.nonCompliance.length === 0 && (
                                 <tr>
-                                  <td colSpan={6} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
+                                  <td colSpan={8} className="p-4 text-center text-xs text-blue-400 italic">No under-declaration detected.</td>
                                 </tr>
                               )}
                             </tbody>
@@ -8402,6 +8507,7 @@ export function DataValidationModule() {
                             initialOfficerName={formData.complianceOfficer || ''}
                             localSales={formData.sales}
                             validationDate={formData.date}
+                            globalUnit={globalUnit}
                             defaultExpanded={false}
                             onApplyToSchedule={(appliedRows) => {
                               setFormData(prev => {
@@ -8424,21 +8530,25 @@ export function DataValidationModule() {
                                     existing[idx] = {
                                       ...existing[idx],
                                       litres: row.litres,
-                                      amount: row.amount,
+                                      amount: row.levy || row.amount || '',
+                                      penalty: row.penalty || '0.00',
+                                      cfFee: row.cf || existing[idx].cfFee || '0.00',
                                       paymentMonthYear: row.paymentMonthYear || existing[idx].paymentMonthYear
                                     };
                                   } else {
                                     existing.push({
                                       month: targetDisplayMonth,
                                       litres: row.litres,
-                                      amount: row.amount,
+                                      amount: row.levy || row.amount || '',
+                                      penalty: row.penalty || '0.00',
+                                      cfFee: row.cf || '0.00',
                                       paymentMonthYear: row.paymentMonthYear,
-                                      mpesaRef: ''
+                                      classification: 'under-declaration'
                                     });
                                   }
                                 });
 
-                                // Move agreed due dates into corresponding Arrears exception due dates
+                                // Move due dates into corresponding Arrears exception due dates
                                 const updatedExceptions = syncArrearsExceptions(
                                   prev.exceptionRegister || [],
                                   existing,

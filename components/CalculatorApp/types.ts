@@ -1,3 +1,13 @@
+export interface ArrearsAppliedRow {
+  month: string;
+  litres: string;
+  levy: string;
+  penalty: string;
+  cf?: string;
+  amount?: string;
+  paymentMonthYear: string;
+}
+
 export interface ArrearsRow {
   m: number;
   month: string;

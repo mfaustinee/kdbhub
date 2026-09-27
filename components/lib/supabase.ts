@@ -276,6 +276,15 @@ export const resolvePdfUrl = async (pathOrIdentifier: string): Promise<string | 
   // 3. CHECK STORAGE BUCKETS (ValidationPdfs / validation-pdfs) IN SUPABASE
   for (const bucketName of ['ValidationPdfs', 'validationPdfs', 'validation-pdfs']) {
     try {
+      // First attempt direct download as blob
+      const { data: blobData, error: downloadError } = await client.storage
+        .from(bucketName)
+        .download(targetPath);
+
+      if (!downloadError && blobData) {
+        return URL.createObjectURL(blobData);
+      }
+
       const { data: signedData, error: signedError } = await client.storage
         .from(bucketName)
         .createSignedUrl(targetPath, 3600);

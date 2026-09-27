@@ -125,7 +125,9 @@ export const getArrearsMForSale = (
 };
 
 /**
- * Computes all rows from 0 to effective arrears count, mapping localSales with under-declared volume to their exact m
+ * Computes arrears rows:
+ * If localSales are provided, calculates ONLY for actual under-declaration (underDeclared > 0).
+ * Never treats declared quantities as under-declaration.
  */
 export const computeArrearsRows = (
   baseMonth: string,
@@ -139,58 +141,82 @@ export const computeArrearsRows = (
 ): ArrearsRow[] => {
   const baseDate = new Date(baseMonth + '-01');
 
-  // Map any local sales with under-declared volume (or volume declared) to their calculated m index
-  const salesMapByM: Record<number, { litres: number; monthLabel: string }> = {};
-  let maxSaleM = 0;
+  // Filter ONLY local sales that have actual under-declared volume
+  const underDeclaredSales = (localSales || []).filter(sale => {
+    if (!sale.month || sale.month.trim() === '') return false;
+    const underNum = parseFloat(String(sale.underDeclared || '0').replace(/,/g, ''));
+    return !isNaN(underNum) && underNum > 0;
+  });
 
-  if (localSales && localSales.length > 0) {
-    localSales.forEach(sale => {
-      if (!sale.month || sale.month.trim() === '') return;
-      const underDeclNum = parseFloat(sale.underDeclared || '0');
-      const qtyDeclNum = parseFloat(sale.qtyDeclared || '0');
-      // If underDeclared is present (> 0), use it; else fallback to qtyDeclared
-      const volume = underDeclNum > 0 ? underDeclNum : (qtyDeclNum || 0);
+  // If there are under-declared sales, calculate ONLY for those months!
+  if (underDeclaredSales.length > 0) {
+    const result: ArrearsRow[] = [];
 
+    underDeclaredSales.forEach(sale => {
       const { m, monthLabel } = getArrearsMForSale(sale.month, sale.year, baseMonth, validationDate);
-      salesMapByM[m] = {
-        litres: volume,
-        monthLabel
-      };
-      if (m > maxSaleM) {
-        maxSaleM = m;
+      const baseLitres = parseFloat(String(sale.underDeclared || '0').replace(/,/g, '')) || 0;
+      const litres = litresMap[m] !== undefined ? litresMap[m] : baseLitres;
+      const currentPrice = pricingMode === 'individual' ? (pricesMap[m] ?? price) : price;
+      const levy = Math.ceil(litres * currentPrice);
+
+      let penaltyRate = 0;
+      let compoundingFactor = 0;
+
+      if (m === 0) {
+        penaltyRate = 0;
+        compoundingFactor = 0;
+      } else if (m === 1) {
+        penaltyRate = 0.25;
+        compoundingFactor = 1.0;
+      } else if (m > 1) {
+        compoundingFactor = Math.pow(1.12, m - 1);
+        penaltyRate = (1.25 * compoundingFactor) - 1;
       }
+
+      const penalty = Math.ceil(levy * penaltyRate);
+      const amount = levy + penalty;
+      const rowCf = litres > 0 ? getBandedCF(amount) : 0;
+      const total = litres > 0 ? amount + rowCf : 0;
+
+      result.push({
+        m,
+        month: monthLabel,
+        litres,
+        price: currentPrice,
+        levy,
+        penalty,
+        penaltyRate,
+        compoundingFactor,
+        amount,
+        cf: rowCf,
+        total
+      });
     });
+
+    result.sort((a, b) => a.m - b.m);
+    return result;
   }
 
-  const effectiveCount = Math.max(arrearsCount, maxSaleM);
+  // Fallback for manual calculator mode when no under-declaration is present in validated sales
   const result: ArrearsRow[] = [];
+  const effectiveCount = Math.max(1, arrearsCount);
 
   for (let m = 0; m <= effectiveCount; m++) {
-    const saleInfo = salesMapByM[m];
-    
-    let monthLabel = getMonthLabel(baseDate, m);
-    if (saleInfo) {
-      monthLabel = saleInfo.monthLabel;
-    }
-
-    const defaultLitres = saleInfo ? saleInfo.litres : 0;
-    const litres = litresMap[m] !== undefined ? litresMap[m] : defaultLitres;
+    const monthLabel = getMonthLabel(baseDate, m);
+    const litres = litresMap[m] !== undefined ? litresMap[m] : 0;
     const currentPrice = pricingMode === 'individual' ? (pricesMap[m] ?? price) : price;
     const levy = Math.ceil(litres * currentPrice);
-    
+
     let penaltyRate = 0;
     let compoundingFactor = 0;
-    
+
     if (m === 0) {
-      // Base month unpenalized (days 1-10)
       penaltyRate = 0;
       compoundingFactor = 0;
     } else if (m === 1) {
-      // Base month penalized (days 11-end) or standard single month
       penaltyRate = 0.25;
       compoundingFactor = 1.0;
     } else if (m > 1) {
-      // Formula: (1.25 * (1.12 ^ (m-1))) - 1
       compoundingFactor = Math.pow(1.12, m - 1);
       penaltyRate = (1.25 * compoundingFactor) - 1;
     }

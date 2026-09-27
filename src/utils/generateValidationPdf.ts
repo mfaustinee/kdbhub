@@ -343,27 +343,46 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
     doc.setTextColor(0, 0, 0);
     currentY += 15;
   } else {
-    const totalPenalty = nonCompliance.reduce((sum: number, nc: any) => {
+    const totalLevy = nonCompliance.reduce((sum: number, nc: any) => {
       const amt = parseFloat(String(nc.amount || '0').replace(/,/g, '')) || 0;
       return sum + amt;
     }, 0);
+    const totalPenalty = nonCompliance.reduce((sum: number, nc: any) => {
+      const pen = parseFloat(String(nc.penalty || '0').replace(/,/g, '')) || 0;
+      return sum + pen;
+    }, 0);
+    const totalCf = nonCompliance.reduce((sum: number, nc: any) => {
+      const cf = parseFloat(String(nc.cfFee || '0').replace(/,/g, '')) || 0;
+      return sum + cf;
+    }, 0);
+    const totalSettlementArrears = totalLevy + totalPenalty + totalCf;
 
     autoTable(doc, {
       startY: currentY + 5,
-      head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Recalculated Amount (Kshs)', 'Agreed Due Date', 'MPESA REF']],
+      head: [['CSL Period (Month/Year)', globalUnit === 'L' ? 'Litres' : 'Kilograms', 'Recalculated Levy (Kshs)', 'Penalty (Kshs)', 'CF Fee (Kshs)', 'Total Arrears (Kshs)', 'Due Date']],
       body: [
-        ...nonCompliance.map((nc: any) => [
-          nc.month || '', 
-          formatNum(nc.litres) || '', 
-          formatNum(nc.amount) || '0.00', 
-          nc.paymentMonthYear || '', 
-          nc.mpesaRef || ''
-        ]),
+        ...nonCompliance.map((nc: any) => {
+          const lVal = parseFloat(String(nc.amount || '0').replace(/,/g, '')) || 0;
+          const pVal = parseFloat(String(nc.penalty || '0').replace(/,/g, '')) || 0;
+          const cVal = parseFloat(String(nc.cfFee || '0').replace(/,/g, '')) || 0;
+          const tot = lVal + pVal + cVal;
+          return [
+            nc.month || '', 
+            formatNum(nc.litres) || '', 
+            lVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), 
+            pVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), 
+            cVal.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), 
+            tot.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+            nc.paymentMonthYear || ''
+          ];
+        }),
         [
           { content: 'TOTAL SETTLEMENT ARREARS', styles: { fontStyle: 'bold' } }, 
           '', 
+          { content: totalLevy.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
           { content: totalPenalty.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
-          '', 
+          { content: totalCf.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
+          { content: totalSettlementArrears.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), styles: { fontStyle: 'bold' } }, 
           ''
         ]
       ],
