@@ -1320,6 +1320,18 @@ export const DBService = {
     }
   },
 
+  async deleteDebtor(id: string): Promise<void> {
+    const current = await this.getDebtors();
+    const updated = current.filter(d => d.id !== id);
+    await this.saveDebtors(updated);
+    try {
+      const client = await getSupabase();
+      if (client) {
+        await client.from('debtors').delete().eq('id', id);
+      }
+    } catch (_) {}
+  },
+
   async getStaffConfig(forceFresh: boolean = false): Promise<StaffConfig> {
     const defaultModules = {
       levyAgreement: true,

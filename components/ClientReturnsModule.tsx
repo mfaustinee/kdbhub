@@ -151,6 +151,28 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     setDebtorsCurrentPage(1);
   }, [debtorSearchQuery, debtorFilterYear, debtorFilterMonth]);
 
+  // Debtors CSV Import state
+  const [isDebtorImportModalOpen, setIsDebtorImportModalOpen] = useState<boolean>(false);
+  const [debtorCsvFile, setDebtorCsvFile] = useState<File | null>(null);
+  const [parsedDebtors, setParsedDebtors] = useState<DebtorRecord[]>([]);
+  const [debtorImportErrors, setDebtorImportErrors] = useState<string[]>([]);
+  const [debtorImportWarnings, setDebtorImportWarnings] = useState<string[]>([]);
+  const [isImportingDebtors, setIsImportingDebtors] = useState<boolean>(false);
+  const [debtorImportMode, setDebtorImportMode] = useState<'append' | 'replace'>('append');
+
+  // Track deleted debtor keys (by id, permitNo, or dboName) so deletions apply to both manual and derived debtors
+  const [deletedDebtorKeys, setDeletedDebtorKeys] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('kdb_deleted_debtor_keys');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Multi-select batch state for debtors ledger
+  const [selectedDebtorIds, setSelectedDebtorIds] = useState<string[]>([]);
+
   // Statement client selection state
   const [selectedStatementClientId, setSelectedStatementClientId] = useState<string>('');
   const [statementFilterYear, setStatementFilterYear] = useState<string>('All');
@@ -265,7 +287,12 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
       }
     });
 
-    return Array.from(new Map(integrated.map(d => [d.id, d])).values());
+    const unique = Array.from(new Map(integrated.map(d => [d.id, d])).values());
+    return unique.filter(d => 
+      !deletedDebtorKeys.includes(d.id) && 
+      !deletedDebtorKeys.includes(d.permitNo) && 
+      !deletedDebtorKeys.includes(d.dboName)
+    );
   };
 
   // Batching & Pagination states for Returns filings list (10, 25, 50 & 100 batch options)
@@ -1496,50 +1523,351 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     document.body.removeChild(link);
   };
 
-  // Excel Export for client statement
-  const exportStatementToCSV = () => {
-    if (!statementClientObj || filteredStatementReturns.length === 0) {
-      alert("No returns found to export for this client.");
-      return;
-    }
-    const headers = [
-      'Client Name',
-      'Filing Period',
-      'Return Date',
-      'Quantity (Ltrs)',
-      'Invoice Amount (KES)',
-      'Payment Amount (KES)',
-      'Payment Date',
-      'CF Adjustment (KES)',
-      'Outstanding Balance (KES)',
-      'Ref/MR No'
-    ];
-    const rows = filteredStatementReturns.map(r => [
-      statementClientObj.clientName,
-      `${r.period} ${r.year}`,
-      r.returnDate,
-      r.qty,
-      r.invoiceAmount,
-      r.paymentAmount,
-      r.paymentDate || '',
-      r.lessCF,
-      r.outstandingBalance,
-      r.txnRef || ''
-    ]);
-    const csvRows = [headers.join(',')];
-    rows.forEach(row => {
-      const formatted = row.map(val => {
-        const escaped = ('' + val).replace(/"/g, '""');
-        return `"${escaped}"`;
-      });
-      csvRows.push(formatted.join(','));
-    });
+  const handleDeleteDebtor = async (item: DebtorRecord) => {
+    if (!confirm(`Are you sure you want to delete debtor "${item.dboName}"?`)) return;
+    
+    const key = item.id || item.permitNo || item.dboName;
+    const newDeleted = Array.from(new Set([...deletedDebtorKeys, key, item.permitNo, item.dboName, item.id].filter(Boolean)));
+    setDeletedDebtorKeys(newDeleted);
+    try {
+      localStorage.setItem('kdb_deleted_debtor_keys', JSON.stringify(newDeleted));
+    } catch {}
 
-    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const activeList = getIntegratedDebtors();
+    const updated = activeList.filter(d => d.id !== item.id && d.permitNo !== item.permitNo && d.dboName !== item.dboName);
+    
+    if (onDebtorUpdate) {
+      await onDebtorUpdate(updated);
+    }
+    setLocalDebtors(updated);
+    
+    try {
+      if (item.id) {
+        await DBService.deleteDebtor(item.id);
+      }
+    } catch (err) {
+      console.warn("DBService.deleteDebtor notice:", err);
+    }
+    onRefresh?.();
+  };
+
+  const handleDeleteAllDebtors = async () => {
+    const activeList = getIntegratedDebtors();
+    if (activeList.length === 0) return;
+    if (!confirm(`Are you sure you want to delete all ${activeList.length} debtor entries? This will clear the debtors ledger.`)) return;
+    
+    const allKeys = activeList.flatMap(d => [d.id, d.permitNo, d.dboName]).filter(Boolean);
+    const newDeleted = Array.from(new Set([...deletedDebtorKeys, ...allKeys]));
+    setDeletedDebtorKeys(newDeleted);
+    try {
+      localStorage.setItem('kdb_deleted_debtor_keys', JSON.stringify(newDeleted));
+    } catch {}
+
+    if (onDebtorUpdate) {
+      await onDebtorUpdate([]);
+    }
+    setLocalDebtors([]);
+    try {
+      await DBService.saveDebtors([]);
+    } catch (err) {
+      console.warn("Notice saving empty debtors:", err);
+    }
+    onRefresh?.();
+  };
+
+  const handleDeleteSelectedDebtors = async () => {
+    if (selectedDebtorIds.length === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedDebtorIds.length} selected debtor entry(s)?`)) return;
+
+    const activeList = getIntegratedDebtors();
+    const selectedSet = new Set(selectedDebtorIds);
+    const toDelete = activeList.filter(d => selectedSet.has(d.id));
+    const allKeys = toDelete.flatMap(d => [d.id, d.permitNo, d.dboName]).filter(Boolean);
+    const newDeleted = Array.from(new Set([...deletedDebtorKeys, ...allKeys]));
+    setDeletedDebtorKeys(newDeleted);
+    try {
+      localStorage.setItem('kdb_deleted_debtor_keys', JSON.stringify(newDeleted));
+    } catch {}
+
+    const remaining = activeList.filter(d => !selectedSet.has(d.id));
+    if (onDebtorUpdate) {
+      await onDebtorUpdate(remaining);
+    }
+    setLocalDebtors(remaining);
+    setSelectedDebtorIds([]);
+
+    try {
+      for (const d of toDelete) {
+        if (d.id) {
+          await DBService.deleteDebtor(d.id);
+        }
+      }
+    } catch (err) {
+      console.warn("Notice deleting selected debtors:", err);
+    }
+    onRefresh?.();
+  };
+
+  const toggleSelectDebtor = (id: string) => {
+    setSelectedDebtorIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllDebtors = (list: DebtorRecord[]) => {
+    const listIds = list.map(d => d.id);
+    const allSelected = listIds.length > 0 && listIds.every(id => selectedDebtorIds.includes(id));
+    if (allSelected) {
+      setSelectedDebtorIds(prev => prev.filter(id => !listIds.includes(id)));
+    } else {
+      setSelectedDebtorIds(prev => Array.from(new Set([...prev, ...listIds])));
+    }
+  };
+
+  const handleDebtorCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setDebtorCsvFile(file);
+    setDebtorImportErrors([]);
+    setDebtorImportWarnings([]);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) {
+        setDebtorImportErrors(["The selected file is empty."]);
+        setParsedDebtors([]);
+        return;
+      }
+
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+      if (lines.length < 2) {
+        setDebtorImportErrors(["The file must contain a header row and at least one data row."]);
+        setParsedDebtors([]);
+        return;
+      }
+
+      const cleanHeader = (h: string) => h.replace(/^["']|["']$/g, '').toLowerCase().replace(/[\s_\-()]+/g, '');
+      const headerCols = parseCSVLine(lines[0]).map(cleanHeader);
+
+      const findCol = (...candidates: string[]) => {
+        for (const cand of candidates) {
+          const idx = headerCols.findIndex(h => h.includes(cand));
+          if (idx !== -1) return idx;
+        }
+        return -1;
+      };
+
+      const dboNameIdx = findCol('dboname', 'clientname', 'dbo', 'operator', 'name');
+      const premiseNameIdx = findCol('premisename', 'premise', 'depot', 'facility');
+      const permitNoIdx = findCol('permitno', 'permit', 'license', 'licenseno');
+      const locationIdx = findCol('location', 'address', 'town');
+      const countyIdx = findCol('county');
+      const arrearsPeriodIdx = findCol('arrearsperiod', 'period', 'periods', 'month', 'months');
+      const totalArrearsIdx = findCol('outstandingbalance', 'totalarrears', 'arrears', 'balance', 'amount', 'total');
+      const debitNoteNoIdx = findCol('debitnoteno', 'debitnote', 'dn', 'ref');
+      const telIdx = findCol('telephone', 'phone', 'tel', 'mobile', 'contact');
+
+      if (dboNameIdx === -1 && permitNoIdx === -1) {
+        setDebtorImportErrors([
+          "Could not detect a 'DBO Name' or 'Permit No' column. Please ensure your CSV includes headers such as: DBO Name, Premise Name, Permit No, Location, County, Arrears Periods, Outstanding Balance (KES), Debit Note No, Telephone."
+        ]);
+        setParsedDebtors([]);
+        return;
+      }
+
+      const records: DebtorRecord[] = [];
+      const warnings: string[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const rowValues = parseCSVLine(lines[i]);
+        if (rowValues.length < 2) continue;
+
+        const rowNum = i + 1;
+        const getVal = (idx: number) => (idx !== -1 && rowValues[idx] !== undefined) ? rowValues[idx].replace(/^["']|["']$/g, '').trim() : '';
+
+        const dboName = getVal(dboNameIdx);
+        const permitNo = getVal(permitNoIdx);
+        const premiseName = getVal(premiseNameIdx) || 'Main Depot';
+        const location = getVal(locationIdx) || 'N/A';
+        const county = getVal(countyIdx) || 'N/A';
+        const arrearsPeriod = getVal(arrearsPeriodIdx) || `${new Date().getFullYear()}`;
+        const rawArrears = getVal(totalArrearsIdx);
+        const debitNoteNo = getVal(debitNoteNoIdx) || `DN/IMP/${new Date().getFullYear()}/${String(rowNum).padStart(3, '0')}`;
+        const tel = getVal(telIdx) || '';
+
+        if (!dboName && !permitNo) {
+          warnings.push(`Row ${rowNum}: Skipped because both DBO Name and Permit No are missing.`);
+          continue;
+        }
+
+        const cleanArrearsStr = rawArrears.replace(/[^0-9.-]/g, '');
+        const totalArrears = parseFloat(cleanArrearsStr) || 0;
+
+        if (totalArrears <= 0) {
+          warnings.push(`Row ${rowNum} (${dboName || permitNo}): Outstanding arrears amount was 0 or invalid.`);
+        }
+
+        const generatedId = `deb-imp-${Date.now()}-${i}`;
+        const effectivePermitNo = permitNo || `KDB/MB/${String(1000 + i)}/${new Date().getFullYear()}`;
+        const effectiveDboName = dboName || `Operator ${effectivePermitNo}`;
+
+        const installments: Installment[] = [
+          {
+            no: 1,
+            period: arrearsPeriod,
+            dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+            amount: totalArrears
+          }
+        ];
+
+        records.push({
+          id: generatedId,
+          dboName: effectiveDboName,
+          premiseName,
+          permitNo: effectivePermitNo,
+          county,
+          location,
+          totalArrears,
+          totalArrearsWords: numberToWords(totalArrears),
+          arrearsPeriod,
+          debitNoteNo,
+          tel,
+          arrearsBreakdown: [{ id: `imp-arr-${i}`, month: arrearsPeriod, amount: totalArrears }],
+          installments
+        });
+      }
+
+      if (records.length === 0) {
+        setDebtorImportErrors(["No valid debtor records could be extracted from the file."]);
+        setParsedDebtors([]);
+        return;
+      }
+
+      setParsedDebtors(records);
+      setDebtorImportWarnings(warnings);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleConfirmDebtorImport = async () => {
+    if (parsedDebtors.length === 0) return;
+    setIsImportingDebtors(true);
+    try {
+      let finalDebtors: DebtorRecord[];
+      if (debtorImportMode === 'replace') {
+        finalDebtors = parsedDebtors;
+        const importedKeys = new Set(parsedDebtors.flatMap(d => [d.id, d.permitNo, d.dboName]));
+        setDeletedDebtorKeys(prev => {
+          const filtered = prev.filter(k => !importedKeys.has(k));
+          try {
+            localStorage.setItem('kdb_deleted_debtor_keys', JSON.stringify(filtered));
+          } catch {}
+          return filtered;
+        });
+      } else {
+        const activeList = getIntegratedDebtors();
+        const existingMap = new Map<string, DebtorRecord>();
+        activeList.forEach(d => {
+          existingMap.set(d.permitNo.toLowerCase(), d);
+          existingMap.set(d.dboName.toLowerCase(), d);
+        });
+
+        const merged = [...activeList];
+        parsedDebtors.forEach(p => {
+          const keyPermit = p.permitNo.toLowerCase();
+          const keyName = p.dboName.toLowerCase();
+          if (existingMap.has(keyPermit)) {
+            const idx = merged.findIndex(d => d.permitNo.toLowerCase() === keyPermit);
+            if (idx !== -1) merged[idx] = { ...merged[idx], ...p, id: merged[idx].id };
+          } else if (existingMap.has(keyName)) {
+            const idx = merged.findIndex(d => d.dboName.toLowerCase() === keyName);
+            if (idx !== -1) merged[idx] = { ...merged[idx], ...p, id: merged[idx].id };
+          } else {
+            merged.push(p);
+          }
+        });
+        finalDebtors = merged;
+        const importedKeys = new Set(parsedDebtors.flatMap(d => [d.id, d.permitNo, d.dboName]));
+        setDeletedDebtorKeys(prev => {
+          const filtered = prev.filter(k => !importedKeys.has(k));
+          try {
+            localStorage.setItem('kdb_deleted_debtor_keys', JSON.stringify(filtered));
+          } catch {}
+          return filtered;
+        });
+      }
+
+      if (onDebtorUpdate) {
+        await onDebtorUpdate(finalDebtors);
+      }
+      setLocalDebtors(finalDebtors);
+      try {
+        await DBService.saveDebtors(finalDebtors);
+      } catch (saveErr) {
+        console.warn("DBService.saveDebtors notice:", saveErr);
+      }
+
+      onRefresh?.();
+      setIsDebtorImportModalOpen(false);
+      setDebtorCsvFile(null);
+      setParsedDebtors([]);
+      alert(`Successfully imported ${parsedDebtors.length} debtor entries!`);
+    } catch (err: any) {
+      console.error("Error importing debtors:", err);
+      alert(`Import failed: ${err.message || 'Please check file format and try again.'}`);
+    } finally {
+      setIsImportingDebtors(false);
+    }
+  };
+
+  const downloadDebtorSampleCSV = () => {
+    const sampleHeaders = [
+      'DBO Name',
+      'Premise Name',
+      'Permit No',
+      'Location',
+      'County',
+      'Arrears Periods',
+      'Outstanding Balance (KES)',
+      'Debit Note No',
+      'Telephone'
+    ];
+    const sampleRows = [
+      [
+        'Sunrise Dairy Ltd',
+        'Sunrise Main Depot',
+        'KDB/MB/0001234/2025',
+        'Thika Road, Ruiru',
+        'Kiambu',
+        'Jan 2025 - Mar 2025',
+        '150000',
+        'DN/2025/552',
+        '0712345678'
+      ],
+      [
+        'Highland Creameries',
+        'Eldoret Central Depot',
+        'KDB/MB/0004521/2025',
+        'Uganda Road, Eldoret',
+        'Uasin Gishu',
+        'Feb 2025',
+        '95000',
+        'DN/2025/553',
+        '0722998877'
+      ]
+    ];
+
+    const csvContent = [
+      sampleHeaders.join(','),
+      ...sampleRows.map(r => r.map(c => `"${c}"`).join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `Statement_${statementClientObj.clientName.replace(/\s+/g, '_')}.csv`);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'kdb_debtors_import_template.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1556,7 +1884,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
               <FileSpreadsheet className="w-4 h-4 text-indigo-500" /> Returns & Ledger Module
             </h2>
             <p className="text-xs font-medium text-slate-500 mt-0.5">
-              File monthly levy, monitor collections, generate client statements, and track unfiled debtors
+              File monthly levy, monitor collections, and track debtor payment schedules
             </p>
           </div>
 
@@ -1572,13 +1900,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
               onClick={() => setActiveSubTab('debtors')}
               className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'debtors' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
-              <AlertTriangle size={13} className="text-amber-500" /> Non-Filers & Debtors
-            </button>
-            <button
-              onClick={() => setActiveSubTab('statements')}
-              className={`px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center gap-1.5 ${activeSubTab === 'statements' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
-            >
-              <FileText size={13} /> Client Statements
+              <AlertTriangle size={13} className="text-amber-500" /> Debtors Ledger
             </button>
           </div>
         </div>
@@ -1983,13 +2305,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                               <td className="px-6 py-4.5 text-right">
                                 <div className="flex justify-end gap-2">
                                   <button
-                                    onClick={() => handleViewStatement(client.id)}
-                                    className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg text-[10px] uppercase tracking-wider transition-all cursor-pointer"
-                                    title="View detailed transaction statement for this client"
-                                  >
-                                    View Statement
-                                  </button>
-                                  <button
                                     onClick={() => openAddModal(client.id)}
                                     className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-800 transition-colors cursor-pointer"
                                     title="File Return"
@@ -2070,406 +2385,406 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
             </div>
           )}
 
-          {/* ==================== SUB-TAB: NON-FILERS / DEBTORS ==================== */}
+          {/* ==================== SUB-TAB: DEBTORS LEDGER ==================== */}
           {activeSubTab === 'debtors' && (
             <div className="space-y-6 animate-in fade-in duration-300 print:hidden">
-              
-              {/* Filter Panel */}
-              <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm space-y-4">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-2 border-b border-slate-50">
-                  <div>
-                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Debtors Ledger Directory</h3>
-                    <p className="text-xs text-slate-400 mt-0.5">Filter dairy operators by year, month, or search across outstanding balances and active payment schedules</p>
-                  </div>
-                </div>
+              {(() => {
+                // Gather combined debtors ledger (manual and returns-based)
+                const activeDebtors = getIntegratedDebtors();
+                  
+                let filteredLedger = activeDebtors;
+                const qSafe = (debtorSearchQuery || '').trim().toLowerCase();
+                if (qSafe !== '') {
+                  filteredLedger = activeDebtors.filter(d => 
+                    (d.dboName || '').toLowerCase().includes(qSafe) || 
+                    (d.permitNo || '').toLowerCase().includes(qSafe) ||
+                    (d.premiseName && d.premiseName.toLowerCase().includes(qSafe)) ||
+                    (d.county && d.county.toLowerCase().includes(qSafe)) ||
+                    (d.location && d.location.toLowerCase().includes(qSafe))
+                  );
+                }
 
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2 items-center">
-                  {/* Left Column (Col-span-12) for filters - Compliance tracking notice removed */}
-                  <div className="lg:col-span-12 grid grid-cols-1 md:grid-cols-12 gap-4">
-                    {/* Search Bar */}
-                    <div className="md:col-span-4 space-y-1.5">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Search Directory</span>
-                      <div className="relative">
-                        <Search className="absolute left-3.5 top-2.5 w-4 h-4 text-slate-400" />
-                        <input
-                          type="text"
-                          placeholder="Search client, premise, location..."
-                          value={debtorSearchQuery}
-                          onChange={(e) => setDebtorSearchQuery(e.target.value)}
-                          className="w-full pl-10 pr-10 py-2.5 rounded-2xl border border-slate-200 text-xs font-semibold text-slate-700 outline-none focus:border-slate-300 bg-slate-50"
-                        />
-                        {debtorSearchQuery && (
-                          <button onClick={() => setDebtorSearchQuery('')} className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-600">
-                            <X size={14} />
+                // Filter by selected year
+                if (debtorFilterYear !== 'All') {
+                  filteredLedger = filteredLedger.filter(d => {
+                    const hasYearInInstallment = d.installments?.some(inst => (inst.period || '').includes(debtorFilterYear));
+                    const hasYearInPeriod = (d.arrearsPeriod || '').includes(debtorFilterYear);
+                    return hasYearInInstallment || hasYearInPeriod;
+                  });
+                }
+
+                // Filter by selected month
+                if (debtorFilterMonth !== 'All') {
+                  filteredLedger = filteredLedger.filter(d => {
+                    const monthShort = debtorFilterMonth.slice(0, 3);
+                    const hasMonthInInstallment = d.installments?.some(inst => 
+                      (inst.period || '').toLowerCase().includes(debtorFilterMonth.toLowerCase()) || 
+                      (inst.period || '').toLowerCase().includes(monthShort.toLowerCase())
+                    );
+                    const hasMonthInPeriod = (d.arrearsPeriod || '').toLowerCase().includes(debtorFilterMonth.toLowerCase()) || 
+                      (d.arrearsPeriod || '').toLowerCase().includes(monthShort.toLowerCase());
+                    return hasMonthInInstallment || hasMonthInPeriod;
+                  });
+                }
+
+                const totalDebtors = filteredLedger.length;
+                const debtorsTotalPages = Math.max(1, Math.ceil(totalDebtors / debtorsBatchSize));
+                const safeDebtorsPage = Math.min(Math.max(1, debtorsCurrentPage), debtorsTotalPages);
+                const paginatedDebtors = filteredLedger.slice(
+                  (safeDebtorsPage - 1) * debtorsBatchSize,
+                  safeDebtorsPage * debtorsBatchSize
+                );
+
+                const isAllPageSelected = paginatedDebtors.length > 0 && paginatedDebtors.every(d => selectedDebtorIds.includes(d.id));
+
+                return (
+                  /* Combined Debtors Ledger Directory Bubble */
+                  <div className="bg-white rounded-[32px] border border-slate-200 shadow-sm overflow-hidden">
+                    {/* Header Toolbar */}
+                    <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white">
+                      <div>
+                        <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-amber-600 mb-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                          <span>Debt Recovery & Enforcement</span>
+                        </div>
+                        <h3 className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+                          Debtors Ledger Directory
+                          <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-extrabold border border-slate-200">
+                            {filteredLedger.length}
+                          </span>
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Filter operators, import CSV records, manage arrears and active payment agreements
+                        </p>
+                      </div>
+
+                      {/* Header Actions: Import CSV, Export Excel, Add Entry, Delete All */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsDebtorImportModalOpen(true)}
+                          className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-black text-[10px] uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer"
+                          title="Import Debtors from CSV file"
+                        >
+                          <Upload size={13} className="text-blue-600" /> Import CSV
+                        </button>
+                        <button
+                          type="button"
+                          onClick={exportLedgerCSV}
+                          className="flex items-center gap-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-black text-[10px] uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer"
+                          title="Download Excel list of clients with outstanding debts"
+                        >
+                          <Download size={13} className="text-amber-500" /> Export Excel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsAddingDebtor(true)}
+                          className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-[10px] uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all shadow-xs cursor-pointer"
+                          title="Add a new custom entry to the debtors ledger"
+                        >
+                          <Plus size={13} /> Add Entry
+                        </button>
+                        {activeDebtors.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleDeleteAllDebtors}
+                            className="flex items-center gap-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black text-[10px] uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer"
+                            title="Delete all debtor entries from the ledger"
+                          >
+                            <Trash2 size={13} className="text-rose-600" /> Delete All
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Years dropdown */}
-                    <div className="md:col-span-4 space-y-1.5">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Select Year</span>
-                      <select
-                        value={debtorFilterYear}
-                        onChange={(e) => setDebtorFilterYear(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-2xl border border-slate-200 text-xs font-black text-slate-700 bg-slate-50 outline-none focus:bg-white focus:border-slate-300 transition-all cursor-pointer"
-                      >
-                        <option value="All">All Years</option>
-                        {yearsList.map(y => (
-                          <option key={y} value={y}>{y}</option>
-                        ))}
-                      </select>
+                    {/* Integrated Filters inside the Combined Bubble */}
+                    <div className="p-5 sm:p-6 bg-slate-50/60 border-b border-slate-100">
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                        {/* Search Bar */}
+                        <div className="md:col-span-6 space-y-1.5">
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Search Directory</span>
+                          <div className="relative">
+                            <Search className="absolute left-3.5 top-2.5 w-4 h-4 text-slate-400" />
+                            <input
+                              type="text"
+                              placeholder="Search client, premise, location, permit no..."
+                              value={debtorSearchQuery}
+                              onChange={(e) => setDebtorSearchQuery(e.target.value)}
+                              className="w-full pl-10 pr-10 py-2.5 rounded-2xl border border-slate-200 text-xs font-semibold text-slate-700 outline-none focus:border-slate-300 bg-white shadow-2xs"
+                            />
+                            {debtorSearchQuery && (
+                              <button onClick={() => setDebtorSearchQuery('')} className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer">
+                                <X size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Years dropdown */}
+                        <div className="md:col-span-3 space-y-1.5">
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Select Year</span>
+                          <select
+                            value={debtorFilterYear}
+                            onChange={(e) => setDebtorFilterYear(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-2xl border border-slate-200 text-xs font-black text-slate-700 bg-white outline-none focus:border-slate-300 transition-all cursor-pointer shadow-2xs"
+                          >
+                            <option value="All">All Years</option>
+                            {yearsList.map(y => (
+                              <option key={y} value={y}>{y}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Months dropdown */}
+                        <div className="md:col-span-3 space-y-1.5">
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Select Month</span>
+                          <select
+                            value={debtorFilterMonth}
+                            onChange={(e) => setDebtorFilterMonth(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-2xl border border-slate-200 text-xs font-black text-slate-700 bg-white outline-none focus:border-slate-300 transition-all cursor-pointer shadow-2xs"
+                          >
+                            <option value="All">All Months</option>
+                            {monthsList.map(m => (
+                              <option key={m} value={m}>{m}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Months dropdown */}
-                    <div className="md:col-span-4 space-y-1.5">
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Select Month</span>
-                      <select
-                        value={debtorFilterMonth}
-                        onChange={(e) => setDebtorFilterMonth(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-2xl border border-slate-200 text-xs font-black text-slate-700 bg-slate-50 outline-none focus:bg-white focus:border-slate-300 transition-all cursor-pointer"
-                      >
-                        <option value="All">All Months</option>
-                        {monthsList.map(m => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
+                    {/* Top Batch Options & Pagination Bar */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 p-3 border-b border-slate-200/70 text-xs">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-2 font-medium text-slate-700">
+                          <span className="text-slate-600 font-semibold text-xs">Show</span>
+                          <select
+                            value={debtorsBatchSize}
+                            onChange={(e) => {
+                              setDebtorsBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
+                              setDebtorsCurrentPage(1);
+                            }}
+                            className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-100 shadow-2xs cursor-pointer"
+                          >
+                            <option value={10}>10</option>
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                            <option value={100}>100</option>
+                          </select>
+                          <span className="text-slate-600 font-semibold text-xs">entries</span>
+                        </div>
+
+                        <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200/60 font-bold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                          <span>Batch {safeDebtorsPage} of {debtorsTotalPages} (range: {totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}–{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)})</span>
+                        </div>
+
+                        {selectedDebtorIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleDeleteSelectedDebtors}
+                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold shadow-2xs transition-all cursor-pointer"
+                            title="Delete selected debtors"
+                          >
+                            <Trash2 size={12} />
+                            <span>Delete Selected ({selectedDebtorIds.length})</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between sm:justify-end gap-3">
+                        <span className="text-[11px] text-slate-500 font-semibold">
+                          Showing <span className="font-bold text-slate-900">{totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)}</span> of <span className="font-bold text-slate-900">{totalDebtors.toLocaleString()}</span>
+                        </span>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setDebtorsCurrentPage(prev => Math.max(1, prev - 1))}
+                            disabled={safeDebtorsPage <= 1}
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                            title="Previous batch"
+                          >
+                            <ChevronLeft size={14} />
+                          </button>
+                          <span className="text-[11px] font-bold text-slate-700 px-2">
+                            Page {safeDebtorsPage} of {debtorsTotalPages}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setDebtorsCurrentPage(prev => Math.min(debtorsTotalPages, prev + 1))}
+                            disabled={safeDebtorsPage >= debtorsTotalPages}
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                            title="Next batch"
+                          >
+                            <ChevronRight size={14} />
+                          </button>
+                        </div>
+                      </div>
                     </div>
+
+                    {/* Table View */}
+                    {filteredLedger.length === 0 ? (
+                      <div className="p-20 text-center space-y-4">
+                        <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
+                        <p className="text-slate-400 font-bold uppercase tracking-wider text-xs">No debtors found matching criteria!</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100 sticky top-0 bg-white z-10">
+                              <th className="px-4 py-3 w-10 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={isAllPageSelected}
+                                  onChange={() => toggleSelectAllDebtors(paginatedDebtors)}
+                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                  title="Select all on this page"
+                                />
+                              </th>
+                              <th className="px-6 py-3">Client details</th>
+                              <th className="px-6 py-3">Premise Name</th>
+                              <th className="px-6 py-3">Permit No</th>
+                              <th className="px-6 py-3">Arrears Period(s)</th>
+                              <th className="px-6 py-3 text-right">Balance Due</th>
+                              <th className="px-6 py-3 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
+                            {paginatedDebtors.map((item, idx) => {
+                              const isSelected = selectedDebtorIds.includes(item.id);
+                              return (
+                                <tr key={item.id || idx} className={`transition-colors ${isSelected ? 'bg-blue-50/40 hover:bg-blue-50/60' : 'hover:bg-slate-50/50'}`}>
+                                  <td className="px-4 py-3.5 text-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => toggleSelectDebtor(item.id)}
+                                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                    />
+                                  </td>
+                                  <td className="px-6 py-3.5">
+                                    <div className="text-slate-900 font-black">{item.dboName}</div>
+                                    <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                                      <Phone size={10} /> {item.tel || 'No phone'}
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-3.5">
+                                    <div className="text-slate-800">{item.premiseName || 'N/A'}</div>
+                                    <div className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                      {item.county || 'N/A'}
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-3.5 text-slate-500 font-mono text-[11px]">
+                                    {item.permitNo}
+                                  </td>
+                                  <td className="px-6 py-3.5 text-slate-500 font-medium">
+                                    {item.arrearsPeriod || 'Current'}
+                                  </td>
+                                  <td className="px-6 py-3.5 text-right text-rose-600 font-black">
+                                    {formatCurrency(item.totalArrears)}
+                                  </td>
+                                  <td className="px-6 py-3.5 text-right">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        onClick={() => handleEditDebtor(item)}
+                                        className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all cursor-pointer"
+                                        title="Edit Ledger Entry"
+                                      >
+                                        <PenTool className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteDebtor(item)}
+                                        className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                                        title="Delete Ledger Entry"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          navigate(`/payment-agreement?bypassPermit=${encodeURIComponent(item.permitNo)}`);
+                                        }}
+                                        className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black rounded-lg text-[10px] uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer"
+                                        title="Bypass login & create debt agreement from admin side"
+                                      >
+                                        <ExternalLink className="w-3 h-3" /> Bypass & Create Agreement
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Bottom Pagination & Batch Range Controls for Debtors Ledger */}
+                    {totalDebtors > 0 && (
+                      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-slate-100 bg-slate-50/50 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-600 font-semibold text-xs">Show</span>
+                          <select
+                            value={debtorsBatchSize}
+                            onChange={(e) => {
+                              setDebtorsBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
+                              setDebtorsCurrentPage(1);
+                            }}
+                            className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
+                          >
+                            <option value={10}>10</option>
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                            <option value={100}>100</option>
+                          </select>
+                          <span className="text-slate-600 font-semibold text-xs">entries</span>
+                          <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
+                            (Showing {totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}–{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)} of {totalDebtors.toLocaleString()} debtors)
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setDebtorsCurrentPage(1)}
+                            disabled={safeDebtorsPage <= 1}
+                            className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                          >
+                            First
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDebtorsCurrentPage(prev => Math.max(1, prev - 1))}
+                            disabled={safeDebtorsPage <= 1}
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                          >
+                            <ChevronLeft size={14} />
+                          </button>
+                          <span className="text-[11px] font-bold text-slate-700 px-2">
+                            Page {safeDebtorsPage} of {debtorsTotalPages}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setDebtorsCurrentPage(prev => Math.min(debtorsTotalPages, prev + 1))}
+                            disabled={safeDebtorsPage >= debtorsTotalPages}
+                            className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
+                          >
+                            <ChevronRight size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDebtorsCurrentPage(debtorsTotalPages)}
+                            disabled={safeDebtorsPage >= debtorsTotalPages}
+                            className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
+                          >
+                            Last
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
-
-              {/* Dynamic Debtor list */}
-              <div className="w-full">
-                
-                {/* List of outstanding records */}
-                <div className="bg-white rounded-[40px] border border-slate-100 shadow-xl overflow-hidden">
-                  
-                  {(() => {
-                    // Gather combined debtors ledger (manual and returns-based)
-                    const activeDebtors = getIntegratedDebtors();
-                      
-                      let filteredLedger = activeDebtors;
-                      const qSafe = (debtorSearchQuery || '').trim().toLowerCase();
-                      if (qSafe !== '') {
-                        filteredLedger = activeDebtors.filter(d => 
-                          (d.dboName || '').toLowerCase().includes(qSafe) || 
-                          (d.permitNo || '').toLowerCase().includes(qSafe) ||
-                          (d.premiseName && d.premiseName.toLowerCase().includes(qSafe)) ||
-                          (d.county && d.county.toLowerCase().includes(qSafe)) ||
-                          (d.location && d.location.toLowerCase().includes(qSafe))
-                        );
-                      }
-
-                      // Filter by selected year
-                      if (debtorFilterYear !== 'All') {
-                        filteredLedger = filteredLedger.filter(d => {
-                          const hasYearInInstallment = d.installments?.some(inst => (inst.period || '').includes(debtorFilterYear));
-                          const hasYearInPeriod = (d.arrearsPeriod || '').includes(debtorFilterYear);
-                          return hasYearInInstallment || hasYearInPeriod;
-                        });
-                      }
-
-                      // Filter by selected month
-                      if (debtorFilterMonth !== 'All') {
-                        filteredLedger = filteredLedger.filter(d => {
-                          const monthShort = debtorFilterMonth.slice(0, 3);
-                          const hasMonthInInstallment = d.installments?.some(inst => 
-                            (inst.period || '').toLowerCase().includes(debtorFilterMonth.toLowerCase()) || 
-                            (inst.period || '').toLowerCase().includes(monthShort.toLowerCase())
-                          );
-                          const hasMonthInPeriod = (d.arrearsPeriod || '').toLowerCase().includes(debtorFilterMonth.toLowerCase()) || 
-                            (d.arrearsPeriod || '').toLowerCase().includes(monthShort.toLowerCase());
-                          return hasMonthInInstallment || hasMonthInPeriod;
-                        });
-                      }
-
-                      const totalDebtors = filteredLedger.length;
-                      const debtorsTotalPages = Math.max(1, Math.ceil(totalDebtors / debtorsBatchSize));
-                      const safeDebtorsPage = Math.min(Math.max(1, debtorsCurrentPage), debtorsTotalPages);
-                      const paginatedDebtors = filteredLedger.slice(
-                        (safeDebtorsPage - 1) * debtorsBatchSize,
-                        safeDebtorsPage * debtorsBatchSize
-                      );
-
-                      return (
-                        <>
-                          <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                            <div>
-                              <h4 className="text-base font-black text-slate-800">
-                                Debtors Ledger ({filteredLedger.length})
-                              </h4>
-                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                Consolidated record of dairy operators in arrears, payment plans, and active debt agreements
-                              </p>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                onClick={exportLedgerCSV}
-                                className="flex items-center gap-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-black text-[10px] uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all shadow-sm"
-                                title="Download Excel list of clients with outstanding debts"
-                              >
-                                <Download size={13} className="text-amber-500" /> Export Excel
-                              </button>
-                              <button
-                                onClick={() => setIsAddingDebtor(true)}
-                                className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-[10px] uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all shadow-md"
-                                title="Add a new custom entry to the debtors ledger"
-                              >
-                                <Plus size={13} /> Add Entry
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Top Batch Options & Pagination Bar for Debtors Ledger */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 p-3 border-b border-slate-200/70 text-xs">
-                            <div className="flex flex-wrap items-center gap-3">
-                              <div className="flex items-center gap-2 font-medium text-slate-700">
-                                <span className="text-slate-600 font-semibold text-xs">Show</span>
-                                <select
-                                  value={debtorsBatchSize}
-                                  onChange={(e) => {
-                                    setDebtorsBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
-                                    setDebtorsCurrentPage(1);
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-100 shadow-2xs cursor-pointer"
-                                >
-                                  <option value={10}>10</option>
-                                  <option value={25}>25</option>
-                                  <option value={50}>50</option>
-                                  <option value={100}>100</option>
-                                </select>
-                                <span className="text-slate-600 font-semibold text-xs">entries</span>
-                              </div>
-
-                              <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200/60 font-bold">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                                <span>Batch {safeDebtorsPage} of {debtorsTotalPages} (range: {totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}–{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)})</span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center justify-between sm:justify-end gap-3">
-                              <span className="text-[11px] text-slate-500 font-semibold">
-                                Showing <span className="font-bold text-slate-900">{totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)}</span> of <span className="font-bold text-slate-900">{totalDebtors.toLocaleString()}</span>
-                              </span>
-
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => setDebtorsCurrentPage(prev => Math.max(1, prev - 1))}
-                                  disabled={safeDebtorsPage <= 1}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                  title="Previous batch"
-                                >
-                                  <ChevronLeft size={14} />
-                                </button>
-                                <span className="text-[11px] font-bold text-slate-700 px-2">
-                                  Page {safeDebtorsPage} of {debtorsTotalPages}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setDebtorsCurrentPage(prev => Math.min(debtorsTotalPages, prev + 1))}
-                                  disabled={safeDebtorsPage >= debtorsTotalPages}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                  title="Next batch"
-                                >
-                                  <ChevronRight size={14} />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-
-                          {filteredLedger.length === 0 ? (
-                            <div className="p-20 text-center space-y-4">
-                              <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
-                              <p className="text-slate-400 font-bold uppercase tracking-wider text-xs">No debtors found matching criteria!</p>
-                            </div>
-                          ) : (
-                            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-                              <table className="w-full text-left border-collapse">
-                                <thead>
-                                  <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100 sticky top-0 bg-white z-10">
-                                    <th className="px-6 py-3">Client details</th>
-                                    <th className="px-6 py-3">Premise Name</th>
-                                    <th className="px-6 py-3">Permit No</th>
-                                    <th className="px-6 py-3">Arrears Period(s)</th>
-                                    <th className="px-6 py-3 text-right">Balance Due</th>
-                                    <th className="px-6 py-3 text-right">Actions</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                                  {paginatedDebtors.map((item, idx) => {
-                                    const matchingClient = clients.find(c => 
-                                      c.id === item.id || 
-                                      String(c.clientName || '').toLowerCase() === String(item.dboName || '').toLowerCase()
-                                    );
-                                    return (
-                                      <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                        <td className="px-6 py-3.5">
-                                          <div className="text-slate-900 font-black">{item.dboName}</div>
-                                          <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
-                                            <Phone size={10} /> {item.tel || 'No phone'}
-                                          </div>
-                                        </td>
-                                        <td className="px-6 py-3.5">
-                                          <div className="text-slate-800">{item.premiseName || 'N/A'}</div>
-                                          <div className="text-[10px] text-slate-400 font-medium mt-0.5">
-                                            {item.county || 'N/A'}
-                                          </div>
-                                        </td>
-                                        <td className="px-6 py-3.5 text-slate-500 font-mono text-[11px]">
-                                          {item.permitNo}
-                                        </td>
-                                        <td className="px-6 py-3.5 text-slate-500 font-medium">
-                                          {item.arrearsPeriod || 'Current'}
-                                        </td>
-                                        <td className="px-6 py-3.5 text-right text-rose-600 font-black">
-                                          {formatCurrency(item.totalArrears)}
-                                        </td>
-                                        <td className="px-6 py-3.5 text-right">
-                                          <div className="flex items-center justify-end gap-1.5">
-                                            {matchingClient && (
-                                              <button
-                                                onClick={() => {
-                                                  setSelectedStatementClientId(matchingClient.id);
-                                                  setActiveSubTab('statements');
-                                                }}
-                                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black rounded-lg text-[9px] uppercase tracking-wider transition-all"
-                                                title="View Client Statement"
-                                              >
-                                                Statement
-                                              </button>
-                                            )}
-                                            {item.debitNoteNo?.startsWith('DN/RET/') ? (
-                                              <>
-                                                <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-lg text-[9px] font-black uppercase tracking-wider border border-emerald-100 flex items-center gap-1">
-                                                  <CheckCircle2 size={10} className="text-emerald-500 shrink-0" /> Derived
-                                                </span>
-                                                <button
-                                                  onClick={() => handleEditDebtor(item)}
-                                                  className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all"
-                                                  title="Edit Ledger Entry"
-                                                >
-                                                  <PenTool className="w-3.5 h-3.5" />
-                                                </button>
-                                              </>
-                                            ) : (
-                                              <>
-                                                <button
-                                                  onClick={() => handleEditDebtor(item)}
-                                                  className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-all"
-                                                  title="Edit Ledger Entry"
-                                                >
-                                                  <PenTool className="w-3.5 h-3.5" />
-                                                </button>
-                                                <button
-                                                  onClick={async () => {
-                                                    if (confirm("Are you sure you want to delete this ledger entry?")) {
-                                                      const activeList = getIntegratedDebtors();
-                                                      const updated = activeList.filter(d => d.id !== item.id);
-                                                      const manualOnly = updated.filter(x => !x.debitNoteNo?.startsWith('DN/RET/'));
-                                                      if (onDebtorUpdate) {
-                                                        await onDebtorUpdate(manualOnly);
-                                                      } else {
-                                                        setLocalDebtors(manualOnly);
-                                                      }
-                                                    }
-                                                  }}
-                                                  className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-all"
-                                                  title="Delete Ledger Entry"
-                                                >
-                                                  <Trash2 className="w-3.5 h-3.5" />
-                                                </button>
-                                              </>
-                                            )}
-                                            <button
-                                              onClick={() => {
-                                                navigate(`/payment-agreement?bypassPermit=${encodeURIComponent(item.permitNo)}`);
-                                              }}
-                                              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-black rounded-lg text-[10px] uppercase tracking-wider flex items-center gap-1 transition-all"
-                                              title="Bypass login & create debt agreement from admin side"
-                                            >
-                                              <ExternalLink className="w-3 h-3 animate-pulse" /> Bypass & Create Agreement
-                                            </button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-
-                          {/* Bottom Pagination & Batch Range Controls for Debtors Ledger */}
-                          {totalDebtors > 0 && (
-                            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-slate-100 bg-slate-50/50 text-xs">
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-600 font-semibold text-xs">Show</span>
-                                <select
-                                  value={debtorsBatchSize}
-                                  onChange={(e) => {
-                                    setDebtorsBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
-                                    setDebtorsCurrentPage(1);
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
-                                >
-                                  <option value={10}>10</option>
-                                  <option value={25}>25</option>
-                                  <option value={50}>50</option>
-                                  <option value={100}>100</option>
-                                </select>
-                                <span className="text-slate-600 font-semibold text-xs">entries</span>
-                                <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
-                                  (Showing {totalDebtors === 0 ? 0 : (safeDebtorsPage - 1) * debtorsBatchSize + 1}–{Math.min(safeDebtorsPage * debtorsBatchSize, totalDebtors)} of {totalDebtors.toLocaleString()} debtors)
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setDebtorsCurrentPage(1)}
-                                  disabled={safeDebtorsPage <= 1}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
-                                >
-                                  First
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setDebtorsCurrentPage(prev => Math.max(1, prev - 1))}
-                                  disabled={safeDebtorsPage <= 1}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                >
-                                  <ChevronLeft size={14} />
-                                </button>
-                                <span className="text-[11px] font-bold text-slate-700 px-2">
-                                  Page {safeDebtorsPage} of {debtorsTotalPages}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setDebtorsCurrentPage(prev => Math.min(debtorsTotalPages, prev + 1))}
-                                  disabled={safeDebtorsPage >= debtorsTotalPages}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                >
-                                  <ChevronRight size={14} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setDebtorsCurrentPage(debtorsTotalPages)}
-                                  disabled={safeDebtorsPage >= debtorsTotalPages}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
-                                >
-                                  Last
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      );
-                  })()}
-                </div>
-
-              </div>
+                );
+              })()}
 
               {/* Add/Edit Debtor Modal */}
               {isAddingDebtor && (
@@ -2477,7 +2792,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                   <div className="bg-white p-8 rounded-[40px] shadow-2xl max-w-2xl w-full space-y-6 animate-in zoom-in-95 overflow-y-auto max-h-[90vh]">
                     <div className="flex justify-between items-center">
                       <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">{editingDebtorId ? 'Edit Ledger Entry' : 'Add New Ledger Entry'}</h3>
-                      <button onClick={() => { setIsAddingDebtor(false); setEditingDebtorId(null); }} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-5 h-5" /></button>
+                      <button onClick={() => { setIsAddingDebtor(false); setEditingDebtorId(null); }} className="p-2 hover:bg-slate-100 rounded-full cursor-pointer"><X className="w-5 h-5" /></button>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-1">
@@ -2515,7 +2830,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       <div className="md:col-span-2 border-t pt-4 mt-2">
                         <div className="flex justify-between items-center mb-4">
                           <h4 className="text-xs font-black text-slate-800 uppercase">Installment Configuration</h4>
-                          <button onClick={addInstallmentRow} className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase flex items-center">
+                          <button onClick={addInstallmentRow} className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase flex items-center cursor-pointer">
                             <Plus className="w-3 h-3 mr-1" /> Add Installment
                           </button>
                         </div>
@@ -2535,7 +2850,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                                 <input type="number" value={inst.amount} onChange={e => updateInstallmentRow(idx, 'amount', Number(e.target.value))} className="w-full px-3 py-2 bg-white border rounded-lg font-bold text-xs" placeholder="0.00" />
                               </div>
                               <div className="md:col-span-1 flex justify-end">
-                                <button onClick={() => removeInstallmentRow(idx)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-all">
+                                <button onClick={() => removeInstallmentRow(idx)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-all cursor-pointer">
                                   <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
@@ -2547,7 +2862,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                     <button 
                       disabled={isSavingDebtor}
                       onClick={handleAddDebtor} 
-                      className="w-full py-4 bg-emerald-600 text-white font-black rounded-2xl shadow-lg hover:bg-emerald-700 transition-all uppercase tracking-widest text-xs flex items-center justify-center disabled:opacity-50"
+                      className="w-full py-4 bg-emerald-600 text-white font-black rounded-2xl shadow-lg hover:bg-emerald-700 transition-all uppercase tracking-widest text-xs flex items-center justify-center disabled:opacity-50 cursor-pointer"
                     >
                       {isSavingDebtor ? (
                         <>
@@ -2562,406 +2877,228 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                 </div>
               )}
 
-            </div>
-          )}
-
-          {/* ==================== SUB-TAB: CLIENT STATEMENTS ==================== */}
-          {activeSubTab === 'statements' && (
-            <div className="space-y-6 animate-in fade-in duration-300">
-              
-              {/* Selector Bar */}
-              <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col lg:flex-row justify-between items-center gap-4 print:hidden">
-                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 w-full lg:w-auto">
-                  <span className="text-xs font-black text-slate-400 uppercase tracking-widest shrink-0 self-center">Select Client:</span>
-                  <select
-                    value={selectedStatementClientId}
-                    onChange={(e) => setSelectedStatementClientId(e.target.value)}
-                    className="w-full md:w-80 px-4 py-2.5 rounded-2xl border border-slate-200 text-xs font-bold text-slate-700 bg-slate-50 outline-none"
-                  >
-                    {clients.map(c => (
-                      <option key={c.id} value={c.id}>{c.clientName} ({c.premiseName})</option>
-                    ))}
-                  </select>
-
-                  <span className="text-xs font-black text-slate-400 uppercase tracking-widest shrink-0 self-center">Year:</span>
-                  <select
-                    value={statementFilterYear}
-                    onChange={(e) => setStatementFilterYear(e.target.value)}
-                    className="w-full md:w-32 px-4 py-2.5 rounded-2xl border border-slate-200 text-xs font-bold text-slate-700 bg-slate-50 outline-none"
-                  >
-                    <option value="All">All Years</option>
-                    {yearsList.map(y => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Search option for statements ledger */}
-                <div className="relative w-full md:w-72">
-                  <Search className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search client statement..."
-                    value={statementSearchQuery}
-                    onChange={(e) => setStatementSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-10 py-2.5 rounded-2xl border border-slate-200 text-xs font-semibold text-slate-700 outline-none focus:border-slate-300 bg-slate-50"
-                  />
-                  {statementSearchQuery && (
-                    <button onClick={() => setStatementSearchQuery('')} className="absolute right-3.5 top-3 text-slate-400 hover:text-slate-600">
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex gap-3 w-full md:w-auto">
-                  <button
-                    onClick={exportStatementToCSV}
-                    className="flex-1 md:flex-none flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest px-4 py-2.5 rounded-xl transition-all shadow-sm border border-emerald-500"
-                  >
-                    <Download size={14} /> Export Excel
-                  </button>
-                  <button
-                    onClick={() => window.print()}
-                    className="flex-1 md:flex-none flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest px-4 py-2.5 rounded-xl transition-all shadow-sm border border-slate-200"
-                  >
-                    <Printer size={14} /> Print Ledger (PDF)
-                  </button>
-                </div>
-              </div>
-
-              {statementClientObj ? (
-                <div className="space-y-6 print:hidden">
-                  
-                  {/* Top Summary Bar - Full Width Span */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    
-                    {/* Selected Client Card */}
-                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-center space-y-2">
-                      <div className="text-[10px] bg-slate-100 border text-slate-600 font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider w-fit">
-                        {statementClientObj.premiseCategory}
-                      </div>
+              {/* Debtors CSV Import Modal */}
+              {isDebtorImportModalOpen && (
+                <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[300] flex items-center justify-center p-4">
+                  <div className="bg-white p-6 sm:p-8 rounded-[32px] shadow-2xl max-w-2xl w-full space-y-5 animate-in zoom-in-95 overflow-y-auto max-h-[90vh]">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
                       <div>
-                        <h4 className="text-xl font-black text-slate-800 leading-snug">{statementClientObj.clientName}</h4>
-                        <p className="text-xs font-semibold text-slate-400 mt-0.5">{statementClientObj.premiseName}</p>
-                      </div>
-                    </div>
-
-                    {/* Filing Compliance KPI Card */}
-                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-center space-y-2">
-                      <div className="flex justify-between items-center">
-                        <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">Filing Compliance</h4>
-                        <span className="text-2xl font-black text-slate-800">{complianceRate}%</span>
-                      </div>
-                      <div className="text-xs font-bold text-slate-400">
-                        ({statementReturns.length} of {stmtTotalMonths} periods filed)
-                      </div>
-                      <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full transition-all duration-500 ${
-                            complianceRate >= 90 ? 'bg-emerald-500' : complianceRate >= 60 ? 'bg-amber-500' : 'bg-rose-500'
-                          }`}
-                          style={{ width: `${complianceRate}%` }}
-                        ></div>
-                      </div>
-                    </div>
-
-                    {/* Missing / Unfiled Periods Card */}
-                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-center space-y-2">
-                      <div className="flex justify-between items-center">
-                        <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">Missing / Unfiled Periods</h4>
-                        <span className="text-[10px] bg-rose-50 border border-rose-100 text-rose-600 px-2.5 py-0.5 rounded-full font-black">
-                          {stmtUnfiledPeriods.length} months
-                        </span>
-                      </div>
-
-                      {stmtUnfiledPeriods.length === 0 ? (
-                        <div className="text-slate-400 text-xs font-bold py-1">
-                          🎉 This client's returns ledger is up to date!
+                        <div className="flex items-center gap-2 text-[10px] font-bold tracking-wider uppercase text-blue-600 mb-0.5">
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Batch Import</span>
                         </div>
-                      ) : (
-                        <div className="max-h-24 overflow-y-auto space-y-1.5 pr-1">
-                          {stmtUnfiledPeriods.map((period, idx) => (
-                            <div key={idx} className="bg-rose-50/50 border border-rose-100/50 rounded-xl px-3 py-1.5 flex justify-between items-center text-xs font-bold text-rose-700">
-                              <span>{period.month} {period.year}</span>
-                              <button
-                                onClick={() => openAddModal(statementClientObj.id, period.year, period.month)}
-                                className="bg-white hover:bg-rose-100 border border-rose-200 text-rose-700 px-2 py-0.5 rounded text-[9px] uppercase tracking-wider transition-all"
-                              >
-                                File Now
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Full Width Filed Returns Ledger Statement */}
-                  <div className="w-full bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden print:shadow-none print:border-none">
-                    
-                    {/* Header Details */}
-                    <div className="p-8 border-b border-slate-100 bg-slate-50/50 space-y-4">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h3 className="text-xl font-black text-slate-800">Client Account Ledger</h3>
-                          <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                            Detailed transaction statements from filed returns
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          {/* Statement date on right side */}
-                          <div className="text-[9px] text-slate-400 font-bold mt-0.5">Statement Date: {new Date().toLocaleDateString()}</div>
-                        </div>
-                      </div>
-
-                      {/* Summary Widgets Grid */}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-white p-4 rounded-3xl border border-slate-100">
-                        <div>
-                          <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Total Qty</div>
-                          <div className="text-sm font-extrabold text-slate-800 mt-0.5">{stmtTotalQty.toLocaleString()} Ltrs</div>
-                        </div>
-                        <div>
-                          <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Total Invoiced</div>
-                          <div className="text-sm font-black text-slate-800 mt-0.5">{formatCurrency(stmtTotalInvoiced)}</div>
-                        </div>
-                        <div>
-                          <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Total Paid</div>
-                          <div className="text-sm font-extrabold text-emerald-600 mt-0.5">{formatCurrency(stmtTotalPaid)}</div>
-                        </div>
-                        <div>
-                          <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Balance Due</div>
-                          <div className="text-sm font-black text-amber-600 mt-0.5">{formatCurrency(stmtTotalOutstanding)}</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Table of transactions */}
-                    {filteredStatementReturns.length === 0 ? (
-                      <div className="p-20 text-center text-slate-400 text-xs font-bold space-y-2">
-                        <FileSpreadsheet className="w-10 h-10 text-slate-300 mx-auto" />
-                        <div>No returns have been filed for this client yet.</div>
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="bg-slate-50 text-slate-400 text-[9px] font-black uppercase tracking-widest border-b border-slate-100">
-                              <th className="px-4 py-4">Client Name</th>
-                              <th className="px-4 py-4">Filing Period</th>
-                              <th className="px-4 py-4 text-right">Qty</th>
-                              <th className="px-4 py-4 text-right">Invoice Amount</th>
-                              <th className="px-4 py-4 text-right">Paid Amount</th>
-                              <th className="px-4 py-4 text-right">CJ Adj</th>
-                              <th className="px-4 py-4 text-right">Outstanding Balance</th>
-                              <th className="px-4 py-4">Status</th>
-                              <th className="px-4 py-4">Missing Periods</th>
-                              <th className="px-4 py-4 text-right">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-[11px] font-bold text-slate-700">
-                            {filteredStatementReturns.map((ret, idx) => (
-                              <tr key={idx} className="hover:bg-slate-50/20 text-xs">
-                                <td className="px-4 py-3.5 font-bold text-slate-900">{statementClientObj.clientName}</td>
-                                <td className="px-4 py-3.5 font-extrabold text-slate-800">{ret.period} {ret.year}</td>
-                                <td className="px-4 py-3.5 text-right font-mono">{ret.qty.toLocaleString()}</td>
-                                <td className="px-4 py-3.5 text-right font-black text-slate-900">{formatCurrency(ret.invoiceAmount)}</td>
-                                <td className="px-4 py-3.5 text-right font-bold text-emerald-600">{formatCurrency(ret.paymentAmount)}</td>
-                                <td className="px-4 py-3.5 text-right text-slate-500">{formatCurrency(ret.lessCF)}</td>
-                                <td className={`px-4 py-3.5 text-right font-black ${ret.outstandingBalance > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
-                                  {formatCurrency(ret.outstandingBalance)}
-                                </td>
-                                <td className="px-4 py-3.5">
-                                  <span className={`inline-flex px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${
-                                    ret.paymentStatus === 'Fully Paid' 
-                                      ? 'bg-emerald-50 text-emerald-600'
-                                      : ret.paymentStatus === 'Partially Paid'
-                                      ? 'bg-blue-50 text-blue-600'
-                                      : 'bg-rose-50 text-rose-600'
-                                  }`}>
-                                    {ret.paymentStatus}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3.5">
-                                  {stmtUnfiledPeriods.length > 0 ? (
-                                    <span className="bg-rose-50 border border-rose-100 text-rose-700 px-1.5 py-0.5 rounded text-[9px] font-black uppercase">
-                                      {stmtUnfiledPeriods.length} Missing
-                                    </span>
-                                  ) : (
-                                    <span className="bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded text-[9px] font-black uppercase">
-                                      Up to Date
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3.5 text-right">
-                                  <div className="flex justify-end gap-1.5">
-                                    <button
-                                      onClick={() => openEditModal(ret)}
-                                      className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded text-[9px] font-black uppercase tracking-wider transition-all"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteReturn(ret.id)}
-                                      className="p-1 hover:bg-rose-50 rounded text-slate-400 hover:text-rose-600 transition-colors"
-                                    >
-                                      <Trash2 size={11} />
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
-                  </div>
-
-                  {/* PRINT-ONLY LEDGER STATEMENT PDF */}
-                  <div className="hidden print:block bg-white text-slate-950 p-4 font-sans text-xs">
-                    {/* KDB Logo & Header */}
-                    <div className="text-center border-b-2 border-slate-950 pb-4 mb-6">
-                      <h1 className="text-2xl font-extrabold tracking-tight text-slate-950">KENYA DAIRY BOARD</h1>
-                      <p className="text-[10px] text-slate-500 mt-1">Statement Date: {new Date().toLocaleDateString()}</p>
-                    </div>
-
-                    {/* Client details header */}
-                    <div className="space-y-1 mb-6">
-                      <div><span className="font-bold text-slate-600">Statement For:</span> <span className="font-extrabold text-slate-950">{statementClientObj.clientName}</span></div>
-                      <div><span className="font-bold text-slate-600">Permit No:</span> <span className="font-mono font-extrabold text-slate-950">{statementClientObj.permitNumber || statementClientObj.id}</span></div>
-                      <div><span className="font-bold text-slate-600">Premise Name:</span> <span className="text-slate-800">{statementClientObj.premiseName}</span></div>
-                      <div><span className="font-bold text-slate-600">Location:</span> <span className="text-slate-800">{statementClientObj.location}, {statementClientObj.county}</span></div>
-                    </div>
-
-                    {/* Table of transactions */}
-                    {filteredStatementReturns.length === 0 ? (
-                      <div className="p-10 text-center text-slate-500 font-bold border border-dashed border-slate-200 rounded-xl mb-6">
-                        No returns found for the selected filter.
-                      </div>
-                    ) : (
-                      <table className="w-full text-left border-collapse border border-slate-300 mb-6">
-                        <thead>
-                          <tr className="bg-slate-100 text-[9px] font-black uppercase tracking-wider border-b-2 border-slate-300">
-                            <th className="border border-slate-300 px-3 py-2">Filing Period</th>
-                            <th className="border border-slate-300 px-3 py-2 text-right">Qty</th>
-                            <th className="border border-slate-300 px-3 py-2 text-right">Invoice Amount</th>
-                            <th className="border border-slate-300 px-3 py-2 text-right">Paid Amount</th>
-                            <th className="border border-slate-300 px-3 py-2 text-right">Outstanding Balance</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200 text-[10px] text-slate-800">
-                          {filteredStatementReturns.map((ret, idx) => {
-                            // paid amount (match invoiced amount where CF is present. dont show CF)
-                            const displayPaid = ret.lessCF && ret.lessCF !== 0 ? ret.invoiceAmount : ret.paymentAmount;
-                            const displayOutstanding = ret.lessCF && ret.lessCF !== 0 ? 0 : ret.outstandingBalance;
-
-                            return (
-                              <tr key={idx} className="hover:bg-slate-50">
-                                <td className="border border-slate-300 px-3 py-2 font-black">
-                                  {ret.period} {ret.year}
-                                </td>
-                                <td className="border border-slate-300 px-3 py-2 text-right font-mono">{ret.qty.toLocaleString()}</td>
-                                <td className="border border-slate-300 px-3 py-2 text-right font-extrabold">{formatCurrency(ret.invoiceAmount)}</td>
-                                <td className="border border-slate-300 px-3 py-2 text-right font-black text-slate-900">
-                                  {formatCurrency(displayPaid)}
-                                </td>
-                                <td className={`border border-slate-300 px-3 py-2 text-right font-black ${displayOutstanding > 0 ? 'text-amber-700' : 'text-slate-500'}`}>
-                                  {formatCurrency(displayOutstanding)}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    )}
-
-                    {/* Summary Totals block */}
-                    <div className="flex justify-end mb-8 break-inside-avoid">
-                      <div className="w-1/2 border border-slate-300 rounded-xl bg-slate-50 p-4 space-y-2">
-                        <div className="flex justify-between font-bold text-slate-600">
-                          <span>Total Invoiced:</span>
-                          <span className="font-extrabold text-slate-950">{formatCurrency(stmtTotalInvoiced)}</span>
-                        </div>
-                        <div className="flex justify-between font-bold text-slate-600">
-                          <span>Total Paid (Adj):</span>
-                          <span className="font-extrabold text-slate-950">
-                            {formatCurrency(
-                              statementReturns.reduce((sum, r) => {
-                                const displayPaid = r.lessCF && r.lessCF !== 0 ? r.invoiceAmount : r.paymentAmount;
-                                return sum + displayPaid;
-                              }, 0)
-                            )}
-                          </span>
-                        </div>
-                        <div className="flex justify-between font-black text-slate-900 border-t pt-2 text-sm">
-                          <span>Outstanding Balance:</span>
-                          <span className="text-amber-800">
-                            {formatCurrency(
-                              statementReturns.reduce((sum, r) => {
-                                const displayOutstanding = r.lessCF && r.lessCF !== 0 ? 0 : r.outstandingBalance;
-                                return sum + displayOutstanding;
-                              }, 0)
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Missing / Unfiled Periods (MUST BE LAST ITEM) */}
-                    <div className="mt-8 border border-slate-300 rounded-xl p-5 break-inside-avoid bg-rose-50/20">
-                      <h3 className="text-[10px] font-black uppercase tracking-wider text-slate-900 mb-3 flex justify-between items-center border-b pb-1.5">
-                        <span>Missing / Unfiled Periods</span>
-                        <span className="text-[9px] bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full font-black">
-                          {stmtUnfiledPeriods.length} Outstanding Periods
-                        </span>
-                      </h3>
-
-                      {stmtUnfiledPeriods.length === 0 ? (
-                        <p className="text-[10px] font-bold text-slate-500">
-                          🎉 All operations periods from {statementClientObj.startMonth} {statementClientObj.startYear} are fully filed and up-to-date. Compliant!
+                        <h3 className="text-xl font-black text-slate-800 tracking-tight">Import Debtors Ledger CSV</h3>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Upload a CSV file containing dairy business operators in arrears
                         </p>
-                      ) : (
-                        <div className="grid grid-cols-3 gap-3 text-[10px] font-bold text-rose-800">
-                          {stmtUnfiledPeriods.map((period, idx) => (
-                            <div key={idx} className="bg-white border border-rose-200 rounded-lg p-2 flex justify-between items-center">
-                              <span>{period.month} {period.year}</span>
-                              <span className="text-[8px] bg-rose-50 text-rose-600 px-1 py-0.5 rounded border border-rose-100 font-extrabold uppercase">Unfiled</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      </div>
+                      <button 
+                        onClick={() => {
+                          setIsDebtorImportModalOpen(false);
+                          setDebtorCsvFile(null);
+                          setParsedDebtors([]);
+                          setDebtorImportErrors([]);
+                          setDebtorImportWarnings([]);
+                        }}
+                        className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
                     </div>
 
-                    {/* Signature Section */}
-                    <div className="mt-12 grid grid-cols-2 gap-10 break-inside-avoid">
-                      <div className="text-center pt-8 border-t border-slate-300">
-                        <p className="font-bold text-[9px] text-slate-500 uppercase tracking-widest">Client Signature</p>
-                        <div className="h-12 flex items-center justify-center">
-                          <span className="text-slate-300 italic text-xs">Acknowledge Statement</span>
+                    {/* Sample CSV Download Helper */}
+                    <div className="flex items-center justify-between bg-blue-50/70 p-3.5 rounded-2xl border border-blue-100">
+                      <div className="flex items-center gap-2.5">
+                        <FileSpreadsheet className="w-5 h-5 text-blue-600 shrink-0" />
+                        <div>
+                          <p className="text-xs font-bold text-blue-900">Need the standard column format?</p>
+                          <p className="text-[11px] text-blue-700/80">Download our sample template with standard KDB debtor headers.</p>
                         </div>
-                        <div className="border-t border-dashed w-3/4 mx-auto mt-2"></div>
-                        <p className="text-[8px] text-slate-400 mt-1 font-bold">Date: ____/____/20___</p>
                       </div>
-                      <div className="text-center pt-8 border-t border-slate-300">
-                        <p className="font-bold text-[9px] text-slate-500 uppercase tracking-widest">KDB Authorized Official</p>
-                        <div className="h-12 flex items-center justify-center">
-                          <span className="text-slate-400 font-extrabold tracking-widest text-[8px] uppercase">Verified and Seal Approved</span>
+                      <button
+                        type="button"
+                        onClick={downloadDebtorSampleCSV}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-blue-100/50 text-blue-700 text-xs font-bold border border-blue-200 transition-all shadow-2xs shrink-0 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Sample CSV</span>
+                      </button>
+                    </div>
+
+                    {/* Drag & Drop File Input */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">
+                        Select CSV File
+                      </label>
+                      <label className="border-2 border-dashed border-slate-300 hover:border-blue-500 hover:bg-blue-50/20 rounded-2xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all group">
+                        <Upload className="w-8 h-8 text-slate-400 group-hover:text-blue-500 mb-2 transition-colors" />
+                        <span className="text-xs font-bold text-slate-700 group-hover:text-blue-600">
+                          {debtorCsvFile ? debtorCsvFile.name : 'Click to browse or drag and drop CSV file here'}
+                        </span>
+                        <span className="text-[11px] text-slate-400 mt-1">
+                          Supported headers: DBO Name, Premise Name, Permit No, Location, County, Arrears Periods, Outstanding Balance (KES), Debit Note No, Telephone
+                        </span>
+                        <input
+                          type="file"
+                          accept=".csv, .txt"
+                          onChange={handleDebtorCSVUpload}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+
+                    {/* Import Mode Selection */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block ml-1">
+                        Import Mode
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setDebtorImportMode('append')}
+                          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                            debtorImportMode === 'append'
+                              ? 'border-blue-500 bg-blue-50/40 text-blue-900 shadow-2xs'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="text-xs font-black">Append & Merge</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            Keep existing entries, updating matching permit/name records
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDebtorImportMode('replace')}
+                          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                            debtorImportMode === 'replace'
+                              ? 'border-rose-500 bg-rose-50/40 text-rose-900 shadow-2xs'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="text-xs font-black">Replace Entire Ledger</div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            Clear all current records and replace with file entries
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Errors Display */}
+                    {debtorImportErrors.length > 0 && (
+                      <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-rose-800 text-xs space-y-1">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <AlertTriangle className="w-4 h-4 text-rose-600" />
+                          <span>CSV Import Errors:</span>
                         </div>
-                        <div className="border-t border-dashed w-3/4 mx-auto mt-2"></div>
-                        <p className="text-[8px] text-slate-400 mt-1 font-bold">Branch Stamp</p>
+                        {debtorImportErrors.map((err, idx) => (
+                          <div key={idx} className="text-[11px] pl-5">{err}</div>
+                        ))}
                       </div>
+                    )}
+
+                    {/* Warnings Display */}
+                    {debtorImportWarnings.length > 0 && (
+                      <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-800 text-xs space-y-1 max-h-32 overflow-y-auto">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <AlertTriangle className="w-4 h-4 text-amber-600" />
+                          <span>CSV Warnings ({debtorImportWarnings.length}):</span>
+                        </div>
+                        {debtorImportWarnings.slice(0, 5).map((w, idx) => (
+                          <div key={idx} className="text-[11px] pl-5">{w}</div>
+                        ))}
+                        {debtorImportWarnings.length > 5 && (
+                          <div className="text-[10px] text-amber-600 pl-5 font-semibold">
+                            +{debtorImportWarnings.length - 5} more warnings
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Parsed Preview Table */}
+                    {parsedDebtors.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">
+                            Parsed Records Preview ({parsedDebtors.length} total)
+                          </span>
+                          <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                            Valid format
+                          </span>
+                        </div>
+                        <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-48 overflow-y-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase border-b border-slate-200 sticky top-0">
+                              <tr>
+                                <th className="p-2.5">DBO Name</th>
+                                <th className="p-2.5">Premise</th>
+                                <th className="p-2.5">Permit No</th>
+                                <th className="p-2.5 text-right">Arrears (KES)</th>
+                                <th className="p-2.5">Period</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                              {parsedDebtors.slice(0, 6).map((d, idx) => (
+                                <tr key={idx} className="hover:bg-slate-50/50">
+                                  <td className="p-2.5 font-bold text-slate-900">{d.dboName}</td>
+                                  <td className="p-2.5 text-slate-500">{d.premiseName}</td>
+                                  <td className="p-2.5 font-mono text-[11px]">{d.permitNo}</td>
+                                  <td className="p-2.5 text-right font-black text-rose-600">
+                                    {d.totalArrears.toLocaleString()}
+                                  </td>
+                                  <td className="p-2.5 text-slate-500">{d.arrearsPeriod}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {parsedDebtors.length > 6 && (
+                          <p className="text-[10px] text-slate-400 text-center font-medium">
+                            Showing first 6 of {parsedDebtors.length} records to be imported
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Modal Action Buttons */}
+                    <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsDebtorImportModalOpen(false);
+                          setDebtorCsvFile(null);
+                          setParsedDebtors([]);
+                        }}
+                        className="px-5 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 font-bold text-xs text-slate-600 transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={parsedDebtors.length === 0 || isImportingDebtors}
+                        onClick={handleConfirmDebtorImport}
+                        className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-wider transition-all shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer"
+                      >
+                        {isImportingDebtors ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Importing...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-4 h-4" />
+                            <span>Import {parsedDebtors.length > 0 ? `${parsedDebtors.length} Debtors` : ''}</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
-
-                </div>
-              ) : (
-                <div className="bg-white rounded-[40px] border border-slate-100 p-20 text-center text-slate-400 font-bold text-xs uppercase tracking-wider">
-                  No registered clients available to generate statement
                 </div>
               )}
 
             </div>
           )}
+
         </>
       )}
 

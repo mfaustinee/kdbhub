@@ -14,7 +14,6 @@ import { DebtorsModule } from './DebtorsModule';
 import { ValidationsCounterView } from './ValidationsCounterView';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
-import { SecuritySettingsCard } from './SecuritySettingsCard';
 import { GeneralAccessQrCard } from './GeneralAccessQrCard';
 
 interface AdminDashboardProps {
@@ -2776,9 +2775,6 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
 
                 {/* General System Access QR Code (Permanent / No Expiration Timer) */}
                 <GeneralAccessQrCard />
-
-                {/* Security & Access Controls Checklist (Bot Blocking, HTTP Headers, MFA, IP Whitelisting & Rate Limiting) */}
-                <SecuritySettingsCard />
 
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
