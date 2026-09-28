@@ -10,9 +10,7 @@ import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
 import { downloadAgreementPDF, downloadClosurePDF } from '../services/pdf';
 import { numberToWords } from '../utils/numberToWords';
-import { LicensedClientsModule } from './LicensedClientsModule';
-import { ClientReturnsModule } from './ClientReturnsModule';
-import { ClientsAndReturnsHub } from './ClientsAndReturnsHub';
+import { DebtorsModule } from './DebtorsModule';
 import { ValidationsCounterView } from './ValidationsCounterView';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
@@ -49,7 +47,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onStaffUpdate 
 }) => {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'requests_to_approve' | 'clients_returns' | 'clients' | 'returns' | 'reports' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
+  const [tab, setTab] = useState<'requests_to_approve' | 'debtors' | 'reports' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
   const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations'>('agreements');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -63,9 +61,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       case 'data_validation': return 'Data Validation Form';
       case 'scope_disclosure': return 'Scope Disclosure Form';
       case 'requests_to_approve': return 'Requests to Approve';
-      case 'clients_returns':
-      case 'clients':
-      case 'returns': return 'Clients & Returns Hub';
+      case 'debtors': return 'Debtors Ledger';
       case 'reports': return 'Validations Counter';
       case 'settings': return 'System Settings';
       default: return 'Admin Workspace';
@@ -1020,14 +1016,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button 
-              onClick={() => changeTab('clients_returns')} 
-              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
+              onClick={() => changeTab('debtors')} 
+              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'debtors' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
             >
               <div className="flex items-center">
-                <Building className="w-4 h-4 mr-3 shrink-0" />
-                Clients & Returns Hub
+                <AlertTriangle className="w-4 h-4 mr-3 shrink-0 text-amber-500" />
+                Debtors Ledger
               </div>
-              {(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') && <Check className="w-4 h-4 text-emerald-400" />}
+              {tab === 'debtors' && <Check className="w-4 h-4 text-emerald-400" />}
             </button>
 
             <button 
@@ -1165,12 +1161,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button 
-              onClick={() => changeTab('clients_returns')} 
-              title="Clients & Returns Hub"
-              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+              onClick={() => changeTab('debtors')} 
+              title="Debtors Ledger"
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'debtors' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <Building className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
-              {!isSidebarCollapsed && <span>Clients & Returns</span>}
+              <AlertTriangle className={`w-3.5 h-3.5 shrink-0 text-amber-500 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
+              {!isSidebarCollapsed && <span>Debtors Ledger</span>}
             </button>
 
             <button 
@@ -1748,10 +1744,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {(tab === 'clients_returns' || tab === 'clients' || tab === 'returns') && (
+      {tab === 'debtors' && (
         <div className="animate-in fade-in duration-300">
-          <ClientsAndReturnsHub 
-            initialTab={tab === 'returns' ? 'returns' : 'clients'} 
+          <DebtorsModule 
             debtors={debtors} 
             onDebtorUpdate={onDebtorUpdate} 
             onRefresh={onRefresh}

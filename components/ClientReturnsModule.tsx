@@ -50,6 +50,7 @@ export interface ClientReturnsModuleProps {
   defaultSubTab?: 'registry' | 'debtors' | 'statements';
   standalone?: boolean;
   hideNavigationHeader?: boolean;
+  debtorsOnly?: boolean;
 }
 
 export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
@@ -63,14 +64,15 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   onClientsChange,
   defaultSubTab = 'registry',
   standalone = true,
-  hideNavigationHeader = false
+  hideNavigationHeader = false,
+  debtorsOnly = false
 }) => {
   const navigate = useNavigate();
   const [clients, setClients] = useState<LicensedClient[]>(propClients || []);
   const [returns, setReturns] = useState<ClientReturn[]>(propReturns || []);
   const [localDebtors, setLocalDebtors] = useState<DebtorRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(propLoading !== undefined ? propLoading : (standalone || !propClients || !propReturns));
-  const [activeSubTab, setActiveSubTab] = useState<'registry' | 'debtors' | 'statements'>(defaultSubTab);
+  const [activeSubTab, setActiveSubTab] = useState<'registry' | 'debtors' | 'statements'>(debtorsOnly ? 'debtors' : defaultSubTab);
 
   // Sync state when props update
   useEffect(() => {
@@ -95,10 +97,12 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   }, [propLoading]);
 
   useEffect(() => {
-    if (defaultSubTab) {
+    if (debtorsOnly) {
+      setActiveSubTab('debtors');
+    } else if (defaultSubTab) {
       setActiveSubTab(defaultSubTab);
     }
-  }, [defaultSubTab]);
+  }, [defaultSubTab, debtorsOnly]);
 
   // Search & Filter state for returns registry
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -138,18 +142,14 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   const [debtorFilterYear, setDebtorFilterYear] = useState<string>('All');
   const [debtorFilterMonth, setDebtorFilterMonth] = useState<string>('All');
   const [debtorSearchQuery, setDebtorSearchQuery] = useState<string>('');
-  const [debtorSubView, setDebtorSubView] = useState<'non-filers' | 'debtors-ledger'>('non-filers');
 
-  // Pagination states for Non-Filers and Debtors Ledger
-  const [nonFilersBatchSize, setNonFilersBatchSize] = useState<10 | 25 | 50 | 100>(25);
-  const [nonFilersCurrentPage, setNonFilersCurrentPage] = useState<number>(1);
+  // Pagination states for Debtors Ledger
   const [debtorsBatchSize, setDebtorsBatchSize] = useState<10 | 25 | 50 | 100>(25);
   const [debtorsCurrentPage, setDebtorsCurrentPage] = useState<number>(1);
 
   useEffect(() => {
-    setNonFilersCurrentPage(1);
     setDebtorsCurrentPage(1);
-  }, [debtorSearchQuery, debtorFilterYear, debtorFilterMonth, debtorSubView]);
+  }, [debtorSearchQuery, debtorFilterYear, debtorFilterMonth]);
 
   // Statement client selection state
   const [selectedStatementClientId, setSelectedStatementClientId] = useState<string>('');
@@ -1549,7 +1549,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     <div className="space-y-8 max-w-7xl mx-auto">
       
       {/* Page Header */}
-      {!hideNavigationHeader && (
+      {!hideNavigationHeader && !debtorsOnly && (
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
           <div>
             <h2 className="text-base font-bold text-slate-800 tracking-tight flex items-center gap-2">
@@ -2078,24 +2078,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
               <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm space-y-4">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-2 border-b border-slate-50">
                   <div>
-                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Identify Non-Filers & Debtors</h3>
-                    <p className="text-xs text-slate-400 mt-0.5">Configure multi-year, multi-month filters and search options to audit compliance</p>
-                  </div>
-                  
-                  {/* Sub-view toggle */}
-                  <div className="bg-slate-100 p-1 rounded-xl flex gap-1 border border-slate-200/50 w-full md:w-auto">
-                    <button
-                      onClick={() => setDebtorSubView('non-filers')}
-                      className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${debtorSubView === 'non-filers' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
-                    >
-                      Non-Filers
-                    </button>
-                    <button
-                      onClick={() => setDebtorSubView('debtors-ledger')}
-                      className={`flex-1 md:flex-none px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${debtorSubView === 'debtors-ledger' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
-                    >
-                      Returns Debtors
-                    </button>
+                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest">Debtors Ledger Directory</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">Filter dairy operators by year, month, or search across outstanding balances and active payment schedules</p>
                   </div>
                 </div>
 
@@ -2162,263 +2146,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                 <div className="bg-white rounded-[40px] border border-slate-100 shadow-xl overflow-hidden">
                   
                   {(() => {
-                    // Filter years to scan
-                    const yearsToScan = debtorFilterYear === 'All' 
-                      ? yearsList 
-                      : [parseInt(debtorFilterYear)];
-
-                    // Filter months to scan
-                    const monthsToScan = debtorFilterMonth === 'All'
-                      ? monthsList
-                      : [debtorFilterMonth];
-
-                    if (debtorSubView === 'non-filers') {
-                      // Gather unfiled across multiple years and months grouped by client
-                      let missingList: { client: LicensedClient; missingPeriods: { year: number; month: string }[] }[] = [];
-
-                      // We scan active QFR operating clients (excluding closed, DNQ-R, or both)
-                      const activeQfrClients = clients.filter(c => isQualifyingOperatingClient(c));
-
-                      activeQfrClients.forEach(client => {
-                        const periods = getUnfiledPeriodsForClient(client);
-                        const filteredPeriods = periods.filter(p => yearsToScan.includes(p.year) && monthsToScan.includes(p.month));
-                        if (filteredPeriods.length > 0) {
-                          missingList.push({ client, missingPeriods: filteredPeriods });
-                        }
-                      });
-
-                      // Apply search query
-                      const qSafe = (debtorSearchQuery || '').trim().toLowerCase();
-                      if (qSafe !== '') {
-                        missingList = missingList.filter(item => 
-                          (item.client?.clientName || '').toLowerCase().includes(qSafe) ||
-                          (item.client?.premiseName || '').toLowerCase().includes(qSafe) ||
-                          (item.client?.location || '').toLowerCase().includes(qSafe) ||
-                          (item.client?.county || '').toLowerCase().includes(qSafe) ||
-                          (item.client?.premiseCategory || '').toLowerCase().includes(qSafe)
-                        );
-                      }
-
-                      const totalNonFilers = missingList.length;
-                      const nonFilersTotalPages = Math.max(1, Math.ceil(totalNonFilers / nonFilersBatchSize));
-                      const safeNonFilersPage = Math.min(Math.max(1, nonFilersCurrentPage), nonFilersTotalPages);
-                      const paginatedMissingList = missingList.slice(
-                        (safeNonFilersPage - 1) * nonFilersBatchSize,
-                        safeNonFilersPage * nonFilersBatchSize
-                      );
-
-                      return (
-                        <>
-                          <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                            <div>
-                              <h4 className="text-base font-black text-slate-800">
-                                Non-Filers Audit Registry ({missingList.length})
-                              </h4>
-                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                                Active clients qualifying for returns with missing filing periods (consolidated)
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => exportNonFilersCSV(missingList)}
-                              className="flex items-center gap-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-black text-[10px] uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all shadow-sm"
-                              title="Download Excel list of clients who have not filed returns for the filtered periods"
-                            >
-                              <Download size={13} className="text-rose-500" /> Export Excel
-                            </button>
-                          </div>
-
-                          {/* Top Batch Options & Pagination Bar */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80 p-3 border-b border-slate-200/70 text-xs">
-                            <div className="flex flex-wrap items-center gap-3">
-                              <div className="flex items-center gap-2 font-medium text-slate-700">
-                                <span className="text-slate-600 font-semibold text-xs">Show</span>
-                                <select
-                                  value={nonFilersBatchSize}
-                                  onChange={(e) => {
-                                    setNonFilersBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
-                                    setNonFilersCurrentPage(1);
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-100 shadow-2xs cursor-pointer"
-                                >
-                                  <option value={10}>10</option>
-                                  <option value={25}>25</option>
-                                  <option value={50}>50</option>
-                                  <option value={100}>100</option>
-                                </select>
-                                <span className="text-slate-600 font-semibold text-xs">entries</span>
-                              </div>
-
-                              <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-rose-700 bg-rose-50 px-2.5 py-1 rounded-full border border-rose-200/60 font-bold">
-                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
-                                <span>Batch {safeNonFilersPage} of {nonFilersTotalPages} (range: {totalNonFilers === 0 ? 0 : (safeNonFilersPage - 1) * nonFilersBatchSize + 1}–{Math.min(safeNonFilersPage * nonFilersBatchSize, totalNonFilers)})</span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center justify-between sm:justify-end gap-3">
-                              <span className="text-[11px] text-slate-500 font-semibold">
-                                Showing <span className="font-bold text-slate-900">{totalNonFilers === 0 ? 0 : (safeNonFilersPage - 1) * nonFilersBatchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(safeNonFilersPage * nonFilersBatchSize, totalNonFilers)}</span> of <span className="font-bold text-slate-900">{totalNonFilers.toLocaleString()}</span>
-                              </span>
-
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => setNonFilersCurrentPage(prev => Math.max(1, prev - 1))}
-                                  disabled={safeNonFilersPage <= 1}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                  title="Previous batch"
-                                >
-                                  <ChevronLeft size={14} />
-                                </button>
-                                <span className="text-[11px] font-bold text-slate-700 px-2">
-                                  Page {safeNonFilersPage} of {nonFilersTotalPages}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setNonFilersCurrentPage(prev => Math.min(nonFilersTotalPages, prev + 1))}
-                                  disabled={safeNonFilersPage >= nonFilersTotalPages}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                  title="Next batch"
-                                >
-                                  <ChevronRight size={14} />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-
-                          {missingList.length === 0 ? (
-                            <div className="p-20 text-center space-y-4">
-                              <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
-                              <p className="text-slate-400 font-bold uppercase tracking-wider text-xs">No missing filings found for current selection!</p>
-                            </div>
-                          ) : (
-                            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-                              <table className="w-full text-left border-collapse">
-                                <thead>
-                                  <tr className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100 sticky top-0 bg-white z-10">
-                                    <th className="px-6 py-3">Client details</th>
-                                    <th className="px-6 py-3">Premise Name</th>
-                                    <th className="px-6 py-3">Category</th>
-                                    <th className="px-6 py-3">Missing Periods</th>
-                                    <th className="px-6 py-3 text-right">Actions</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                                  {paginatedMissingList.map((item, idx) => (
-                                    <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                      <td className="px-6 py-3.5">
-                                        <div className="text-slate-900 font-black">{item.client.clientName}</div>
-                                        <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
-                                          <Phone size={10} /> {item.client.tel || 'No phone'}
-                                        </div>
-                                      </td>
-                                      <td className="px-6 py-3.5">
-                                        <div className="text-slate-800">{item.client.premiseName}</div>
-                                        <div className="text-[10px] text-slate-400 font-medium mt-0.5">
-                                          {item.client.county || 'N/A'}
-                                        </div>
-                                      </td>
-                                      <td className="px-6 py-3.5">
-                                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">
-                                          {item.client.premiseCategory}
-                                        </span>
-                                      </td>
-                                      <td className="px-6 py-3.5">
-                                        <div className="flex flex-wrap gap-1 max-w-sm">
-                                          {item.missingPeriods.map((p, pIdx) => (
-                                            <button
-                                              key={pIdx}
-                                              onClick={() => openAddModal(item.client.id, p.year, p.month)}
-                                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-100 px-2 py-1 rounded-md text-[9px] font-black tracking-wide transition-all whitespace-nowrap flex items-center gap-1 cursor-pointer"
-                                              title={`Click to file for ${p.month} ${p.year}`}
-                                            >
-                                              {p.month.substring(0,3)} {p.year} ✎
-                                            </button>
-                                          ))}
-                                        </div>
-                                      </td>
-                                      <td className="px-6 py-3.5 text-right">
-                                        <button
-                                          onClick={() => openAddModal(item.client.id, item.missingPeriods[0].year, item.missingPeriods[0].month)}
-                                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black px-3 py-1.5 rounded-lg text-[10px] uppercase tracking-wider transition-all cursor-pointer"
-                                        >
-                                          File Return
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-
-                          {/* Bottom Pagination & Batch Range Controls for Non-Filers */}
-                          {totalNonFilers > 0 && (
-                            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 border-t border-slate-100 bg-slate-50/50 text-xs">
-                              <div className="flex items-center gap-2">
-                                <span className="text-slate-600 font-semibold text-xs">Show</span>
-                                <select
-                                  value={nonFilersBatchSize}
-                                  onChange={(e) => {
-                                    setNonFilersBatchSize(Number(e.target.value) as 10 | 25 | 50 | 100);
-                                    setNonFilersCurrentPage(1);
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-900 outline-none focus:border-blue-600 shadow-2xs cursor-pointer"
-                                >
-                                  <option value={10}>10</option>
-                                  <option value={25}>25</option>
-                                  <option value={50}>50</option>
-                                  <option value={100}>100</option>
-                                </select>
-                                <span className="text-slate-600 font-semibold text-xs">entries</span>
-                                <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
-                                  (Showing {totalNonFilers === 0 ? 0 : (safeNonFilersPage - 1) * nonFilersBatchSize + 1}–{Math.min(safeNonFilersPage * nonFilersBatchSize, totalNonFilers)} of {totalNonFilers.toLocaleString()} non-filers)
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setNonFilersCurrentPage(1)}
-                                  disabled={safeNonFilersPage <= 1}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
-                                >
-                                  First
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setNonFilersCurrentPage(prev => Math.max(1, prev - 1))}
-                                  disabled={safeNonFilersPage <= 1}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                >
-                                  <ChevronLeft size={14} />
-                                </button>
-                                <span className="text-[11px] font-bold text-slate-700 px-2">
-                                  Page {safeNonFilersPage} of {nonFilersTotalPages}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setNonFilersCurrentPage(prev => Math.min(nonFilersTotalPages, prev + 1))}
-                                  disabled={safeNonFilersPage >= nonFilersTotalPages}
-                                  className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
-                                >
-                                  <ChevronRight size={14} />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setNonFilersCurrentPage(nonFilersTotalPages)}
-                                  disabled={safeNonFilersPage >= nonFilersTotalPages}
-                                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
-                                >
-                                  Last
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      );
-                    } else {
-                      // Gather combined debtors ledger (manual and returns-based)
-                      const activeDebtors = getIntegratedDebtors();
+                    // Gather combined debtors ledger (manual and returns-based)
+                    const activeDebtors = getIntegratedDebtors();
                       
                       let filteredLedger = activeDebtors;
                       const qSafe = (debtorSearchQuery || '').trim().toLowerCase();
@@ -2737,7 +2466,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                           )}
                         </>
                       );
-                    }
                   })()}
                 </div>
 
