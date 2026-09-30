@@ -1692,7 +1692,7 @@ Allow: /cessations
     let privateKey = process.env.GOOGLE_PRIVATE_KEY;
 
     if (!clientEmail || !privateKey) {
-      throw new Error("Service Account credentials (EMAIL/PRIVATE_KEY) are missing.");
+      return null;
     }
 
     clientEmail = clientEmail.trim().replace(/^["']|["']$/g, '');
@@ -1704,7 +1704,7 @@ Allow: /cessations
     privateKey = privateKey.replace(/\\n/g, '\n');
 
     if (!privateKey.includes("-----BEGIN PRIVATE KEY-----")) {
-      throw new Error("Invalid Private Key format. It must start with '-----BEGIN PRIVATE KEY-----'. Check your environment variables.");
+      return null;
     }
 
     const auth = new google.auth.JWT({
@@ -1810,6 +1810,10 @@ Allow: /cessations
 
     try {
       const sheets = getSheetsClient();
+      if (!sheets) {
+        logToFile("[API] Google Sheets sync skipped: Service account credentials not configured");
+        return res.status(200).json({ success: true, message: "Saved. Google Sheets sync skipped (Service account not configured)." });
+      }
 
       // Mapping logic
       const allRows: { sheet: string, rows: any[][] }[] = [];

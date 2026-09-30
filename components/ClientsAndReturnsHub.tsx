@@ -4,6 +4,7 @@ import { DBService } from '../services/db';
 import { ClientReturnsPipeline } from '../services/clientReturnsPipeline';
 import { LicensedClientsModule } from './LicensedClientsModule';
 import { ClientReturnsModule } from './ClientReturnsModule';
+import { GoogleSheetsBanner } from './GoogleSheetsBanner';
 import { 
   Building2, 
   Database, 
@@ -111,6 +112,9 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
+      {/* Live Google Sheets Database Controls */}
+      <GoogleSheetsBanner onSyncComplete={handleManualRefresh} />
+
       {/* Refined Hub Header & Integrated Overview */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {/* Top Header Row */}

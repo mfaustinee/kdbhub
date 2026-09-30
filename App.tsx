@@ -174,19 +174,21 @@ const App: React.FC = () => {
       // Group returns with outstandingBalance > 0 by client
       const outstandingByClient: Record<string, any[]> = {};
       (storedReturns || []).forEach(ret => {
-        if (ret.outstandingBalance > 0) {
-          if (!outstandingByClient[ret.clientId]) {
-            outstandingByClient[ret.clientId] = [];
+        if (ret && (ret.outstandingBalance || 0) > 0) {
+          const cId = ret.clientId || ret.clientName || 'UNKNOWN';
+          if (!outstandingByClient[cId]) {
+            outstandingByClient[cId] = [];
           }
-          outstandingByClient[ret.clientId].push(ret);
+          outstandingByClient[cId].push(ret);
         }
       });
 
-      const integrated: DebtorRecord[] = JSON.parse(JSON.stringify(baseDebtors));
+      const integrated: DebtorRecord[] = JSON.parse(JSON.stringify(baseDebtors || []));
 
       Object.entries(outstandingByClient).forEach(([clientId, rets]) => {
-        const client = (storedClients || []).find(c => c.id === clientId);
-        const clientName = client ? client.clientName : rets[0].clientName;
+        if (!rets || rets.length === 0) return;
+        const client = (storedClients || []).find(c => c && (c.id === clientId || c.clientName === clientId));
+        const clientName = client ? client.clientName : (rets[0]?.clientName || 'Unknown Client');
         const premiseName = client ? client.premiseName : 'Unknown Premise';
         const location = client ? client.location : 'Unknown Location';
         const county = client ? client.county : 'Unknown County';

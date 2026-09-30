@@ -19,6 +19,7 @@ import {
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createSafeSupabaseClient, isSupabaseDisabled } from '../components/lib/supabase';
 import { areNamesMatching, searchMatches, cleanPermitNumber } from '../components/lib/nameMatching';
+import { GoogleSheetsService } from './googleSheetsService';
 
 let supabase: SupabaseClient | null = null;
 let supabasePromise: Promise<SupabaseClient | null> | null = null;
@@ -1320,18 +1321,6 @@ export const DBService = {
     }
   },
 
-  async deleteDebtor(id: string): Promise<void> {
-    const current = await this.getDebtors();
-    const updated = current.filter(d => d.id !== id);
-    await this.saveDebtors(updated);
-    try {
-      const client = await getSupabase();
-      if (client) {
-        await client.from('debtors').delete().eq('id', id);
-      }
-    } catch (_) {}
-  },
-
   async getStaffConfig(forceFresh: boolean = false): Promise<StaffConfig> {
     const defaultModules = {
       levyAgreement: true,
@@ -2118,6 +2107,23 @@ export const DBService = {
     }
 
     const fetchFreshPromise = (async (): Promise<LicensedClient[]> => {
+      // 0. Primary Database: Check Google Sheets
+      const sheetId = GoogleSheetsService.getSpreadsheetId();
+      if (sheetId) {
+        try {
+          const sheetClients = await GoogleSheetsService.getClients(sheetId);
+          if (sheetClients && sheetClients.length > 0) {
+            const deduplicated = deduplicateClients(sheetClients);
+            clientsMemoryCache = deduplicated;
+            clientsCacheTimestamp = Date.now();
+            safeSetLocalStorage('kdb_clients_cache', JSON.stringify(deduplicated));
+            return deduplicated;
+          }
+        } catch (sheetErr) {
+          console.warn("[DBService] Google Sheets getClients notice, falling back:", sheetErr);
+        }
+      }
+
       const fetchLocal = async () => {
         try {
           const response = await fetch('/api/clients');
@@ -2366,6 +2372,14 @@ export const DBService = {
 
     updateLocalCache();
 
+    // 1.5. Primary Database: Save to Google Sheets
+    const sheetId = GoogleSheetsService.getSpreadsheetId();
+    if (sheetId) {
+      GoogleSheetsService.saveClient(clientRecord, sheetId).catch(err => {
+        console.warn("[DBService] Google Sheets saveClient error:", err);
+      });
+    }
+
     // 2. Synchronize to server API endpoint (/api/clients) in background
     const syncServerApi = async () => {
       try {
@@ -2472,6 +2486,13 @@ export const DBService = {
   },
 
   async saveClientsBulk(clientsList: LicensedClient[]): Promise<void> {
+    const sheetId = GoogleSheetsService.getSpreadsheetId();
+    if (sheetId) {
+      GoogleSheetsService.saveClientsBulk(clientsList, sheetId).catch(err => {
+        console.warn("[DBService] Google Sheets saveClientsBulk error:", err);
+      });
+    }
+
     const getMergedLocal = async () => {
       const currentClients = clientsMemoryCache || getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
       const merged = [...currentClients];
@@ -2566,6 +2587,22 @@ export const DBService = {
     }
 
     const fetchReturnsPromise = (async (): Promise<ClientReturn[]> => {
+      // 0. Primary Database: Check Google Sheets
+      const sheetId = GoogleSheetsService.getSpreadsheetId();
+      if (sheetId) {
+        try {
+          const sheetReturns = await GoogleSheetsService.getReturns(sheetId);
+          if (sheetReturns && sheetReturns.length > 0) {
+            returnsMemoryCache = sheetReturns;
+            returnsCacheTimestamp = Date.now();
+            safeSetLocalStorage('kdb_returns_cache', JSON.stringify(sheetReturns));
+            return sheetReturns;
+          }
+        } catch (sheetErr) {
+          console.warn("[DBService] Google Sheets getReturns notice, falling back:", sheetErr);
+        }
+      }
+
       const fetchLocal = async () => {
         const data = await safeFetchJson<any[]>('/api/returns');
         if (data && Array.isArray(data) && data.length > 0) {
@@ -2753,6 +2790,21 @@ export const DBService = {
   },
 
   async getHubMetrics(): Promise<{ totalClients: number; operatingClients: number; totalReturns: number; totalVolume: number; totalOutstanding: number }> {
+    const sheetId = GoogleSheetsService.getSpreadsheetId();
+    if (sheetId) {
+      const [localClients, localReturns] = await Promise.all([
+        this.getClients(),
+        this.getReturns()
+      ]);
+      return {
+        totalClients: localClients.length,
+        operatingClients: localClients.filter(c => c.operationalStatus === 'operating').length,
+        totalReturns: localReturns.length,
+        totalVolume: localReturns.reduce((sum, r) => sum + (r.qty || 0), 0),
+        totalOutstanding: localReturns.reduce((sum, r) => sum + (r.outstandingBalance || 0), 0)
+      };
+    }
+
     const client = await getSupabase();
     if (client) {
       try {
@@ -2796,6 +2848,13 @@ export const DBService = {
   },
 
   async saveReturn(clientReturn: ClientReturn): Promise<void> {
+    const sheetId = GoogleSheetsService.getSpreadsheetId();
+    if (sheetId) {
+      GoogleSheetsService.saveReturn(clientReturn, sheetId).catch(err => {
+        console.warn("[DBService] Google Sheets saveReturn error:", err);
+      });
+    }
+
     const saveLocal = async () => {
       try {
         await fetch('/api/returns', {
@@ -2896,6 +2955,13 @@ export const DBService = {
   },
 
   async saveReturnsBulk(returnsList: ClientReturn[]): Promise<void> {
+    const sheetId = GoogleSheetsService.getSpreadsheetId();
+    if (sheetId) {
+      GoogleSheetsService.saveReturnsBulk(returnsList, sheetId).catch(err => {
+        console.warn("[DBService] Google Sheets saveReturnsBulk error:", err);
+      });
+    }
+
     const getMergedLocal = async () => {
       const currentReturns = returnsMemoryCache || getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
       const merged = [...currentReturns];

@@ -192,102 +192,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
   const getIntegratedDebtors = (): DebtorRecord[] => {
     const baseDebtors = propDebtors || localDebtors;
-    const outstandingByClient: Record<string, ClientReturn[]> = {};
-    
-    returns.forEach(ret => {
-      if (ret.outstandingBalance > 0) {
-        if (!outstandingByClient[ret.clientId]) {
-          outstandingByClient[ret.clientId] = [];
-        }
-        outstandingByClient[ret.clientId].push(ret);
-      }
-    });
-
-    const integrated: DebtorRecord[] = JSON.parse(JSON.stringify(baseDebtors));
-
-    Object.entries(outstandingByClient).forEach(([clientId, rets]) => {
-      const client = clients.find(c => c.id === clientId);
-      const clientName = client ? client.clientName : rets[0].clientName;
-      const premiseName = client ? client.premiseName : 'Unknown Premise';
-      const location = client ? client.location : 'Unknown Location';
-      const county = client ? client.county : 'Unknown County';
-      const tel = client ? client.tel : 'No Phone';
-
-      const arrearsBreakdown: ArrearItem[] = rets.map((r, i) => ({
-        id: `ret-arr-${r.id || i}`,
-        month: `${r.period} ${r.year}`,
-        amount: r.outstandingBalance
-      }));
-
-      const totalArrears = rets.reduce((sum, r) => sum + r.outstandingBalance, 0);
-      const totalArrearsWords = numberToWords(totalArrears);
-      const arrearsPeriod = rets.map(r => `${(r.period || '').substring(0,3)} ${r.year}`).join(', ');
-
-      // Check if existing
-      const existingIndex = integrated.findIndex(d => 
-        areNamesMatching(d.dboName, clientName) ||
-        d.id === clientId ||
-        (d.permitNo || '') === clientId ||
-        (d.permitNo || '') === `KDB/LC/${clientId}`
-      );
-
-      if (existingIndex !== -1) {
-        const existing = integrated[existingIndex];
-        const combinedBreakdown = [...existing.arrearsBreakdown];
-        arrearsBreakdown.forEach(arr => {
-          const duplicate = combinedBreakdown.find(eb => eb.month === arr.month);
-          if (duplicate) {
-            duplicate.amount = arr.amount;
-          } else {
-            combinedBreakdown.push(arr);
-          }
-        });
-
-        const newTotal = combinedBreakdown.reduce((sum, item) => sum + item.amount, 0);
-
-        let finalInstallments = existing.installments || [];
-        if (finalInstallments.length <= 1 || existing.debitNoteNo?.startsWith('DN/RET/')) {
-          finalInstallments = combinedBreakdown.map((item, idx) => ({
-            no: idx + 1,
-            period: item.month,
-            dueDate: new Date().toISOString().slice(0, 10),
-            amount: item.amount
-          }));
-        }
-
-        integrated[existingIndex] = {
-          ...existing,
-          arrearsBreakdown: combinedBreakdown,
-          totalArrears: newTotal,
-          totalArrearsWords: numberToWords(newTotal),
-          arrearsPeriod: combinedBreakdown.map(b => b.month).join(', '),
-          installments: finalInstallments,
-        };
-      } else {
-        integrated.push({
-          id: clientId,
-          dboName: clientName,
-          premiseName: premiseName,
-          permitNo: `KDB/LC/${clientId}`,
-          location: location,
-          county: county,
-          arrearsBreakdown,
-          totalArrears,
-          totalArrearsWords,
-          arrearsPeriod,
-          debitNoteNo: `DN/RET/${clientId}`,
-          tel: tel,
-          installments: arrearsBreakdown.map((item, idx) => ({
-            no: idx + 1,
-            period: item.month,
-            dueDate: new Date().toISOString().slice(0, 10),
-            amount: item.amount
-          }))
-        });
-      }
-    });
-
-    const unique = Array.from(new Map(integrated.map(d => [d.id, d])).values());
+    const unique = Array.from(new Map((baseDebtors || []).map(d => [d.id, d])).values());
     return unique.filter(d => 
       !deletedDebtorKeys.includes(d.id) && 
       !deletedDebtorKeys.includes(d.permitNo) && 
@@ -2448,7 +2353,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                           <span>Debt Recovery & Enforcement</span>
                         </div>
                         <h3 className="text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
-                          Debtors Ledger Directory
+                          Debtors Ledger
                           <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 font-extrabold border border-slate-200">
                             {filteredLedger.length}
                           </span>

@@ -881,15 +881,6 @@ export function DataValidationModule() {
     validationPremiseMode === 'new'
   );
 
-  const [mismatchFields, setMismatchFields] = useState<{
-    key: string;
-    label: string;
-    validationVal: string;
-    clientVal: string;
-    selectedVal?: 'validation' | 'client';
-  }[]>([]);
-  const [showReconciliation, setShowReconciliation] = useState(false);
-  const [reconciliationResolved, setReconciliationResolved] = useState(true);
   const [returnsData, setReturnsData] = useState<ClientReturn[]>([]);
   const [activeAuditTool, setActiveAuditTool] = useState<'checklist' | 'exceptions' | 'all'>('all');
 
@@ -2065,9 +2056,6 @@ export function DataValidationModule() {
         setStep(0);
         setSelectedClient(null);
         setValidationPremiseMode('main');
-        setMismatchFields([]);
-        setShowReconciliation(false);
-        setReconciliationResolved(true);
         setActiveDraftId(null);
         setIsAmendment(false);
         setHasDraft(false);
@@ -2100,9 +2088,6 @@ export function DataValidationModule() {
         setStep(0);
         setSelectedClient(null);
         setValidationPremiseMode('main');
-        setMismatchFields([]);
-        setShowReconciliation(false);
-        setReconciliationResolved(true);
         setActiveDraftId(null);
         setIsAmendment(false);
         setHasDraft(false);
@@ -2746,9 +2731,6 @@ export function DataValidationModule() {
           nonCompliance: []
         }));
       }
-      // Since it's an existing branch being validated, clear reconciliation screen for parent profile
-      setShowReconciliation(false);
-      setReconciliationResolved(true);
     } else if (mode === 'new') {
       // It's a new branch, clear fields or keep them so they can edit
       setFormData(prev => ({
@@ -2756,8 +2738,6 @@ export function DataValidationModule() {
         sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '' })),
         nonCompliance: []
       }));
-      setShowReconciliation(false);
-      setReconciliationResolved(true);
     }
   };
 
@@ -2860,21 +2840,15 @@ export function DataValidationModule() {
     }
   }, [formData.sales, formData.intakes, formData.hasLocalSales, formData.category, formData.date, isValidationPeriodEdited]);
 
-  // Fetch licensed clients and returns data on mount
+  // Fetch returns data on mount
   useEffect(() => {
     const fetchInitialData = async () => {
-      setIsLoadingClients(true);
+      setIsLoadingClients(false);
       try {
-        const [clientsList, returnsList] = await Promise.all([
-          DBService.getClients(),
-          DBService.getReturns()
-        ]);
-        setClients(clientsList);
+        const returnsList = await DBService.getReturns();
         setReturnsData(returnsList);
       } catch (e) {
         console.error('[DataValidationModule] Error fetching initial data:', e);
-      } finally {
-        setIsLoadingClients(false);
       }
     };
     fetchInitialData();
@@ -2913,254 +2887,6 @@ export function DataValidationModule() {
     }
 
     return null;
-  };
-
-  // 7-point split-screen mismatch checker logic
-  const checkReconciliation = (client: LicensedClient, currentForm: FormData) => {
-    // Automatically populate any blank form fields from client profile
-    const formToUse = { ...currentForm };
-    let formUpdated = false;
-
-    if (!formToUse.dboName && client.clientName) {
-      formToUse.dboName = client.clientName;
-      formUpdated = true;
-    }
-    if (!formToUse.premiseName && client.premiseName) {
-      formToUse.premiseName = client.premiseName;
-      formUpdated = true;
-    }
-    if (!formToUse.permitNo && (client.permitNumber || (client as any).permit_number)) {
-      formToUse.permitNo = client.permitNumber || (client as any).permit_number || '';
-      formUpdated = true;
-    }
-    if (!formToUse.location && client.location) {
-      formToUse.location = client.location;
-      formUpdated = true;
-    }
-    if (!formToUse.category && client.premiseCategory) {
-      formToUse.category = client.premiseCategory;
-      formUpdated = true;
-    }
-    if (!formToUse.contacts && (client.tel || client.contactPerson)) {
-      formToUse.contacts = client.tel || client.contactPerson || '';
-      formUpdated = true;
-    }
-    if (!formToUse.expiryDate && (client.expiryDate || (client as any).expiry_date)) {
-      formToUse.expiryDate = formatToYYYYMMDD(client.expiryDate || (client as any).expiry_date || '');
-      formUpdated = true;
-    }
-
-    if (formUpdated) {
-      setFormData(formToUse);
-    }
-
-    const isMatch = (key: string, vVal: string, cVal: string) => {
-      const v = (vVal || '').trim();
-      const c = (cVal || '').trim();
-      
-      // If either side is empty or both are empty, treat as match (blank field takes client/form value)
-      if (!v || !c) return true;
-      
-      const cleanStr = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-      const cleanPermit = (s: string) => s.toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
-
-      if (key === 'category') {
-        const codeV = getCategoryShortCode(v);
-        const codeC = getCategoryShortCode(c);
-        if (codeV === codeC) return true;
-        return cleanStr(v) === cleanStr(c);
-      }
-      
-      if (key === 'permitNo') {
-        const pV = cleanPermit(v);
-        const pC = cleanPermit(c);
-        if (!pV || !pC) return true;
-        return pV === pC || pV.includes(pC) || pC.includes(pV);
-      }
-
-      if (key === 'contacts') {
-        const pV = v.replace(/[^0-9]/g, '');
-        const pC = c.replace(/[^0-9]/g, '');
-        if (pV.length >= 7 && pC.length >= 7) {
-          if (pV.slice(-9) === pC.slice(-9)) return true;
-        }
-        const cV = cleanStr(v);
-        const cC = cleanStr(c);
-        return cV === cC || cV.includes(cC) || cC.includes(cV);
-      }
-
-      if (key === 'expiryDate') {
-        const normV = formatToYYYYMMDD(v);
-        const normC = formatToYYYYMMDD(c);
-        if (normV && normC) return normV === normC;
-        return cleanStr(v) === cleanStr(c);
-      }
-
-      if (key === 'location') {
-        const cV = cleanStr(v);
-        const cC = cleanStr(c);
-        return cV === cC || cV.includes(cC) || cC.includes(cV);
-      }
-
-      if (key === 'dboName') {
-        const nV = (v || '').toLowerCase().trim().replace(/\s+/g, ' ');
-        const nC = (c || '').toLowerCase().trim().replace(/\s+/g, ' ');
-        if (nV === nC) return true;
-        const aV = nV.replace(/[^a-z0-9]/g, '');
-        const aC = nC.replace(/[^a-z0-9]/g, '');
-        return Boolean(aV && aC && aV === aC);
-      }
-
-      const cV = cleanStr(v);
-      const cC = cleanStr(c);
-      return cV === cC || cV.includes(cC) || cC.includes(cV);
-    };
-
-    const points = [
-      { key: 'dboName', label: '1. Name of DBO (clientname)', validationVal: formToUse.dboName || '', clientVal: client.clientName || '' },
-      { key: 'premiseName', label: '2. Premise / Branch Name (premisename)', validationVal: formToUse.premiseName || '', clientVal: client.premiseName || '' },
-      { key: 'permitNo', label: '3. Permit Number (permitnumber)', validationVal: formToUse.permitNo || '', clientVal: client.permitNumber || (client as any).permit_number || '' },
-      { key: 'location', label: '4. Location / Branch Address (location)', validationVal: formToUse.location || '', clientVal: client.location || '' },
-      { key: 'category', label: '5. Category (premisecategory)', validationVal: formToUse.category || '', clientVal: client.premiseCategory || '' },
-      { key: 'contacts', label: '6. Contacts (tel / contactperson)', validationVal: formToUse.contacts || '', clientVal: client.tel || client.contactPerson || '' },
-      { key: 'expiryDate', label: '7. Expiry Date (expirydate)', validationVal: formToUse.expiryDate || '', clientVal: client.expiryDate || (client as any).expiry_date || '' }
-    ];
-
-    const mismatches = points.filter(p => !isMatch(p.key, p.validationVal, p.clientVal));
-    
-    if (mismatches.length > 0) {
-      setMismatchFields(mismatches.map(m => ({ ...m, selectedVal: 'client' })));
-      setShowReconciliation(true);
-      setReconciliationResolved(false);
-    } else {
-      setMismatchFields([]);
-      setShowReconciliation(false);
-      setReconciliationResolved(true);
-    }
-  };
-
-  const handleTriggerManualReconciliation = () => {
-    const cleanPermitHelper = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
-    let matched = selectedClient || findMatchingClient(formData.permitNo, formData.dboName);
-    if (!matched && clients.length > 0) {
-      const pTerm = cleanPermitHelper(formData.permitNo);
-      const dboTerm = (formData.dboName || '').toLowerCase().trim();
-      const premTerm = (formData.premiseName || '').toLowerCase().trim();
-      
-      matched = clients.find(c => {
-        const cPermit = cleanPermitHelper(c.permitNumber || c.id);
-        const cName = (c.clientName || '').toLowerCase().trim();
-        const cPremise = (c.premiseName || '').toLowerCase().trim();
-        if (pTerm && cPermit && (cPermit.includes(pTerm) || pTerm.includes(cPermit))) return true;
-        if (dboTerm && cName && (cName.includes(dboTerm) || dboTerm.includes(cName))) return true;
-        if (premTerm && cPremise && (cPremise.includes(premTerm) || premTerm.includes(cPremise))) return true;
-        return false;
-      }) || clients[0];
-    }
-
-    if (!matched) {
-      setStatus({ 
-        type: 'error', 
-        message: 'No registered client profile found. Please select or enter a client name/permit number to reconcile.' 
-      });
-      return;
-    }
-
-    setSelectedClient(matched);
-    const points = [
-      { key: 'dboName', label: '1. Name of DBO (clientname)', validationVal: formData.dboName || '', clientVal: matched.clientName || '' },
-      { key: 'premiseName', label: '2. Premise / Branch Name (premisename)', validationVal: formData.premiseName || '', clientVal: matched.premiseName || '' },
-      { key: 'permitNo', label: '3. Permit Number (permitnumber)', validationVal: formData.permitNo || '', clientVal: matched.permitNumber || matched.id || '' },
-      { key: 'location', label: '4. Location / Branch Address (location)', validationVal: formData.location || '', clientVal: matched.location || '' },
-      { key: 'category', label: '5. Category (premisecategory)', validationVal: formData.category || '', clientVal: matched.premiseCategory || '' },
-      { key: 'contacts', label: '6. Contacts (tel / contactperson)', validationVal: formData.contacts || '', clientVal: matched.tel || matched.contactPerson || '' },
-      { key: 'expiryDate', label: '7. Expiry Date (expirydate)', validationVal: formData.expiryDate || '', clientVal: matched.expiryDate || (matched as any).expiry_date || '' }
-    ];
-
-    setMismatchFields(points.map(m => ({ ...m, selectedVal: 'client' })));
-    setShowReconciliation(true);
-    setReconciliationResolved(false);
-    setStatus({ 
-      type: 'success', 
-      message: `Initiated 7-Point Reconciliation for "${matched.clientName || 'Client Profile'}". Review both data sources below.` 
-    });
-  };
-
-  const handleSelectBranchForReconciliation = (branch: LicensedClient) => {
-    setSelectedClient(branch);
-    checkReconciliation(branch, formData);
-  };
-
-  const handleResolveReconciliation = async () => {
-    if (!selectedClient) return;
-
-    const unresolved = mismatchFields.some(m => !m.selectedVal);
-    if (unresolved) {
-      alert("Please select the latest source of truth for all mismatch fields.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const updatedForm = { ...formData };
-      const updatedClient = { ...selectedClient };
-
-      mismatchFields.forEach(item => {
-        let chosenVal = item.selectedVal === 'validation' ? item.validationVal : item.clientVal;
-        
-        if (item.key === 'permitNo') {
-          chosenVal = formatPermitNumber(chosenVal, updatedForm.category || updatedClient.premiseCategory);
-          (updatedForm as any)[item.key] = chosenVal;
-          updatedClient.id = selectedClient.id;
-          updatedClient.permitNumber = chosenVal;
-        } else if (item.key === 'expiryDate') {
-          const isoVal = formatToYYYYMMDD(chosenVal);
-          const formattedDDMM = formatDateToDDMMYYYY(chosenVal);
-          (updatedForm as any).expiryDate = isoVal;
-          (updatedClient as any).expiryDate = formattedDDMM;
-          (updatedClient as any).expiry_date = formattedDDMM;
-        } else {
-          (updatedForm as any)[item.key] = chosenVal;
-          if (item.key === 'dboName') updatedClient.clientName = chosenVal;
-          if (item.key === 'premiseName') updatedClient.premiseName = chosenVal;
-          if (item.key === 'location') updatedClient.location = chosenVal;
-          if (item.key === 'category') updatedClient.premiseCategory = chosenVal as any;
-          if (item.key === 'contacts') updatedClient.tel = chosenVal;
-        }
-      });
-
-      // Synchronize validation period if missing or unedited
-      if (!updatedForm.validationPeriod || !isValidationPeriodEdited) {
-        if (updatedForm.date) {
-          const d = new Date(updatedForm.date);
-          if (!isNaN(d.getTime())) {
-            const m = d.toLocaleString('default', { month: 'long' });
-            const y = d.getFullYear().toString();
-            updatedForm.validationPeriod = `${m} ${y}`;
-          }
-        }
-      }
-
-      // Save client to licensed_clients table in Supabase via DBService
-      await DBService.saveClient(updatedClient);
-
-      // Update local states
-      setFormData(updatedForm);
-      setSelectedClient(updatedClient);
-      setShowReconciliation(false);
-      setReconciliationResolved(true);
-      
-      // Refresh clients list from database to ensure absolute source of truth
-      const refreshedClients = await DBService.getClients(true);
-      setClients(refreshedClients);
-
-      setStatus({ type: 'success', message: 'Reconciliation completed. Client profile and Data Validation fields are synchronized.' });
-    } catch (err: any) {
-      console.error("Reconciliation save error:", err);
-      setStatus({ type: 'error', message: `Failed to synchronize reconciliation: ${err.message}` });
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   // Track manual edits to qtyDeclared so returns auto-injection doesn't overwrite user edits
@@ -4308,22 +4034,6 @@ export function DataValidationModule() {
       return;
     }
 
-    if (showReconciliation || !reconciliationResolved) {
-      setStatus({ type: 'error', message: 'Please resolve the 7-point data reconciliation conflict before submitting.' });
-      setIsSubmitting(false);
-      return;
-    }
-
-    // Duplicate check
-    if (!isAmendment) {
-      const isDuplicate = lastCollections.some(c => c.fullPeriod.toLowerCase() === formData.validationPeriod.toLowerCase());
-      if (isDuplicate) {
-        setStatus({ type: 'error', message: `Data for ${formData.validationPeriod} has already been collected for this Premise. Please verify the validation period.` });
-        setIsSubmitting(false);
-        return;
-      }
-    }
-
     try {
       // Preserve locked endTime from draft state, amendment, or manual entry; fallback to current time
       const endTime = formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -4341,111 +4051,6 @@ export function DataValidationModule() {
       setFormData(updatedData);
 
       const pdf = await generatePDF(updatedData);
-
-      // Update Clients module registry with the current 7-point profile reconciliation fields upon validation submission
-      const formattedPermitNo = formatPermitNumber(updatedData.permitNo, updatedData.category, new Date(updatedData.date).getFullYear() || new Date().getFullYear());
-      const formattedExpiryDate = formatDateToDDMMYYYY(updatedData.expiryDate);
-
-      let targetClient = selectedClient;
-      if (!targetClient && clients.length > 0) {
-        targetClient = findMatchingClient(updatedData.permitNo, updatedData.dboName) || null;
-      }
-      if (!targetClient && clients.length > 0) {
-        const cleanPermit = (s: any) => (String(s || '')).toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
-        const cleanStr = (s: any) => (String(s || '')).toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-        const pTerm = cleanPermit(updatedData.permitNo);
-        const dTerm = cleanStr(updatedData.dboName);
-        const premTerm = cleanStr(updatedData.premiseName);
-
-        targetClient = clients.find(c => {
-          const cId = String(c.id || '').trim();
-          if (cId && updatedData.permitNo && cId.toLowerCase() === updatedData.permitNo.toLowerCase()) return true;
-          const cP = cleanPermit(c.permitNumber || c.id);
-          if (pTerm && cP && (pTerm === cP || pTerm.includes(cP) || cP.includes(pTerm))) return true;
-          const cN = cleanStr(c.clientName);
-          const cPrem = cleanStr(c.premiseName);
-          if (dTerm && cN && (dTerm === cN || dTerm.includes(cN) || cN.includes(dTerm)) &&
-              premTerm && cPrem && (premTerm === cPrem || premTerm.includes(cPrem) || cPrem.includes(premTerm))) return true;
-          if (dTerm && cN && dTerm === cN) return true;
-          return false;
-        }) || null;
-      }
-
-      if (targetClient) {
-        const syncedClient: LicensedClient = {
-          ...targetClient,
-          clientName: updatedData.dboName.trim() || targetClient.clientName,
-          premiseName: updatedData.premiseName.trim() || targetClient.premiseName,
-          id: targetClient.id,
-          permitNumber: formattedPermitNo || targetClient.permitNumber || targetClient.id,
-          location: updatedData.location.trim() || targetClient.location,
-          premiseCategory: (updatedData.category as any) || targetClient.premiseCategory,
-          tel: updatedData.contacts.trim() || targetClient.tel,
-          expiryDate: formattedExpiryDate || targetClient.expiryDate
-        };
-
-        if (validationPremiseMode === 'new') {
-          const newBranch = {
-            id: formattedPermitNo,
-            premiseName: updatedData.premiseName.trim(),
-            permitNumber: formattedPermitNo,
-            premiseCategory: updatedData.category,
-            location: updatedData.location.trim(),
-            county: updatedData.county.trim(),
-            expiryDate: formattedExpiryDate || undefined,
-            operationalStatus: 'operating' as const
-          };
-          const currentBranches = syncedClient.branches || [];
-          if (!currentBranches.some(b => b.permitNumber === newBranch.permitNumber)) {
-            syncedClient.branches = [...currentBranches, newBranch];
-          }
-        } else if (validationPremiseMode.startsWith('branch-')) {
-          const branchId = validationPremiseMode.replace('branch-', '');
-          const currentBranches = syncedClient.branches || [];
-          syncedClient.branches = currentBranches.map(b => {
-            if (b.id === branchId) {
-              return {
-                ...b,
-                premiseName: updatedData.premiseName.trim(),
-                permitNumber: formattedPermitNo,
-                premiseCategory: updatedData.category,
-                location: updatedData.location.trim(),
-                county: updatedData.county.trim(),
-                expiryDate: formattedExpiryDate || undefined
-              };
-            }
-            return b;
-          });
-        }
-
-        await DBService.saveClient(syncedClient);
-        const refreshedClients = await DBService.getClients(true);
-        setClients(refreshedClients);
-      } else {
-        // Create new client profile in licensed_clients registry
-        const newClientRecord: LicensedClient = {
-          id: formattedPermitNo,
-          clientName: updatedData.dboName.trim(),
-          premiseName: updatedData.premiseName.trim(),
-          startYear: new Date(updatedData.date).getFullYear() || new Date().getFullYear(),
-          startMonth: 'January',
-          startDate: formatDateToDDMMYYYY(updatedData.date),
-          endYear: null,
-          endMonth: null,
-          tel: updatedData.contacts.trim(),
-          contactPerson: updatedData.dboName.trim(),
-          location: updatedData.location.trim(),
-          premiseCategory: (updatedData.category as any) || 'Milk Bar',
-          county: updatedData.county.trim() || 'Kericho',
-          permitStatus: 'active',
-          operationalStatus: 'operating',
-          levyInfo: 'QFR',
-          expiryDate: formattedExpiryDate || undefined
-        };
-        await DBService.saveClient(newClientRecord);
-        const refreshedClients = await DBService.getClients(true);
-        setClients(refreshedClients);
-      }
 
       // Prepare payload & PDF reference
       const fileName = isAmendment
@@ -5004,9 +4609,6 @@ export function DataValidationModule() {
       setStep(0);
       setSelectedClient(null);
       setValidationPremiseMode('main');
-      setMismatchFields([]);
-      setShowReconciliation(false);
-      setReconciliationResolved(true);
       setHasDraft(false);
       setDraftInfo(null);
       setDraftLastSaved(null);
@@ -6213,15 +5815,6 @@ export function DataValidationModule() {
                       <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">1</div>
                       <h2 className="text-lg font-bold text-gray-900">General Information</h2>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleTriggerManualReconciliation}
-                      className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
-                      id="step1-manual-reconcile-btn"
-                    >
-                      <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
-                      7-Point Reconciliation Check
-                    </button>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
@@ -10130,247 +9723,6 @@ export function DataValidationModule() {
             </div>
           </div>
         )}
-
-        {/* 7-Point Split-Screen Reconciliation Overlay */}
-        <AnimatePresence>
-          {showReconciliation && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-2 sm:p-4 animate-in fade-in duration-300">
-              <div className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90dvh]">
-                <div className="bg-gradient-to-r from-amber-500 to-amber-600 px-4 sm:px-6 py-4 text-white flex justify-between items-center">
-                  <div>
-                    <h3 className="text-base sm:text-lg font-black tracking-tight">7-Point Profile & Branch Reconciliation Required</h3>
-                    <p className="text-xs text-amber-100 font-medium">Conflicting data points identified between Data Validation input and core Clients database.</p>
-                  </div>
-                  {selectedClient && (
-                    <span className="bg-amber-700/50 text-white font-mono text-[10px] px-3 py-1 rounded-full border border-amber-400/30 font-bold">
-                      DBO: {selectedClient.clientName}
-                    </span>
-                  )}
-                </div>
-                
-                <div className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-grow pb-safe">
-                  {/* Branch Selection & Context Card for 7-Point Reconciliation */}
-                  {selectedClient && (
-                    <div className="p-5 bg-gradient-to-br from-blue-50/90 to-indigo-50/50 rounded-2xl border border-blue-100 space-y-4 text-left">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100/80 pb-3">
-                        <div className="flex items-center gap-2">
-                          <Building2 className="w-5 h-5 text-blue-600" />
-                          <div>
-                            <h4 className="text-xs font-black text-blue-950 uppercase tracking-wider">
-                              DBO Branches & Premises Registry
-                            </h4>
-                            <p className="text-[11px] text-blue-700 font-medium">
-                              Select a branch below to load its specific premise name, permit number, and location into the 7-point reconciliation list.
-                            </p>
-                          </div>
-                        </div>
-                        <span className="self-start sm:self-auto text-[10px] text-blue-800 font-bold bg-blue-100 px-3 py-1 rounded-full border border-blue-200">
-                          Active Branch: {selectedClient.premiseName || 'Primary Premise'}
-                        </span>
-                      </div>
-
-                      {/* Gather and list all branches under DBO displaying Premise Name, Permit Number, Location */}
-                      {(() => {
-                        const cleanDboName = (selectedClient.clientName || '').toLowerCase().trim();
-                        
-                        // 1. Gather matching clients from global clients list
-                        const relatedClients = clients.filter(c => (c.clientName || '').toLowerCase().trim() === cleanDboName);
-                        
-                        // 2. Map branches sub-array if present on selectedClient
-                        const mappedSubBranches: LicensedClient[] = (selectedClient.branches || []).map((sb, idx) => ({
-                          ...selectedClient,
-                          id: sb.permitNumber || sb.id || `SUB_BR_${idx}_${selectedClient.id}`,
-                          permitNumber: sb.permitNumber || selectedClient.permitNumber,
-                          premiseName: sb.premiseName || selectedClient.premiseName,
-                          location: sb.location || selectedClient.location,
-                        }));
-
-                        // Merge into unique branch list by permit number or premise name
-                        const allBranchesMap = new Map<string, LicensedClient>();
-                        [...relatedClients, ...mappedSubBranches].forEach(b => {
-                          const key = (b.permitNumber || b.id || b.premiseName || '').toLowerCase().trim();
-                          if (key && !allBranchesMap.has(key)) {
-                            allBranchesMap.set(key, b);
-                          }
-                        });
-                        
-                        const selectedKey = (selectedClient.permitNumber || selectedClient.id || selectedClient.premiseName || '').toLowerCase().trim();
-                        if (selectedKey && !allBranchesMap.has(selectedKey)) {
-                          allBranchesMap.set(selectedKey, selectedClient);
-                        }
-
-                        const branchList = Array.from(allBranchesMap.values());
-
-                        return (
-                          <div className="space-y-2">
-                            <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider block">
-                              Registered Premises / Branches ({branchList.length}): Click any branch to reconcile
-                            </span>
-                            
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                              {branchList.map((branchItem, bIdx) => {
-                                const isCurrentActive = 
-                                  (branchItem.id && selectedClient.id && branchItem.id === selectedClient.id) ||
-                                  (branchItem.permitNumber && selectedClient.permitNumber && branchItem.permitNumber.toString().trim().toLowerCase() === selectedClient.permitNumber.toString().trim().toLowerCase()) ||
-                                  (branchItem.premiseName && selectedClient.premiseName && branchItem.premiseName.toString().trim().toLowerCase() === selectedClient.premiseName.toString().trim().toLowerCase());
-
-                                return (
-                                  <button
-                                    key={bIdx}
-                                    type="button"
-                                    onClick={() => handleSelectBranchForReconciliation(branchItem)}
-                                    className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 relative overflow-hidden group ${
-                                      isCurrentActive
-                                        ? 'bg-blue-600 text-white border-blue-700 shadow-md ring-2 ring-blue-300'
-                                        : 'bg-white hover:bg-blue-50/80 text-slate-800 border-blue-100 hover:border-blue-300'
-                                    }`}
-                                  >
-                                    <div className="space-y-1.5">
-                                      {/* 1. Premise Name */}
-                                      <div className="flex justify-between items-start gap-1">
-                                        <span className={`text-xs font-bold leading-snug line-clamp-2 ${isCurrentActive ? 'text-white' : 'text-slate-900 group-hover:text-blue-900'}`}>
-                                          {branchItem.premiseName || 'Unnamed Premise'}
-                                        </span>
-                                        {isCurrentActive && (
-                                          <span className="bg-emerald-500 text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 shadow-xs">
-                                            Active
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      {/* 2. Permit Number */}
-                                      <div className="flex items-center gap-1.5 text-[11px]">
-                                        <span className={`font-medium ${isCurrentActive ? 'text-blue-100' : 'text-slate-400'}`}>Permit:</span>
-                                        <span className={`font-mono font-bold ${isCurrentActive ? 'text-white' : 'text-blue-700'}`}>
-                                          {branchItem.permitNumber || branchItem.id || 'N/A'}
-                                        </span>
-                                      </div>
-
-                                      {/* 3. Location */}
-                                      <div className="flex items-center gap-1.5 text-[11px]">
-                                        <span className={`font-medium ${isCurrentActive ? 'text-blue-100' : 'text-slate-400'}`}>Location:</span>
-                                        <span className={`font-semibold ${isCurrentActive ? 'text-blue-50' : 'text-slate-700'}`}>
-                                          {branchItem.location || 'N/A'} {branchItem.county ? `(${branchItem.county})` : ''}
-                                        </span>
-                                      </div>
-                                    </div>
-
-                                    <div className={`pt-2 border-t text-[10px] font-bold flex items-center justify-between ${
-                                      isCurrentActive ? 'border-blue-500/60 text-blue-100' : 'border-slate-100 text-blue-600 group-hover:text-blue-700'
-                                    }`}>
-                                      <span>{isCurrentActive ? 'Loaded in 7-Point Recon' : 'Click to Load in Recon'}</span>
-                                      <span>&rarr;</span>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-
-                  <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                    The following 7-point fields do not match. For each mismatch, select which value is the absolute latest source of truth. 
-                    Selecting a value will update BOTH this validation form and the core licensed clients registry in Supabase.
-                  </p>
-
-                  <div className="space-y-4">
-                    {mismatchFields.map((item, idx) => (
-                      <div key={item.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3 text-left">
-                        <div className="flex justify-between items-center">
-                          <span className="text-xs font-bold text-slate-800 tracking-tight block uppercase">{item.label}</span>
-                          {(item.key === 'premiseName' || item.key === 'location') && (
-                            <span className="text-[9px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
-                              Branch Data Point
-                            </span>
-                          )}
-                        </div>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {/* Validation Value Option */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const updated = [...mismatchFields];
-                              updated[idx].selectedVal = 'validation';
-                              setMismatchFields(updated);
-                            }}
-                            className={`p-4 rounded-xl border text-left transition-all flex flex-col gap-1 relative overflow-hidden ${
-                              item.selectedVal === 'validation'
-                                ? 'border-blue-600 bg-blue-50/50 ring-2 ring-blue-100'
-                                : 'border-slate-200 bg-white hover:border-slate-300'
-                            }`}
-                          >
-                            <span className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Data Validation Form State</span>
-                            <span className="text-sm font-semibold text-slate-800">
-                              {item.key === 'expiryDate' ? (formatDateToDDMMYYYY(item.validationVal) || '(Empty)') : (item.validationVal || '(Empty)')}
-                            </span>
-                            {item.selectedVal === 'validation' && (
-                              <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-blue-600" />
-                            )}
-                          </button>
-
-                          {/* Client Value Option */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const updated = [...mismatchFields];
-                              updated[idx].selectedVal = 'client';
-                              setMismatchFields(updated);
-                            }}
-                            className={`p-4 rounded-xl border text-left transition-all flex flex-col gap-1 relative overflow-hidden ${
-                              item.selectedVal === 'client'
-                                ? 'border-emerald-600 bg-emerald-50/50 ring-2 ring-emerald-100'
-                                : 'border-slate-200 bg-white hover:border-slate-300'
-                            }`}
-                          >
-                            <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Licensed Clients Registry</span>
-                            <span className="text-sm font-semibold text-slate-800">
-                              {item.key === 'expiryDate' ? (formatDateToDDMMYYYY(item.clientVal) || '(Empty)') : (item.clientVal || '(Empty)')}
-                            </span>
-                            {item.selectedVal === 'client' && (
-                              <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-emerald-600" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-slate-50 px-6 py-4 border-t border-slate-100 flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedClient(null);
-                      setShowReconciliation(false);
-                    }}
-                    className="px-5 py-2.5 rounded-xl border bg-white hover:bg-slate-50 font-semibold text-xs text-slate-600 transition-all"
-                  >
-                    Cancel Selection
-                  </button>
-                  <button
-                    type="button"
-                    disabled={mismatchFields.some(m => !m.selectedVal) || isSubmitting}
-                    onClick={handleResolveReconciliation}
-                    className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5"
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Synchronizing...
-                      </>
-                    ) : (
-                      'Resolve & Synchronize'
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </AnimatePresence>
 
         <AnimatePresence>
           {pdfModalUrl && (

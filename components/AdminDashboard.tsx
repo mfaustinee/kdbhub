@@ -11,7 +11,6 @@ import { ClosurePDFPreview } from './ClosurePDFPreview';
 import { downloadAgreementPDF, downloadClosurePDF } from '../services/pdf';
 import { numberToWords } from '../utils/numberToWords';
 import { DebtorsModule } from './DebtorsModule';
-import { ValidationsCounterView } from './ValidationsCounterView';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
 import { GeneralAccessQrCard } from './GeneralAccessQrCard';
@@ -46,7 +45,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onStaffUpdate 
 }) => {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'requests_to_approve' | 'debtors' | 'reports' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
+  const [tab, setTab] = useState<'requests_to_approve' | 'debtors' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
   const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations'>('agreements');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -59,9 +58,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     switch (currentTab) {
       case 'data_validation': return 'Data Validation Form';
       case 'scope_disclosure': return 'Scope Disclosure Form';
-      case 'requests_to_approve': return 'Requests to Approve';
+      case 'requests_to_approve': return 'Approvals';
       case 'debtors': return 'Debtors Ledger';
-      case 'reports': return 'Validations Counter';
       case 'settings': return 'System Settings';
       default: return 'Admin Workspace';
     }
@@ -1003,7 +1001,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <div className="flex items-center">
                 <FileCheck className="w-4 h-4 mr-3 shrink-0" />
-                Requests to Approve
+                Approvals
               </div>
               {pendingRequestsCount > 0 ? (
                 <span className="px-2 py-0.5 text-[9px] bg-rose-500 text-white rounded-full font-black animate-pulse">
@@ -1023,17 +1021,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 Debtors Ledger
               </div>
               {tab === 'debtors' && <Check className="w-4 h-4 text-emerald-400" />}
-            </button>
-
-            <button 
-              onClick={() => changeTab('reports')} 
-              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'reports' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
-            >
-              <div className="flex items-center">
-                <ShieldCheck className="w-4 h-4 mr-3 shrink-0 text-purple-400" />
-                Validations Counter
-              </div>
-              {tab === 'reports' && <Check className="w-4 h-4 text-emerald-400" />}
             </button>
 
             <button 
@@ -1137,13 +1124,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <button 
               onClick={() => changeTab('requests_to_approve')} 
-              title="Requests to Approve"
+              title="Approvals"
               className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center relative ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'requests_to_approve' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
               <FileCheck className={`w-3.5 h-3.5 shrink-0 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed ? (
                 <>
-                  <span>Requests to Approve</span>
+                  <span>Approvals</span>
                   {pendingRequestsCount > 0 && (
                     <span className="ml-auto px-1.5 py-0.5 text-[8px] bg-rose-500 text-white rounded-full font-bold animate-pulse">
                       {pendingRequestsCount}
@@ -1166,15 +1153,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               <AlertTriangle className={`w-3.5 h-3.5 shrink-0 text-amber-500 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
               {!isSidebarCollapsed && <span>Debtors Ledger</span>}
-            </button>
-
-            <button 
-              onClick={() => changeTab('reports')} 
-              title="Validations Counter"
-              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'reports' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
-            >
-              <ShieldCheck className={`w-3.5 h-3.5 shrink-0 text-purple-400 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
-              {!isSidebarCollapsed && <span>Validations Counter</span>}
             </button>
 
             <button 
@@ -1762,12 +1740,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {tab === 'scope_disclosure' && (
         <div className="animate-in fade-in duration-500">
           <ScopeDisclosureModule isAdmin={true} isStandalone={false} />
-        </div>
-      )}
-
-      {tab === 'reports' && (
-        <div className="animate-in fade-in duration-500">
-          <ValidationsCounterView />
         </div>
       )}
 

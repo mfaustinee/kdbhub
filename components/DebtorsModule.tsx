@@ -39,7 +39,7 @@ export const DebtorsModule: React.FC<DebtorsModuleProps> = ({
       ]);
       setLocalDebtors(fetchedDebtors);
       const effective = propDebtors || fetchedDebtors;
-      const totalOutstanding = metrics.totalOutstanding || effective.reduce((sum, d) => sum + (d.totalArrears || 0), 0);
+      const totalOutstanding = effective.reduce((sum, d) => sum + (d.totalArrears || 0), 0);
       setSummaryMetrics({
         totalOutstanding,
         totalDebtorsCount: effective.length
@@ -62,9 +62,7 @@ export const DebtorsModule: React.FC<DebtorsModuleProps> = ({
   };
 
   const effectiveDebtors = propDebtors || localDebtors;
-  const computedTotalArrears = summaryMetrics.totalOutstanding > 0 
-    ? summaryMetrics.totalOutstanding 
-    : effectiveDebtors.reduce((sum, d) => sum + (d.totalArrears || 0), 0);
+  const computedTotalArrears = effectiveDebtors.reduce((sum, d) => sum + (d.totalArrears || 0), 0);
   const averageArrears = effectiveDebtors.length > 0 ? Math.round(computedTotalArrears / effectiveDebtors.length) : 0;
   const totalInstallmentsCount = effectiveDebtors.reduce((sum, d) => sum + (d.installments?.length || 0), 0);
 
