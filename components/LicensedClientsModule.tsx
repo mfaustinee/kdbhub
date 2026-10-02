@@ -966,22 +966,6 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
 
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-none sm:rounded-2xl p-4 sm:p-5 text-white relative overflow-hidden shadow-md">
-        <div className="absolute right-0 bottom-0 opacity-10 translate-y-6 translate-x-6 pointer-events-none">
-          <Building size={200} className="text-white" />
-        </div>
-        <div className="max-w-xl">
-          <div className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider mb-2">
-            <Sparkles size={11} /> Live Licensed Registry
-          </div>
-          <h1 className="text-lg sm:text-xl font-bold tracking-tight">Licensed Clients Database</h1>
-          <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-            Manage your licensed dairies, milk bars, cooling stations, and processors. Track operational lifespan, levy qualification, and cooling capacity.
-          </p>
-        </div>
-      </div>
-
       {/* 3 Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">

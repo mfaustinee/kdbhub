@@ -22,20 +22,24 @@ export type ClientsAndReturnsTab = 'clients' | 'returns' | 'debtors' | 'statemen
 
 export interface ClientsAndReturnsHubProps {
   initialTab?: ClientsAndReturnsTab;
+  defaultTab?: ClientsAndReturnsTab;
   debtors?: DebtorRecord[];
   onDebtorUpdate?: (updated: DebtorRecord[]) => void;
   onRefresh?: () => void;
+  onSyncComplete?: () => void;
   onTabChange?: (tab: ClientsAndReturnsTab) => void;
 }
 
 export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
-  initialTab = 'clients',
+  initialTab,
+  defaultTab,
   debtors: propDebtors,
   onDebtorUpdate,
   onRefresh,
+  onSyncComplete,
   onTabChange
 }) => {
-  const [activeTab, setActiveTab] = useState<ClientsAndReturnsTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<ClientsAndReturnsTab>(defaultTab || initialTab || 'clients');
   const [clients, setClients] = useState<LicensedClient[]>([]);
   const [returns, setReturns] = useState<ClientReturn[]>([]);
   const [localDebtors, setLocalDebtors] = useState<DebtorRecord[]>([]);

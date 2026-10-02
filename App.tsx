@@ -1,6 +1,7 @@
 
 import DataValidationModule from './components/DataValidationModule';
 import { ScopeDisclosureModule } from './components/ScopeDisclosureModule';
+import { ClientsAndReturnsHub } from './components/ClientsAndReturnsHub';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { AgreementForm } from './components/AgreementForm.tsx';
@@ -12,7 +13,7 @@ import { ClosureForm } from './components/ClosureForm.tsx';
 import { DboSigningPortal } from './components/DboSigningPortal.tsx';
 import { useAuth } from './src/contexts/AuthContext.tsx';
 import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient } from './types.ts';
-import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp } from 'lucide-react';
+import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp, FileSpreadsheet } from 'lucide-react';
 import { DBService } from './services/db.ts';
 import { isSupabaseDisabled } from './components/lib/supabase.ts';
 import { numberToWords } from './utils/numberToWords.ts';
@@ -566,6 +567,27 @@ const App: React.FC = () => {
             />
           } />
           <Route path="/data-validation" element={<DataValidationModule />} />
+          <Route path="/clients-returns" element={
+            isAdminAuthenticated ? (
+              <ClientsAndReturnsHub onSyncComplete={handleRefreshDatabase} onDebtorUpdate={handleDebtorUpdate} />
+            ) : (
+              <Navigate to="/admin" replace />
+            )
+          } />
+          <Route path="/clients" element={
+            isAdminAuthenticated ? (
+              <ClientsAndReturnsHub defaultTab="clients" onSyncComplete={handleRefreshDatabase} onDebtorUpdate={handleDebtorUpdate} />
+            ) : (
+              <Navigate to="/admin" replace />
+            )
+          } />
+          <Route path="/returns" element={
+            isAdminAuthenticated ? (
+              <ClientsAndReturnsHub defaultTab="returns" onSyncComplete={handleRefreshDatabase} onDebtorUpdate={handleDebtorUpdate} />
+            ) : (
+              <Navigate to="/admin" replace />
+            )
+          } />
           <Route path="/scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
           <Route path="/sign-scope-disclosure" element={<ScopeDisclosureModule isStandalone={true} isAdmin={false} />} />
           <Route path="/portal" element={

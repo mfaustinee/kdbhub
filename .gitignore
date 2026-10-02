@@ -26,6 +26,7 @@ dist-ssr
 .dev.vars
 .env.*
 !.env.example
+firebase-applet-config.json
 
 # Supabase
 .supabase/

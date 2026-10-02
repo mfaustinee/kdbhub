@@ -1321,6 +1321,37 @@ export const DBService = {
     }
   },
 
+  async deleteDebtor(id: string): Promise<void> {
+    if (!id) return;
+    try {
+      const current = await this.getDebtors();
+      const updated = current.filter(d => d.id !== id);
+      debtorsMemoryCache = updated;
+      debtorsCacheTimestamp = Date.now();
+      safeSetLocalStorage('kdb_debtors_cache', JSON.stringify(updated));
+
+      const syncLocal = async () => {
+        try {
+          await fetch(`/api/debtors/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        } catch (e) {
+          console.warn("[DBService] Local API notice for deleteDebtor:", e);
+        }
+      };
+
+      const client = await getSupabase();
+      if (client) {
+        try {
+          await client.from('debtors').delete().eq('id', id);
+        } catch (e) {
+          console.warn("[DBService] Supabase deleteDebtor notice:", e);
+        }
+      }
+      syncLocal().catch(() => {});
+    } catch (err) {
+      console.warn("[DBService] deleteDebtor notice:", err);
+    }
+  },
+
   async getStaffConfig(forceFresh: boolean = false): Promise<StaffConfig> {
     const defaultModules = {
       levyAgreement: true,

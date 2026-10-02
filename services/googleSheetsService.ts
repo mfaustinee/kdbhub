@@ -8,8 +8,19 @@ import {
   signOut,
   Auth
 } from 'firebase/auth';
-import firebaseConfig from '../firebase-applet-config.json';
 import { LicensedClient, ClientReturn, ClientBranch } from '../types';
+
+const defaultFirebaseConfig = {
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0410181080",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:1076874979005:web:25682e11a674c9e298b9d4",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "gen-lang-client-0410181080.firebaseapp.com",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0410181080.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "1076874979005",
+  measurementId: "",
+  oAuthClientId: import.meta.env.VITE_FIREBASE_OAUTH_CLIENT_ID || "1076874979005-9tjub8fadialv782dqrs0i6s5bhpfudk.apps.googleusercontent.com",
+  recaptchaSiteKey: ""
+};
 
 let appInstance: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
@@ -18,7 +29,16 @@ const getSafeAuth = (): Auth | null => {
   if (authInstance) return authInstance;
   try {
     if (typeof window === 'undefined') return null;
-    appInstance = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+    const resolvedApiKey = import.meta.env.VITE_FIREBASE_API_KEY || defaultFirebaseConfig.apiKey || '';
+    if (!resolvedApiKey) {
+      // API key is not configured or has been scrubbed for security
+      return null;
+    }
+    const resolvedConfig = {
+      ...defaultFirebaseConfig,
+      apiKey: resolvedApiKey
+    };
+    appInstance = getApps().length > 0 ? getApp() : initializeApp(resolvedConfig);
     authInstance = getAuth(appInstance);
     return authInstance;
   } catch (err) {

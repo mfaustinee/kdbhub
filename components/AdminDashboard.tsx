@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
-import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw } from 'lucide-react';
+import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import { useAuth } from '../src/contexts/AuthContext';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
@@ -13,6 +13,7 @@ import { numberToWords } from '../utils/numberToWords';
 import { DebtorsModule } from './DebtorsModule';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
+import { ClientsAndReturnsHub } from './ClientsAndReturnsHub';
 import { GeneralAccessQrCard } from './GeneralAccessQrCard';
 
 interface AdminDashboardProps {
@@ -45,7 +46,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onStaffUpdate 
 }) => {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'requests_to_approve' | 'debtors' | 'data_validation' | 'scope_disclosure' | 'settings'>('data_validation');
+  const [tab, setTab] = useState<'clients_and_returns' | 'data_validation' | 'scope_disclosure' | 'requests_to_approve' | 'debtors' | 'settings'>('clients_and_returns');
   const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations'>('agreements');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -56,6 +57,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const getTabLabel = (currentTab: typeof tab) => {
     switch (currentTab) {
+      case 'clients_and_returns': return 'Clients & Returns Hub';
       case 'data_validation': return 'Data Validation Form';
       case 'scope_disclosure': return 'Scope Disclosure Form';
       case 'requests_to_approve': return 'Approvals';
@@ -1013,14 +1015,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button 
-              onClick={() => changeTab('debtors')} 
-              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'debtors' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
+              onClick={() => changeTab('clients_and_returns')} 
+              className={`px-4 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-between w-full text-left ${tab === 'clients_and_returns' ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}
             >
               <div className="flex items-center">
-                <AlertTriangle className="w-4 h-4 mr-3 shrink-0 text-amber-500" />
-                Debtors Ledger
+                <FileSpreadsheet className="w-4 h-4 mr-3 shrink-0 text-emerald-500" />
+                Clients & Returns Hub
               </div>
-              {tab === 'debtors' && <Check className="w-4 h-4 text-emerald-400" />}
+              {tab === 'clients_and_returns' && <Check className="w-4 h-4 text-emerald-400" />}
             </button>
 
             <button 
@@ -1147,12 +1149,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button 
-              onClick={() => changeTab('debtors')} 
-              title="Debtors Ledger"
-              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'debtors' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
+              onClick={() => changeTab('clients_and_returns')} 
+              title="Clients & Returns Hub"
+              className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-all flex items-center ${isSidebarCollapsed ? 'justify-center px-0' : 'w-full text-left'} ${tab === 'clients_and_returns' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <AlertTriangle className={`w-3.5 h-3.5 shrink-0 text-amber-500 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
-              {!isSidebarCollapsed && <span>Debtors Ledger</span>}
+              <FileSpreadsheet className={`w-3.5 h-3.5 shrink-0 text-emerald-400 ${isSidebarCollapsed ? '' : 'mr-2.5'}`} />
+              {!isSidebarCollapsed && <span>Clients & Returns</span>}
             </button>
 
             <button 
@@ -1721,12 +1723,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {tab === 'clients_and_returns' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <ClientsAndReturnsHub 
+            onSyncComplete={onRefresh}
+            onDebtorUpdate={onDebtorUpdate}
+          />
+        </div>
+      )}
+
       {tab === 'debtors' && (
-        <div className="animate-in fade-in duration-300">
-          <DebtorsModule 
-            debtors={debtors} 
-            onDebtorUpdate={onDebtorUpdate} 
-            onRefresh={onRefresh}
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <ClientsAndReturnsHub 
+            defaultTab="debtors"
+            onSyncComplete={onRefresh}
+            onDebtorUpdate={onDebtorUpdate}
           />
         </div>
       )}
