@@ -9,10 +9,13 @@ import {
   Sparkles, 
   LogOut, 
   Database,
-  ArrowRight,
   ShieldCheck,
   HelpCircle,
-  Check
+  Check,
+  Copy,
+  Clock,
+  Layers,
+  ArrowUpRight
 } from 'lucide-react';
 import { GoogleSheetsService, CLIENTS_HEADERS, RETURNS_HEADERS } from '../services/googleSheetsService';
 import { DBService } from '../services/db';
@@ -27,16 +30,45 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
   const [clientsTabInput, setClientsTabInput] = useState('Clients_DB');
   const [returnsTabInput, setReturnsTabInput] = useState('Returns_DB');
   const [availableTabs, setAvailableTabs] = useState<string[]>([]);
-  const [showTabSettings, setShowTabSettings] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
-  const [showGuide, setShowGuide] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [copiedHeader, setCopiedHeader] = useState<'clients' | 'returns' | null>(null);
+
+  // Active Workspace Sub-Tab
+  const [activeTab, setActiveTab] = useState<'overview' | 'credentials' | 'tabs' | 'schema'>('overview');
+  
+  // Service Account Credentials State
+  const [serverCreds, setServerCreds] = useState<{ configured: boolean; clientEmail?: string; spreadsheetId?: string; hasPrivateKey?: boolean }>({ configured: false });
+  const [jsonCredentialsInput, setJsonCredentialsInput] = useState('');
+  const [clientEmailInput, setClientEmailInput] = useState('');
+  const [privateKeyInput, setPrivateKeyInput] = useState('');
+  const [isSavingCreds, setIsSavingCreds] = useState(false);
+  const [credsSaveMessage, setCredsSaveMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  const loadServerCredentials = async () => {
+    try {
+      const res = await fetch('/api/google-credentials');
+      if (res.ok) {
+        const data = await res.json();
+        setServerCreds(data);
+        if (data.clientEmail) setClientEmailInput(data.clientEmail);
+        if (data.spreadsheetId && !currentSpreadsheetId) {
+          setCurrentSpreadsheetId(data.spreadsheetId);
+          setSpreadsheetInput(data.spreadsheetId);
+        }
+      }
+    } catch (e) {
+      console.warn('Error loading server credentials:', e);
+    }
+  };
 
   useEffect(() => {
+    loadServerCredentials();
     try {
       const sId = GoogleSheetsService.getSpreadsheetId();
       setCurrentSpreadsheetId(sId);
@@ -166,6 +198,62 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
     }
   };
 
+  const handleSaveServerCredentials = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSavingCreds(true);
+    setCredsSaveMessage(null);
+    try {
+      const payload: any = {
+        spreadsheetId: spreadsheetInput.trim() || currentSpreadsheetId
+      };
+
+      if (jsonCredentialsInput.trim()) {
+        payload.serviceAccountJson = jsonCredentialsInput.trim();
+      } else {
+        payload.clientEmail = clientEmailInput.trim();
+        payload.privateKey = privateKeyInput.trim();
+      }
+
+      const res = await fetch('/api/google-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.details || data.error || 'Failed to save credentials');
+      }
+
+      setServerCreds({
+        configured: data.configured,
+        clientEmail: data.clientEmail,
+        spreadsheetId: data.spreadsheetId,
+        hasPrivateKey: true
+      });
+
+      if (data.spreadsheetId) {
+        GoogleSheetsService.setSpreadsheetId(data.spreadsheetId);
+        setCurrentSpreadsheetId(data.spreadsheetId);
+      }
+
+      setCredsSaveMessage({
+        text: `Credentials saved successfully! Status: ${data.testStatus || 'verified'}. Data Validation automated sync is active!`,
+        type: 'success'
+      });
+      setJsonCredentialsInput('');
+      setPrivateKeyInput('');
+      onSyncComplete?.();
+    } catch (err: any) {
+      setCredsSaveMessage({
+        text: err.message || 'Failed to save Google credentials.',
+        type: 'error'
+      });
+    } finally {
+      setIsSavingCreds(false);
+    }
+  };
+
   const handleSyncNow = async () => {
     if (!currentSpreadsheetId) {
       setStatusMessage({ text: 'Please enter a Spreadsheet ID first.', type: 'error' });
@@ -180,7 +268,9 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
         DBService.getClients(true),
         DBService.getReturns(true)
       ]);
-      setStatusMessage({ text: `Synced successfully from tabs "${clientsTabInput}" and "${returnsTabInput}"!`, type: 'success' });
+      const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setLastSyncTime(now);
+      setStatusMessage({ text: `Synced successfully from tabs "${clientsTabInput}" and "${returnsTabInput}" at ${now}!`, type: 'success' });
       onSyncComplete?.();
     } catch (err: any) {
       console.error('Sync failed:', err);
@@ -190,44 +280,42 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
     }
   };
 
-  return (
-    <div className="bg-gradient-to-r from-emerald-900 via-slate-900 to-emerald-950 text-white rounded-2xl p-5 sm:p-6 shadow-md border border-emerald-700/40">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        {/* Left column: Status & Title */}
-        <div className="space-y-1.5 max-w-xl">
-          <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              <FileSpreadsheet className="w-3 h-3 text-emerald-400" />
-              <span>Approach A Active: Google Sheets Database</span>
-            </span>
-            {currentSpreadsheetId && (
-              <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-400">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Linked
-              </span>
-            )}
-          </div>
+  const handleCopyHeaders = (type: 'clients' | 'returns') => {
+    const text = type === 'clients' ? CLIENTS_HEADERS.join('\t') : RETURNS_HEADERS.join('\t');
+    navigator.clipboard.writeText(text);
+    setCopiedHeader(type);
+    setTimeout(() => setCopiedHeader(null), 2500);
+  };
 
-          <h2 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-            Clients & Returns Live Database
-          </h2>
-          <p className="text-xs text-slate-300 leading-relaxed font-normal">
-            Google Sheets functions as the primary database for the <strong className="text-white font-semibold">Clients Registry</strong> and <strong className="text-white font-semibold">Returns Module</strong>. Supabase remains dedicated to drafts, signatures, and storage buckets.
+  return (
+    <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-7 space-y-6">
+      {/* Workspace Command Bar Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+        <div>
+          <div className="flex items-center gap-2 text-emerald-700 text-xs font-black uppercase tracking-wider mb-1">
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <span>Approach A · Master Records & Automated Sync Hub</span>
+          </div>
+          <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+            Google Sheets Central Sync
+          </h3>
+          <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+            Primary storage for Clients Registry & Returns Ledger. Signatures, drafts & PDFs remain securely in Supabase.
           </p>
         </div>
 
-        {/* Right column: Google Account Status */}
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+        {/* Global Header Actions: Account Status, Link & Fast Sync */}
+        <div className="flex items-center gap-2.5 flex-wrap shrink-0">
           {isConnected ? (
-            <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700 text-xs">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="text-slate-200 font-medium truncate max-w-[160px]" title={currentUserEmail || ''}>
+            <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-xs">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="text-slate-800 font-semibold truncate max-w-[150px]" title={currentUserEmail || ''}>
                 {currentUserEmail}
               </span>
               <button
                 type="button"
                 onClick={handleSignOut}
-                className="text-slate-400 hover:text-rose-400 transition-colors ml-1"
+                className="text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
                 title="Disconnect Google Account"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -238,159 +326,458 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
               type="button"
               onClick={handleSignIn}
               disabled={isSigningIn}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-900 text-xs font-bold transition-all shadow-sm cursor-pointer disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold border border-slate-200 shadow-xs cursor-pointer disabled:opacity-50"
             >
-              <svg className="w-4 h-4" viewBox="0 0 48 48">
+              <svg className="w-3.5 h-3.5" viewBox="0 0 48 48">
                 <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
                 <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
                 <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
                 <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
               </svg>
-              <span>{isSigningIn ? 'Connecting...' : 'Connect Google Account'}</span>
+              <span>{isSigningIn ? 'Connecting...' : 'Connect Google'}</span>
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => setShowTabSettings(!showTabSettings)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-              showTabSettings 
-                ? 'bg-blue-600 text-white border-blue-400' 
-                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700'
-            }`}
-            title="Configure which specific tabs to use so existing sheets remain untouched"
-          >
-            <Database className="w-3.5 h-3.5 text-blue-400" />
-            <span>Target Tabs ({clientsTabInput} / {returnsTabInput})</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowGuide(!showGuide)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-800/40 hover:bg-emerald-800/60 text-emerald-200 text-xs font-semibold border border-emerald-600/40 transition-all cursor-pointer"
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>Setup Schema</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Spreadsheet Input and Action Controls */}
-      <div className="mt-4 pt-4 border-t border-emerald-800/40 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
-        <div className="relative flex-grow">
-          <input
-            type="text"
-            value={spreadsheetInput}
-            onChange={(e) => setSpreadsheetInput(e.target.value)}
-            placeholder="Paste Google Spreadsheet ID or URL (e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms)"
-            className="w-full bg-slate-950/60 border border-emerald-500/30 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-400 font-mono"
-          />
-        </div>
-
-        <button
-          type="button"
-          onClick={handleSaveSpreadsheet}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer whitespace-nowrap"
-        >
-          Connect Sheet
-        </button>
-
-        {currentSpreadsheetId && (
-          <>
-            <button
-              type="button"
-              onClick={handleInitializeHeaders}
-              disabled={isInitializing || !isConnected}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 rounded-xl text-xs font-semibold border border-emerald-500/30 transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center justify-center gap-1.5"
-              title="Automatically creates 'Clients' and 'Returns' tabs with all required headers"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-              <span>{isInitializing ? 'Setting Up...' : 'Auto-Setup Tabs & Headers'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleSyncNow}
-              disabled={isSyncing}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center justify-center gap-1.5"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-emerald-400' : ''}`} />
-              <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
-            </button>
-
+          {currentSpreadsheetId && (
             <a
               href={`https://docs.google.com/spreadsheets/d/${currentSpreadsheetId}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition-all cursor-pointer flex items-center justify-center"
-              title="Open Google Sheet in new tab"
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 hover:text-emerald-700 border border-slate-200 rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+              title="Open Google Sheet in new browser tab"
             >
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Open Sheet</span>
             </a>
-          </>
-        )}
+          )}
+
+          <button
+            type="button"
+            onClick={handleSyncNow}
+            disabled={isSyncing || !currentSpreadsheetId}
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Status Message Feedback */}
-      {statusMessage && (
-        <div className={`mt-3 p-2.5 rounded-xl text-xs font-medium flex items-center gap-2 ${
-          statusMessage.type === 'success' 
-            ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30' 
-            : statusMessage.type === 'error'
-            ? 'bg-rose-500/20 text-rose-200 border border-rose-500/30'
-            : 'bg-blue-500/20 text-blue-200 border border-blue-500/30'
+      {/* 3-Column Diagnostic Summary Bar (Utilizes widescreen space efficiently) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        {/* Metric 1: Spreadsheet Link */}
+        <div className={`p-4 rounded-2xl border transition-all ${
+          currentSpreadsheetId ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'
         }`}>
-          {statusMessage.type === 'success' && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
-          {statusMessage.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
-          <span>{statusMessage.text}</span>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Workbook Link</span>
+            {currentSpreadsheetId ? (
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+            )}
+          </div>
+          <div className="text-xs font-bold text-slate-900 truncate" title={currentSpreadsheetId || 'Not connected'}>
+            {currentSpreadsheetId ? `ID: ${currentSpreadsheetId.slice(0, 14)}...` : 'No Sheet Connected'}
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium mt-1 block">
+            {currentSpreadsheetId ? 'Primary Master Linked' : 'Paste Sheet URL below'}
+          </span>
+        </div>
+
+        {/* Metric 2: Service Account Status */}
+        <div className={`p-4 rounded-2xl border transition-all ${
+          serverCreds.configured ? 'bg-blue-50/50 border-blue-200' : 'bg-amber-50/50 border-amber-200'
+        }`}>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Service Account</span>
+            <span className={`w-2 h-2 rounded-full ${serverCreds.configured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+          </div>
+          <div className="text-xs font-bold text-slate-900 truncate">
+            {serverCreds.configured ? 'Active & Verified' : 'Missing Credentials'}
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium mt-1 block">
+            {serverCreds.configured ? 'Data Validation Auto-Sync Ready' : 'Key required for background write'}
+          </span>
+        </div>
+
+        {/* Metric 3: Target Tabs Isolation */}
+        <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/60">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Isolated Tabs</span>
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          </div>
+          <div className="text-xs font-bold text-slate-900 truncate">
+            {clientsTabInput} / {returnsTabInput}
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium mt-1 block">
+            Existing tabs protected
+          </span>
+        </div>
+      </div>
+
+      {/* Global Status Message */}
+      {statusMessage && (
+        <div className={`p-3.5 rounded-2xl text-xs font-semibold flex items-center justify-between gap-2.5 animate-in fade-in ${
+          statusMessage.type === 'success' 
+            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+            : statusMessage.type === 'error'
+            ? 'bg-rose-50 text-rose-800 border border-rose-200'
+            : 'bg-blue-50 text-blue-800 border border-blue-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            {statusMessage.type === 'success' && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
+            {statusMessage.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+            <span>{statusMessage.text}</span>
+          </div>
+          {lastSyncTime && (
+            <span className="text-[10px] text-emerald-700 font-mono shrink-0">
+              Last synced: {lastSyncTime}
+            </span>
+          )}
         </div>
       )}
 
-      {/* Target Tabs Configuration Panel */}
-      {showTabSettings && (
-        <div className="mt-4 p-4 rounded-xl bg-slate-950/90 border border-blue-500/30 text-xs space-y-3 animate-in fade-in">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+      {/* Workspace Segmented Navigation Tabs */}
+      <div className="flex items-center gap-1.5 border-b border-slate-100 pb-3 overflow-x-auto scrollbar-none">
+        <button
+          type="button"
+          onClick={() => setActiveTab('overview')}
+          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'overview'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Connection & Live Sync</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('credentials')}
+          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'credentials'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Key className="w-3.5 h-3.5" />
+          <span>Service Account Keys</span>
+          <span className={`w-1.5 h-1.5 rounded-full ${serverCreds.configured ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('tabs')}
+          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'tabs'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5" />
+          <span>Target Tab Isolation</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('schema')}
+          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'schema'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+          <span>Schema & Headers Reference</span>
+        </button>
+      </div>
+
+      {/* TAB 1: CONNECTION & LIVE SYNC OVERVIEW */}
+      {activeTab === 'overview' && (
+        <div className="space-y-5 animate-in fade-in">
+          {/* Main 2-Column Responsive Workspace Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Left Column: Spreadsheet ID Input & Actions */}
+            <div className="lg:col-span-7 bg-slate-50/70 p-5 rounded-2xl border border-slate-200/80 space-y-4">
+              <div>
+                <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center justify-between">
+                  <span>Google Spreadsheet URL or Sheet ID</span>
+                  {currentSpreadsheetId && (
+                    <span className="text-[10px] text-emerald-700 font-bold font-mono">
+                      ✓ Active
+                    </span>
+                  )}
+                </label>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Paste the browser link from your Google Sheet or the alphanumeric ID from between /d/ and /edit.
+                </p>
+              </div>
+
+              <div className="space-y-2.5">
+                <input
+                  type="text"
+                  value={spreadsheetInput}
+                  onChange={(e) => setSpreadsheetInput(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 font-mono shadow-xs"
+                />
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleSaveSpreadsheet}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    Connect Spreadsheet
+                  </button>
+
+                  {currentSpreadsheetId && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleInitializeHeaders}
+                        disabled={isInitializing || !isConnected}
+                        className="px-3.5 py-2 bg-white hover:bg-slate-50 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1.5"
+                        title="Creates Clients_DB and Returns_DB tabs with exact required columns"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{isInitializing ? 'Creating...' : 'Auto-Setup Headers'}</span>
+                      </button>
+
+                      <a
+                        href={`https://docs.google.com/spreadsheets/d/${currentSpreadsheetId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-2 bg-white hover:bg-slate-50 text-slate-600 hover:text-emerald-700 border border-slate-200 rounded-xl transition-all cursor-pointer flex items-center justify-center shadow-xs"
+                        title="Open in new window"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column: Engine Sync Status & Quick Navigation */}
+            <div className="lg:col-span-5 bg-slate-50/70 p-5 rounded-2xl border border-slate-200/80 space-y-4 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Sync Engine & Cache</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                </div>
+                <p className="text-xs text-slate-500 font-medium">
+                  Syncing pulls fresh records from Google Sheets into memory and local storage, ensuring fast queries across reports and validation forms.
+                </p>
+              </div>
+
+              {/* Service Account Quick Badge / Jump Card */}
+              <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                    <Key className="w-3.5 h-3.5 text-amber-600" />
+                    Data Validation Sync
+                  </span>
+                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                    serverCreds.configured ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    {serverCreds.configured ? 'Active' : 'Setup Needed'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  {serverCreds.configured 
+                    ? `Authenticated as: ${serverCreds.clientEmail || 'Service Account'}`
+                    : 'Add service account credentials so inspection submissions sync automatically without popup logins.'
+                  }
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('credentials')}
+                  className="text-xs font-bold text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 cursor-pointer pt-0.5"
+                >
+                  <span>{serverCreds.configured ? 'Manage Credentials' : 'Set Up Service Account'}</span>
+                  <ArrowUpRight className="w-3 h-3" />
+                </button>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between">
+                <span className="text-[11px] text-slate-400 font-medium">
+                  {lastSyncTime ? `Last sync: ${lastSyncTime}` : 'Cache active'}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSyncNow}
+                  disabled={isSyncing || !currentSpreadsheetId}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                  <span>Sync Records</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: SERVICE ACCOUNT CREDENTIALS (Focused view for Data Validation Sync) */}
+      {activeTab === 'credentials' && (
+        <div className="p-6 rounded-2xl bg-amber-50/40 border border-amber-200/80 space-y-5 animate-in fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-100 pb-4">
             <div>
-              <span className="font-bold text-white text-sm flex items-center gap-2">
-                <Database className="w-4 h-4 text-blue-400" />
+              <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Key className="w-4 h-4 text-amber-600" />
+                Google Service Account Credentials (For Data Validation & Automated Sync)
+              </span>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                Grants the backend server write permissions to your Google Sheet without requiring interactive login popups.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                serverCreds.configured 
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+                  : 'bg-amber-100 text-amber-800 border-amber-300'
+              }`}>
+                {serverCreds.configured ? 'Status: Active & Verified' : 'Status: Credentials Missing'}
+              </span>
+            </div>
+          </div>
+
+          {credsSaveMessage && (
+            <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+              credsSaveMessage.type === 'success' 
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                : 'bg-rose-50 text-rose-800 border border-rose-200'
+            }`}>
+              {credsSaveMessage.type === 'success' && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
+              {credsSaveMessage.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+              <span>{credsSaveMessage.text}</span>
+            </div>
+          )}
+
+          {/* 2-Column Responsive Key Input Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Option 1: Fast Service Account JSON Key Paste */}
+            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+              <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                <span>Option 1: Paste Service Account JSON</span>
+                <span className="text-[10px] text-emerald-600 font-bold">Fastest</span>
+              </label>
+              <p className="text-[11px] text-slate-400">
+                Directly paste your Google Cloud service account JSON file contents. Email and private key are automatically extracted.
+              </p>
+              <textarea
+                rows={5}
+                value={jsonCredentialsInput}
+                onChange={(e) => setJsonCredentialsInput(e.target.value)}
+                placeholder='{ "type": "service_account", "client_email": "...", "private_key": "-----BEGIN PRIVATE KEY-----..." }'
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono focus:border-amber-500 focus:outline-none placeholder-slate-400"
+              />
+            </div>
+
+            {/* Option 2: Manual Email & Private Key */}
+            <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <label className="text-xs font-bold text-slate-800 block mb-1">
+                  Option 2: Manual Credentials Entry
+                </label>
+                <div className="space-y-2 pt-1">
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-bold text-slate-600">Client Email:</span>
+                    <input
+                      type="text"
+                      value={clientEmailInput}
+                      onChange={(e) => setClientEmailInput(e.target.value)}
+                      placeholder="app-service@project.iam.gserviceaccount.com"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-bold text-slate-600">Private Key (PEM):</span>
+                    <input
+                      type="password"
+                      value={privateKeyInput}
+                      onChange={(e) => setPrivateKeyInput(e.target.value)}
+                      placeholder="-----BEGIN PRIVATE KEY-----..."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono focus:border-amber-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 text-[10px] text-slate-400">
+                Credentials are kept securely on the local server and tested against the Google Sheets API.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-amber-200/80">
+            <p className="text-[11px] text-slate-500 font-medium">
+              Important: Ensure you share your Google Sheet with Editor permission to your Service Account Client Email!
+            </p>
+            <button
+              type="button"
+              onClick={handleSaveServerCredentials}
+              disabled={isSavingCreds}
+              className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0"
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span>{isSavingCreds ? 'Verifying & Saving...' : 'Save & Verify Credentials'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: TARGET TABS & ISOLATION */}
+      {activeTab === 'tabs' && (
+        <div className="p-6 rounded-2xl bg-blue-50/40 border border-blue-200/80 text-xs space-y-5 animate-in fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 pb-3.5">
+            <div>
+              <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Database className="w-4 h-4 text-blue-600" />
                 Target Tab Isolation Settings
               </span>
-              <p className="text-[11px] text-slate-300 mt-0.5">
-                Specify which sheet tabs the app reads and writes to. All other tabs in your workbook (including any existing custom clients or returns tabs) will remain <strong className="text-emerald-400 font-semibold">100% untouched</strong>.
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                Specify sheet tab names. All other tabs in your workbook remain <strong className="text-emerald-700 font-semibold">100% untouched</strong>.
               </p>
             </div>
             {availableTabs.length > 0 && (
-              <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-1 rounded-md border border-slate-700 whitespace-nowrap">
+              <span className="text-[10px] bg-white text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 font-bold whitespace-nowrap shadow-xs">
                 Found {availableTabs.length} tabs in workbook
               </span>
             )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             {/* Clients Tab Name */}
-            <div className="space-y-1.5">
-              <label className="font-semibold text-emerald-300 flex items-center justify-between">
-                <span>Clients Database Tab:</span>
+            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+              <label className="font-bold text-slate-800 flex items-center justify-between">
+                <span>Clients Database Tab</span>
                 <span className="text-[10px] text-slate-400 font-normal">Default: Clients_DB</span>
               </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={clientsTabInput}
-                  onChange={(e) => setClientsTabInput(e.target.value)}
-                  placeholder="e.g. Clients_DB or KDB_Clients"
-                  className="flex-grow bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono focus:border-blue-400 focus:outline-none"
-                />
-              </div>
+              <input
+                type="text"
+                value={clientsTabInput}
+                onChange={(e) => setClientsTabInput(e.target.value)}
+                placeholder="e.g. Clients_DB or KDB_Clients"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 font-mono focus:border-blue-500 focus:outline-none"
+              />
               {availableTabs.length > 0 && (
-                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-400">
+                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-500 pt-1">
                   <span>Quick pick:</span>
                   {availableTabs.slice(0, 5).map(tab => (
                     <button
                       key={tab}
                       type="button"
                       onClick={() => setClientsTabInput(tab)}
-                      className={`px-1.5 py-0.5 rounded border transition-colors ${clientsTabInput === tab ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'}`}
+                      className={`px-2 py-0.5 rounded-md border font-medium transition-colors cursor-pointer ${
+                        clientsTabInput === tab 
+                          ? 'bg-blue-100 text-blue-800 border-blue-300 font-bold' 
+                          : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200'
+                      }`}
                     >
                       {tab}
                     </button>
@@ -400,29 +787,31 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
             </div>
 
             {/* Returns Tab Name */}
-            <div className="space-y-1.5">
-              <label className="font-semibold text-blue-300 flex items-center justify-between">
-                <span>Returns Database Tab:</span>
+            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+              <label className="font-bold text-slate-800 flex items-center justify-between">
+                <span>Returns Database Tab</span>
                 <span className="text-[10px] text-slate-400 font-normal">Default: Returns_DB</span>
               </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={returnsTabInput}
-                  onChange={(e) => setReturnsTabInput(e.target.value)}
-                  placeholder="e.g. Returns_DB or KDB_Returns"
-                  className="flex-grow bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono focus:border-blue-400 focus:outline-none"
-                />
-              </div>
+              <input
+                type="text"
+                value={returnsTabInput}
+                onChange={(e) => setReturnsTabInput(e.target.value)}
+                placeholder="e.g. Returns_DB or KDB_Returns"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 font-mono focus:border-blue-500 focus:outline-none"
+              />
               {availableTabs.length > 0 && (
-                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-400">
+                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-500 pt-1">
                   <span>Quick pick:</span>
                   {availableTabs.slice(0, 5).map(tab => (
                     <button
                       key={tab}
                       type="button"
                       onClick={() => setReturnsTabInput(tab)}
-                      className={`px-1.5 py-0.5 rounded border transition-colors ${returnsTabInput === tab ? 'bg-blue-500/20 text-blue-300 border-blue-500/40' : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'}`}
+                      className={`px-2 py-0.5 rounded-md border font-medium transition-colors cursor-pointer ${
+                        returnsTabInput === tab 
+                          ? 'bg-blue-100 text-blue-800 border-blue-300 font-bold' 
+                          : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200'
+                      }`}
                     >
                       {tab}
                     </button>
@@ -432,45 +821,86 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
-            <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+          <div className="flex items-center justify-between pt-3 border-t border-blue-100">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>Isolated read & write protection active.</span>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleSaveTabConfiguration}
-                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
-              >
-                Save Tab Mapping
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={handleSaveTabConfiguration}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+            >
+              Save Tab Mapping
+            </button>
           </div>
         </div>
       )}
 
-      {/* Schema Guide Dropdown */}
-      {showGuide && (
-        <div className="mt-4 p-4 rounded-xl bg-slate-950/80 border border-slate-800 text-xs space-y-3 animate-in fade-in">
-          <div className="flex items-center justify-between">
-            <span className="font-bold text-white text-sm">Required Google Sheets Schema</span>
-            <span className="text-[11px] text-emerald-400">Tip: Click "Auto-Setup Tabs & Headers" to create automatically!</span>
+      {/* TAB 4: SCHEMA & COLUMN REFERENCE */}
+      {activeTab === 'schema' && (
+        <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-5 animate-in fade-in">
+          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+            <div>
+              <span className="font-bold text-slate-900 text-sm">Required Google Sheets Schema</span>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Exact column headers expected by the applet for Clients and Returns import/export.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleInitializeHeaders}
+              disabled={isInitializing || !isConnected || !currentSpreadsheetId}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{isInitializing ? 'Creating...' : 'Auto-Setup in Sheet'}</span>
+            </button>
           </div>
 
-          <div className="space-y-2">
-            <div>
-              <span className="font-bold text-emerald-300">Tab 1: "Clients" (18 Columns):</span>
-              <div className="p-2 mt-1 bg-slate-900 rounded font-mono text-[11px] text-slate-300 overflow-x-auto whitespace-nowrap">
-                {CLIENTS_HEADERS.join(' | ')}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Clients DB Columns Card */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-emerald-800 text-xs">Tab: "Clients_DB" (18 Columns)</span>
+                <button
+                  type="button"
+                  onClick={() => handleCopyHeaders('clients')}
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedHeader === 'clients' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedHeader === 'clients' ? 'Copied!' : 'Copy Headers'}</span>
+                </button>
+              </div>
+              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[10px] text-slate-700 overflow-x-auto max-h-48 whitespace-pre-wrap leading-relaxed">
+                {CLIENTS_HEADERS.map((h, i) => (
+                  <span key={h} className="inline-block bg-white border border-slate-200 px-1.5 py-0.5 rounded mr-1.5 mb-1.5 text-slate-800">
+                    <span className="text-slate-400 text-[9px] mr-1">{i + 1}.</span>{h}
+                  </span>
+                ))}
               </div>
             </div>
 
-            <div>
-              <span className="font-bold text-blue-300">Tab 2: "Returns" (14 Columns):</span>
-              <div className="p-2 mt-1 bg-slate-900 rounded font-mono text-[11px] text-slate-300 overflow-x-auto whitespace-nowrap">
-                {RETURNS_HEADERS.join(' | ')}
+            {/* Returns DB Columns Card */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-blue-800 text-xs">Tab: "Returns_DB" (14 Columns)</span>
+                <button
+                  type="button"
+                  onClick={() => handleCopyHeaders('returns')}
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedHeader === 'returns' ? <Check className="w-3 h-3 text-blue-600" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedHeader === 'returns' ? 'Copied!' : 'Copy Headers'}</span>
+                </button>
+              </div>
+              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[10px] text-slate-700 overflow-x-auto max-h-48 whitespace-pre-wrap leading-relaxed">
+                {RETURNS_HEADERS.map((h, i) => (
+                  <span key={h} className="inline-block bg-white border border-slate-200 px-1.5 py-0.5 rounded mr-1.5 mb-1.5 text-slate-800">
+                    <span className="text-slate-400 text-[9px] mr-1">{i + 1}.</span>{h}
+                  </span>
+                ))}
               </div>
             </div>
           </div>

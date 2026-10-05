@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
-import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw, FileSpreadsheet } from 'lucide-react';
+import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw, FileSpreadsheet, QrCode, Layers } from 'lucide-react';
 import { useAuth } from '../src/contexts/AuthContext';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
@@ -14,6 +14,7 @@ import { DebtorsModule } from './DebtorsModule';
 import { DataValidationModule } from './DataValidationModule';
 import { ScopeDisclosureModule } from './ScopeDisclosureModule';
 import { ClientsAndReturnsHub } from './ClientsAndReturnsHub';
+import { GoogleSheetsBanner } from './GoogleSheetsBanner';
 import { GeneralAccessQrCard } from './GeneralAccessQrCard';
 
 interface AdminDashboardProps {
@@ -120,6 +121,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const editSigCanvasRef = useRef<SignatureCanvas | null>(null);
   const [editSigIsDefault, setEditSigIsDefault] = useState(false);
   const [isSavingEditSig, setIsSavingEditSig] = useState(false);
+  const [settingsCategory, setSettingsCategory] = useState<'all' | 'sheets' | 'portal' | 'signatures' | 'access' | 'database'>('sheets');
+  const [showSqlSchema, setShowSqlSchema] = useState(false);
   const [systemHealth, setSystemHealth] = useState<any>({
     status: 'checking',
     writable: false,
@@ -1755,443 +1758,491 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {tab === 'settings' && (
-        <div className="max-w-2xl mx-auto animate-in fade-in duration-500">
-          <div className="bg-white p-10 rounded-[40px] border border-slate-100 shadow-xl space-y-10">
+        <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in duration-500">
+          {/* Settings Top Header */}
+          <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
-              <h3 className="text-2xl font-black text-slate-900 tracking-tight">KDB Execution Setup</h3>
-              <p className="text-sm text-slate-500 font-medium mt-1">Manage your official digital identity and public client module availability.</p>
+              <div className="flex items-center gap-2 text-emerald-700 text-xs font-black uppercase tracking-wider mb-1">
+                <Settings className="w-4 h-4 text-emerald-600" />
+                <span>System Administration & Governance</span>
+              </div>
+              <h3 className="text-2xl font-black text-slate-900 tracking-tight">System Settings & Infrastructure</h3>
+              <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
+                Dedicated governance workspaces for Google database sync, client portal modules, official authority signatures, and cloud infrastructure.
+              </p>
             </div>
-            
-            <div className="space-y-6">
-                {/* Module Toggles Section */}
-                <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-200/80 space-y-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <Globe className="w-5 h-5 text-emerald-600" />
-                        <h4 className="text-sm font-black text-slate-900 tracking-tight">Client Portal Module Controls</h4>
-                      </div>
-                      <p className="text-xs text-slate-500 font-medium mt-0.5">
-                        Toggle public client-facing service modules on or off in the Client Portal.
-                      </p>
+
+            <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                System Active
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                <Database className="w-3.5 h-3.5 text-blue-600" />
+                PostgreSQL Primary
+              </span>
+            </div>
+          </div>
+
+          {/* Mobile Category Switcher (Visible on small screens) */}
+          <div className="lg:hidden flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+            <button
+              type="button"
+              onClick={() => setSettingsCategory('sheets')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                settingsCategory === 'sheets'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 text-slate-700'
+              }`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Google Sheets</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsCategory('portal')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                settingsCategory === 'portal'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 text-slate-700'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>Portal Modules</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsCategory('signatures')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                settingsCategory === 'signatures'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 text-slate-700'
+              }`}
+            >
+              <PenTool className="w-3.5 h-3.5" />
+              <span>Signatures ({authoritySigs.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsCategory('access')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                settingsCategory === 'access'
+                  ? 'bg-purple-600 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 text-slate-700'
+              }`}
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Mobile QR</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsCategory('database')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                settingsCategory === 'database'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 text-slate-700'
+              }`}
+            >
+              <Server className="w-3.5 h-3.5" />
+              <span>Database Health</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSettingsCategory('all')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                settingsCategory === 'all'
+                  ? 'bg-slate-800 text-white shadow-xs'
+                  : 'bg-white border border-slate-200 text-slate-700'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>All Sections</span>
+            </button>
+          </div>
+
+          {/* Master Dual-Column Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Left Sidebar Menu (Desktop) */}
+            <div className="hidden lg:block lg:col-span-4 xl:col-span-3 space-y-4 sticky top-6">
+              <div className="bg-white p-3 rounded-3xl border border-slate-200/80 shadow-xs space-y-1">
+                <div className="px-3 pt-2 pb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Settings Modules</span>
+                </div>
+
+                {/* Nav Item: Google Sheets */}
+                <button
+                  type="button"
+                  onClick={() => setSettingsCategory('sheets')}
+                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                    settingsCategory === 'sheets'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`p-2 rounded-xl shrink-0 ${
+                      settingsCategory === 'sheets' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
+                    }`}>
+                      <FileSpreadsheet className="w-4 h-4" />
                     </div>
-                    <div className="flex items-center space-x-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleAllModules(true)}
-                        className="px-3 py-1.5 bg-emerald-100/80 text-emerald-800 hover:bg-emerald-200/80 border border-emerald-300/80 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all"
-                      >
-                        Show All
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleAllModules(false)}
-                        className="px-3 py-1.5 bg-rose-100/80 text-rose-800 hover:bg-rose-200/80 border border-rose-300/80 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all"
-                      >
-                        Hide All
-                      </button>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold truncate">Google Sheets & Sync</div>
+                      <div className={`text-[10px] truncate ${
+                        settingsCategory === 'sheets' ? 'text-emerald-100' : 'text-slate-400'
+                      }`}>
+                        Approach A Master Records
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    settingsCategory === 'sheets' ? 'bg-white' : 'bg-emerald-500'
+                  }`} />
+                </button>
+
+                {/* Nav Item: Client Portal */}
+                <button
+                  type="button"
+                  onClick={() => setSettingsCategory('portal')}
+                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                    settingsCategory === 'portal'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`p-2 rounded-xl shrink-0 ${
+                      settingsCategory === 'portal' ? 'bg-white/20 text-white' : 'bg-blue-50 text-blue-700'
+                    }`}>
+                      <Globe className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold truncate">Client Portal Modules</div>
+                      <div className={`text-[10px] truncate ${
+                        settingsCategory === 'portal' ? 'text-blue-100' : 'text-slate-400'
+                      }`}>
+                        Public self-service forms
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
+                    settingsCategory === 'portal' ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'
+                  }`}>
+                    2
+                  </span>
+                </button>
+
+                {/* Nav Item: Authority Signatures */}
+                <button
+                  type="button"
+                  onClick={() => setSettingsCategory('signatures')}
+                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                    settingsCategory === 'signatures'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`p-2 rounded-xl shrink-0 ${
+                      settingsCategory === 'signatures' ? 'bg-white/20 text-white' : 'bg-indigo-50 text-indigo-700'
+                    }`}>
+                      <PenTool className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold truncate">Authority Signatures</div>
+                      <div className={`text-[10px] truncate ${
+                        settingsCategory === 'signatures' ? 'text-indigo-100' : 'text-slate-400'
+                      }`}>
+                        Official stamp registry
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
+                    settingsCategory === 'signatures' ? 'bg-white/20 text-white' : 'bg-indigo-100 text-indigo-800'
+                  }`}>
+                    {authoritySigs.length}
+                  </span>
+                </button>
+
+                {/* Nav Item: Mobile Access & QR */}
+                <button
+                  type="button"
+                  onClick={() => setSettingsCategory('access')}
+                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                    settingsCategory === 'access'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`p-2 rounded-xl shrink-0 ${
+                      settingsCategory === 'access' ? 'bg-white/20 text-white' : 'bg-purple-50 text-purple-700'
+                    }`}>
+                      <QrCode className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold truncate">System Access & QR</div>
+                      <div className={`text-[10px] truncate ${
+                        settingsCategory === 'access' ? 'text-purple-100' : 'text-slate-400'
+                      }`}>
+                        Field tablet direct links
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                    settingsCategory === 'access' ? 'bg-white/20 text-white' : 'bg-purple-100 text-purple-800'
+                  }`}>
+                    Field
+                  </span>
+                </button>
+
+                {/* Nav Item: Cloud Database Health */}
+                <button
+                  type="button"
+                  onClick={() => setSettingsCategory('database')}
+                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                    settingsCategory === 'database'
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`p-2 rounded-xl shrink-0 ${
+                      settingsCategory === 'database' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'
+                    }`}>
+                      <Server className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold truncate">Database Health</div>
+                      <div className={`text-[10px] truncate ${
+                        settingsCategory === 'database' ? 'text-slate-300' : 'text-slate-400'
+                      }`}>
+                        PostgreSQL diagnostics
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${
+                    systemHealth?.status === 'ok' ? 'bg-emerald-400' : 'bg-rose-400'
+                  }`} />
+                </button>
+
+                {/* Nav Item: All Sections Overview */}
+                <div className="pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setSettingsCategory('all')}
+                    className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                      settingsCategory === 'all'
+                        ? 'bg-slate-800 text-white shadow-xs'
+                        : 'hover:bg-slate-50 text-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`p-2 rounded-xl shrink-0 ${
+                        settingsCategory === 'all' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        <Layers className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold truncate">All Sections Overview</div>
+                        <div className={`text-[10px] truncate ${
+                          settingsCategory === 'all' ? 'text-slate-300' : 'text-slate-400'
+                        }`}>
+                          View complete settings stack
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Sidebar Quick Architecture Summary */}
+              <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-3">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                  Quick Architecture Info
+                </span>
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 font-medium">Clients & Returns DB:</span>
+                    <span className="font-bold text-slate-800">Google Sheets</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 font-medium">Drafts & Signatures:</span>
+                    <span className="font-bold text-slate-800">Supabase</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 font-medium">Registered Officers:</span>
+                    <span className="font-bold text-indigo-700">{authoritySigs.length} Active</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Dedicated Workspace Canvas (Each section with its own stuff) */}
+            <div className="lg:col-span-8 xl:col-span-9 space-y-6">
+
+          {/* Section 1: Google Sheets Live Database & Automated Sync */}
+          {(settingsCategory === 'all' || settingsCategory === 'sheets') && (
+            <div className="space-y-3 animate-in fade-in">
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center">1</span>
+                  <h4 className="text-sm font-black text-slate-900 uppercase tracking-wider">Google Sheets Central Records & Sync Engine</h4>
+                </div>
+                <span className="text-xs text-slate-500 font-medium">Approach A & Service Account Sync</span>
+              </div>
+              <GoogleSheetsBanner onSyncComplete={onRefresh} />
+            </div>
+          )}
+
+          {/* Section 2: Client Portal Module Availability Controls */}
+          {(settingsCategory === 'all' || settingsCategory === 'portal') && (
+            <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/80 shadow-xs space-y-6 animate-in fade-in">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-6 h-6 rounded-lg bg-blue-100 text-blue-800 font-black text-xs flex items-center justify-center">2</span>
+                    <h4 className="text-base font-black text-slate-900 tracking-tight">Client Portal Module Controls</h4>
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Configure which public services and application forms are available in the public Client Portal.
+                  </p>
+                </div>
+                <div className="flex items-center space-x-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleAllModules(true)}
+                    className="px-3.5 py-1.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                  >
+                    Show All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleAllModules(false)}
+                    className="px-3.5 py-1.5 bg-rose-50 text-rose-800 hover:bg-rose-100 border border-rose-300 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                  >
+                    Hide All
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Module 1: Levy Payment Agreement */}
+                <div className={`p-5 rounded-2xl border transition-all flex flex-col justify-between gap-4 ${
+                  staffConfig.enabledModules?.levyAgreement !== false ? 'bg-white border-emerald-200 shadow-xs ring-1 ring-emerald-100' : 'bg-slate-50 border-slate-200 opacity-75'
+                }`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start space-x-3">
+                      <div className={`p-2.5 rounded-xl shrink-0 ${
+                        staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'
+                      }`}>
+                        <FileCheck className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-bold text-xs text-slate-900">Levy Arrears Payment Portal</span>
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                            staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                          }`}>
+                            {staffConfig.enabledModules?.levyAgreement !== false ? 'Active' : 'Hidden'}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-medium block mt-1">Enable debtors to review outstanding arrears breakdown and propose installment schedules online.</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-3">
-                    {/* Module 1: Levy Payment Agreement */}
-                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
-                      staffConfig.enabledModules?.levyAgreement !== false ? 'bg-white border-emerald-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
-                    }`}>
-                      <div className="flex items-center space-x-3">
-                        <div className={`p-2.5 rounded-xl ${
-                          staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          <FileCheck className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-xs text-slate-900">Levy Arrears Payment Portal</span>
-                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
-                              staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
-                            }`}>
-                              {staffConfig.enabledModules?.levyAgreement !== false ? 'Active' : 'Hidden'}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Enable debtors to view arrears breakdown and propose payment schedules.</span>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleToggleModule('levyAgreement')}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-600' : 'bg-slate-300'
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                    <span className="text-[10px] text-slate-400 font-medium">Public Route: /levy-agreement</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleModule('levyAgreement')}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        staffConfig.enabledModules?.levyAgreement !== false ? 'bg-emerald-600' : 'bg-slate-300'
+                      }`}
+                      role="switch"
+                      aria-checked={staffConfig.enabledModules?.levyAgreement !== false}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          staffConfig.enabledModules?.levyAgreement !== false ? 'translate-x-5' : 'translate-x-0'
                         }`}
-                        role="switch"
-                        aria-checked={staffConfig.enabledModules?.levyAgreement !== false}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                            staffConfig.enabledModules?.levyAgreement !== false ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Module 4: Business Closure Notification */}
-                    <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
-                      staffConfig.enabledModules?.businessClosure !== false ? 'bg-white border-amber-200 shadow-sm' : 'bg-slate-100/80 border-slate-200 opacity-75'
-                    }`}>
-                      <div className="flex items-center space-x-3">
-                        <div className={`p-2.5 rounded-xl ${
-                          staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-50 text-amber-600' : 'bg-slate-200 text-slate-500'
-                        }`}>
-                          <Building2 className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-bold text-xs text-slate-900">Business Closure & Cessation</span>
-                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
-                              staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-600'
-                            }`}>
-                              {staffConfig.enabledModules?.businessClosure !== false ? 'Active' : 'Hidden'}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-500 font-medium block mt-0.5">Allow licensees to formally notify KDB of business cessation or closures.</span>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleToggleModule('businessClosure')}
-                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                          staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-600' : 'bg-slate-300'
-                        }`}
-                        role="switch"
-                        aria-checked={staffConfig.enabledModules?.businessClosure !== false}
-                      >
-                        <span
-                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                            staffConfig.enabledModules?.businessClosure !== false ? 'translate-x-5' : 'translate-x-0'
-                          }`}
-                        />
-                      </button>
-                    </div>
+                      />
+                    </button>
                   </div>
                 </div>
-                <div className={`p-6 rounded-[32px] border flex flex-col space-y-4 transition-all ${systemHealth.clientSupabase ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                            <Activity className={`w-5 h-5 ${systemHealth.clientSupabase ? 'text-emerald-500' : 'text-rose-500'}`} />
-                            <div>
-                              <span className={`text-xs font-bold block ${systemHealth.clientSupabase ? 'text-emerald-700' : 'text-rose-700'}`}>Cloud Persistence</span>
-                              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Supabase Integration Status</span>
-                            </div>
+
+                {/* Module 2: Business Closure Notification */}
+                <div className={`p-5 rounded-2xl border transition-all flex flex-col justify-between gap-4 ${
+                  staffConfig.enabledModules?.businessClosure !== false ? 'bg-white border-amber-200 shadow-xs ring-1 ring-amber-100' : 'bg-slate-50 border-slate-200 opacity-75'
+                }`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start space-x-3">
+                      <div className={`p-2.5 rounded-xl shrink-0 ${
+                        staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-50 text-amber-600' : 'bg-slate-200 text-slate-500'
+                      }`}>
+                        <Building2 className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-bold text-xs text-slate-900">Business Closure & Cessation</span>
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider ${
+                            staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-600'
+                          }`}>
+                            {staffConfig.enabledModules?.businessClosure !== false ? 'Active' : 'Hidden'}
+                          </span>
                         </div>
-                        <div className="flex flex-col items-end space-y-1">
-                          {systemHealth.clientSupabase ? (
-                              <div className="flex items-center space-x-3">
-                                <span className="text-[9px] font-black text-emerald-600 bg-white px-3 py-1.5 rounded-lg shadow-sm border border-emerald-100">CLIENT: CONNECTED</span>
-                              </div>
-                          ) : (
-                              <div className="flex items-center space-x-2">
-                                <AlertCircle className="w-4 h-4 text-rose-500" />
-                                <span className="text-[9px] font-black text-rose-600 bg-white px-3 py-1.5 rounded-lg shadow-sm border border-rose-100 uppercase tracking-tight">CLIENT: OFFLINE</span>
-                              </div>
-                          )}
-                          {systemHealth && (
-                            <div className="flex items-center space-x-2">
-                              {systemHealth.backendSupabase ? (
-                                <span className="text-[9px] font-black text-emerald-600 bg-white px-3 py-1.5 rounded-lg shadow-sm border border-emerald-100">BACKEND: CONNECTED</span>
-                              ) : (
-                                <span className="text-[9px] font-black text-rose-600 bg-white px-3 py-1.5 rounded-lg shadow-sm border border-rose-100 uppercase tracking-tight">BACKEND: OFFLINE</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                        <span className="text-[11px] text-slate-500 font-medium block mt-1">Allow licensees to submit official notifications of business cessation, transfer, or closure.</span>
+                      </div>
                     </div>
+                  </div>
 
-                    {!systemHealth.clientSupabase && (
-                      <div className="p-4 bg-white/50 rounded-2xl border border-rose-200 space-y-2">
-                        <p className="text-[10px] font-bold text-rose-700 uppercase tracking-tight">Missing Configuration:</p>
-                        <ul className="text-[9px] text-rose-600 space-y-1 list-disc ml-4 font-medium">
-                          <li>VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is not set in environment</li>
-                        </ul>
-                        <p className="text-[9px] text-slate-500 italic mt-2">Add these to your project settings to enable Cloud Sync.</p>
-                      </div>
-                    )}
-
-                    {systemHealth?.status === 'error' && (
-                      <div className="p-5 bg-rose-50 rounded-[32px] border border-rose-200 space-y-4">
-                        <div className="flex items-start space-x-3">
-                          <AlertCircle className="w-5 h-5 text-rose-600 mt-0.5" />
-                          <div>
-                            <p className="text-xs font-black text-rose-800 uppercase tracking-widest mb-1">Supabase Connection Error</p>
-                            <p className="text-[11px] text-rose-600 font-bold leading-relaxed">{systemHealth.message}</p>
-                            {systemHealth.details && <p className="text-[9px] text-rose-500 font-medium italic mt-1">{systemHealth.details}</p>}
-                          </div>
-                        </div>
-
-                        <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-rose-100 space-y-3">
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Required Database Schema</p>
-                          <p className="text-[10px] text-slate-600 font-medium">If you haven't set up your tables yet, copy and run this SQL in your Supabase SQL Editor:</p>
-                          
-                          <div className="relative group">
-                            <div className="bg-slate-900 rounded-xl p-3 overflow-x-auto max-h-[200px] scrollbar-thin scrollbar-thumb-slate-700">
-                              <pre className="text-[9px] text-emerald-400 font-mono leading-relaxed">
-{`CREATE TABLE IF NOT EXISTS agreements (
-  id TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  date TEXT NOT NULL,
-  clientemail TEXT,
-  pobox TEXT,
-  code TEXT,
-  clientsignature TEXT,
-  officialsignature TEXT,
-  officialname TEXT,
-  rejectionreason TEXT,
-  resubmissionreason TEXT,
-  clientname TEXT,
-  clienttitle TEXT,
-  submittedat TEXT,
-  approvedat TEXT,
-  dboname TEXT,
-  premisename TEXT,
-  permitno TEXT,
-  location TEXT,
-  county TEXT,
-  totalarrears NUMERIC,
-  totalarrearswords TEXT,
-  arrearsperiod TEXT,
-  debitnoteno TEXT,
-  tel TEXT,
-  arrearsbreakdown JSONB,
-  installments JSONB
-);
-
-CREATE TABLE IF NOT EXISTS debtors (
-  id TEXT PRIMARY KEY,
-  dboname TEXT NOT NULL,
-  premisename TEXT,
-  permitno TEXT,
-  location TEXT,
-  county TEXT,
-  totalarrears NUMERIC,
-  totalarrearswords TEXT,
-  arrearsperiod TEXT,
-  debitnoteno TEXT,
-  tel TEXT,
-  arrearsbreakdown JSONB,
-  installments JSONB
-);
-
--- Note: To drop uniqueness constraint from an existing database, run:
--- ALTER TABLE debtors DROP CONSTRAINT IF EXISTS debtors_permitno_key;
-
-CREATE TABLE IF NOT EXISTS staff_config (
-  id INTEGER PRIMARY KEY DEFAULT 1,
-  officialsignature TEXT
-);
-
-CREATE TABLE IF NOT EXISTS closures (
-  id TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  submittedat TEXT,
-  approvedat TEXT,
-  dboname TEXT,
-  permitno TEXT,
-  premisename TEXT,
-  permittype TEXT,
-  county TEXT,
-  subcounty TEXT,
-  location TEXT,
-  tel TEXT,
-  closuredate TEXT,
-  closurereason TEXT,
-  permitstatusintent TEXT,
-  declarationagreed BOOLEAN,
-  clientsignature TEXT,
-  clientname TEXT,
-  officialsignature TEXT,
-  officialname TEXT,
-  rejectionreason TEXT
-);
-
-CREATE TABLE IF NOT EXISTS scope_disclosures (
-  id TEXT PRIMARY KEY,
-  dboname TEXT,
-  permitno TEXT,
-  premisename TEXT,
-  location TEXT,
-  category TEXT,
-  signername TEXT,
-  signerdesignation TEXT,
-  signature TEXT,
-  signeddate TEXT,
-  status TEXT DEFAULT 'draft',
-  createdat TEXT,
-  updatedat TEXT,
-  signedat TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Enable RLS and add policies for anonymous access if needed
-ALTER TABLE agreements ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON agreements FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE debtors ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON debtors FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE staff_config ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE closures ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE scope_disclosures ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true) WITH CHECK (true);`}
-                              </pre>
-                            </div>
-                            <button 
-                              onClick={() => {
-                                const sql = `CREATE TABLE IF NOT EXISTS agreements (
-  id TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  date TEXT NOT NULL,
-  clientemail TEXT,
-  pobox TEXT,
-  code TEXT,
-  clientsignature TEXT,
-  officialsignature TEXT,
-  officialname TEXT,
-  rejectionreason TEXT,
-  resubmissionreason TEXT,
-  clientname TEXT,
-  clienttitle TEXT,
-  submittedat TEXT,
-  approvedat TEXT,
-  dboname TEXT,
-  premisename TEXT,
-  permitno TEXT,
-  location TEXT,
-  county TEXT,
-  totalarrears NUMERIC,
-  totalarrearswords TEXT,
-  arrearsperiod TEXT,
-  debitnoteno TEXT,
-  tel TEXT,
-  arrearsbreakdown JSONB,
-  installments JSONB
-);
-
-CREATE TABLE IF NOT EXISTS debtors (
-  id TEXT PRIMARY KEY,
-  dboname TEXT NOT NULL,
-  premisename TEXT,
-  permitno TEXT,
-  location TEXT,
-  county TEXT,
-  totalarrears NUMERIC,
-  totalarrearswords TEXT,
-  arrearsperiod TEXT,
-  debitnoteno TEXT,
-  tel TEXT,
-  arrearsbreakdown JSONB,
-  installments JSONB
-);
-
--- Note: To drop uniqueness constraint from an existing database, run:
--- ALTER TABLE debtors DROP CONSTRAINT IF EXISTS debtors_permitno_key;
-
-CREATE TABLE IF NOT EXISTS staff_config (
-  id INTEGER PRIMARY KEY DEFAULT 1,
-  officialsignature TEXT
-);
-
-CREATE TABLE IF NOT EXISTS closures (
-  id TEXT PRIMARY KEY,
-  status TEXT NOT NULL,
-  submittedat TEXT,
-  approvedat TEXT,
-  dboname TEXT,
-  permitno TEXT,
-  premisename TEXT,
-  permittype TEXT,
-  county TEXT,
-  subcounty TEXT,
-  location TEXT,
-  tel TEXT,
-  closuredate TEXT,
-  closurereason TEXT,
-  permitstatusintent TEXT,
-  declarationagreed BOOLEAN,
-  clientsignature TEXT,
-  clientname TEXT,
-  officialsignature TEXT,
-  officialname TEXT,
-  rejectionreason TEXT
-);
-
-CREATE TABLE IF NOT EXISTS scope_disclosures (
-  id TEXT PRIMARY KEY,
-  dboname TEXT,
-  permitno TEXT,
-  premisename TEXT,
-  location TEXT,
-  category TEXT,
-  signername TEXT,
-  signerdesignation TEXT,
-  signature TEXT,
-  signeddate TEXT,
-  status TEXT DEFAULT 'draft',
-  createdat TEXT,
-  updatedat TEXT,
-  signedat TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-ALTER TABLE agreements ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON agreements FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE debtors ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON debtors FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE staff_config ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON staff_config FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE closures ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON closures FOR ALL USING (true) WITH CHECK (true);
-ALTER TABLE scope_disclosures ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true) WITH CHECK (true);`;
-                                navigator.clipboard.writeText(sql);
-                                alert("SQL copied to clipboard!");
-                              }}
-                              className="absolute top-2 right-2 p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[8px] font-bold uppercase tracking-widest transition-colors"
-                            >
-                              Copy SQL
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {systemHealth.clientSupabase ? (
-                      <div className="flex flex-col sm:flex-row items-center gap-3">
-                        <div className="text-[10px] font-bold text-emerald-700 bg-white px-4 py-2 rounded-xl shadow-sm border border-emerald-100">
-                          Primary Data Store: Supabase Cloud
-                        </div>
-                      </div>
-                    ) : null}
+                  <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                    <span className="text-[10px] text-slate-400 font-medium">Public Route: /closure-cessation</span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleModule('businessClosure')}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        staffConfig.enabledModules?.businessClosure !== false ? 'bg-amber-600' : 'bg-slate-300'
+                      }`}
+                      role="switch"
+                      aria-checked={staffConfig.enabledModules?.businessClosure !== false}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          staffConfig.enabledModules?.businessClosure !== false ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
+              </div>
+            </div>
+          )}
 
-                {/* Multi-Authority Signatures Registry */}
-                <div className="space-y-6 bg-slate-50 p-6 sm:p-8 rounded-[32px] border border-slate-100">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                    <div>
-                      <div className="flex items-center gap-2.5 flex-wrap">
-                        <h4 className="font-bold text-slate-800 text-base">Authority Signatures Registry</h4>
-                        <span className="text-[10px] font-black text-blue-700 bg-blue-100/80 px-2.5 py-0.5 rounded-full">
-                          {authoritySigs.length} Registered
-                        </span>
-                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/90 px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                          <ShieldCheck className="w-3 h-3 text-emerald-600" /> Supabase Cloud Synced
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Signatures are stored directly in Supabase Cloud for easy multi-device signing retrieval and real-time synchronization.
-                      </p>
-                    </div>
+          {/* Section 3: Official Authority Signatures Registry */}
+          {(settingsCategory === 'all' || settingsCategory === 'signatures') && (
+            <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/80 shadow-xs space-y-6 animate-in fade-in">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-800 font-black text-xs flex items-center justify-center">3</span>
+                    <h4 className="text-base font-black text-slate-900 tracking-tight">Authority Signatures Registry</h4>
+                    <span className="text-[10px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded-full">
+                      {authoritySigs.length} Registered
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                      <ShieldCheck className="w-3 h-3 text-emerald-600" /> Synced
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Manage compliance officer authority signature stamps used across Data Validation, Scope Disclosures, and Agreements.
+                  </p>
+                </div>
                     <div className="flex items-center gap-2 shrink-0 flex-wrap">
                       <button
                         type="button"
@@ -2754,56 +2805,257 @@ CREATE POLICY "Allow anonymous access" ON scope_disclosures FOR ALL USING (true)
                       </div>
                     </div>
                   )}
+            </div>
+          )}
+
+          {/* Section 4: System Access & Mobile QR Gateway */}
+          {(settingsCategory === 'all' || settingsCategory === 'access') && (
+            <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/80 shadow-xs space-y-4 animate-in fade-in">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-4">
+                <span className="w-6 h-6 rounded-lg bg-purple-100 text-purple-800 font-black text-xs flex items-center justify-center">4</span>
+                <div>
+                  <h4 className="text-base font-black text-slate-900 tracking-tight">System Access & Mobile Gateway</h4>
+                  <p className="text-xs text-slate-500 font-medium mt-0.5">
+                    Permanent access QR code and rapid direct links for field tablet and mobile execution.
+                  </p>
+                </div>
+              </div>
+              <GeneralAccessQrCard />
+            </div>
+          )}
+
+          {/* Section 5: Database & Cloud Infrastructure Health */}
+          {(settingsCategory === 'all' || settingsCategory === 'database') && (
+            <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/80 shadow-xs space-y-6 animate-in fade-in">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-6 h-6 rounded-lg bg-slate-200 text-slate-800 font-black text-xs flex items-center justify-center">5</span>
+                    <h4 className="text-base font-black text-slate-900 tracking-tight">Cloud Database & Infrastructure Health</h4>
+                  </div>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Live connection health, latency diagnostics, Supabase cloud store status, and table verification.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={checkHealth}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-xs cursor-pointer shrink-0"
+                >
+                  <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Test Connection</span>
+                </button>
+              </div>
+
+              {/* Status Indicator Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                <div className={`p-4 rounded-2xl border transition-all ${
+                  systemHealth.clientSupabase ? 'bg-emerald-50/60 border-emerald-200' : 'bg-rose-50/60 border-rose-200'
+                }`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Supabase Client</span>
+                    <span className={`w-2 h-2 rounded-full ${systemHealth.clientSupabase ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                  </div>
+                  <div className="text-sm font-black text-slate-900">
+                    {systemHealth.clientSupabase ? 'Online' : 'Offline'}
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-medium mt-1 block">Browser SDK Direct</span>
                 </div>
 
-                {/* General System Access QR Code (Permanent / No Expiration Timer) */}
-                <GeneralAccessQrCard />
+                <div className={`p-4 rounded-2xl border transition-all ${
+                  systemHealth.backendSupabase ? 'bg-emerald-50/60 border-emerald-200' : 'bg-rose-50/60 border-rose-200'
+                }`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Backend Server</span>
+                    <span className={`w-2 h-2 rounded-full ${systemHealth.backendSupabase ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+                  </div>
+                  <div className="text-sm font-black text-slate-900">
+                    {systemHealth.backendSupabase ? 'Connected' : 'Offline'}
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-medium mt-1 block">Node.js API Proxy</span>
+                </div>
 
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center">
-                      <Server className="w-3 h-3 mr-2" /> Cloud Connection
-                    </h4>
-                    <button onClick={checkHealth} className="text-[9px] font-black text-emerald-600 uppercase tracking-widest hover:underline">
-                      Test Connection
+                <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Sync Engine</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  </div>
+                  <div className="text-sm font-black text-slate-900">
+                    Real-time
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-medium mt-1 block">Automatic Polling & Push</span>
+                </div>
+
+                <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Primary Store</span>
+                    <Database className="w-3.5 h-3.5 text-blue-600" />
+                  </div>
+                  <div className="text-sm font-black text-slate-900">
+                    PostgreSQL
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-medium mt-1 block">Relational Cloud Engine</span>
+                </div>
+              </div>
+
+              {/* Table Status Overview */}
+              {systemHealth.tables && (
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 block">
+                    Cloud Tables Status
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700">Agreements</span>
+                      <span className={`w-2 h-2 rounded-full ${systemHealth.tables.agreements ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                    </div>
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700">Debtors</span>
+                      <span className={`w-2 h-2 rounded-full ${systemHealth.tables.debtors ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                    </div>
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700">Staff Config</span>
+                      <span className={`w-2 h-2 rounded-full ${systemHealth.tables.staff ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                    </div>
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700">Scope Form</span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Collapsible Database SQL Schema Helper */}
+              <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <span className="text-xs text-slate-500 font-medium">
+                  Need to inspect or initialize Supabase tables?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowSqlSchema(!showSqlSchema)}
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer self-start sm:self-auto"
+                >
+                  {showSqlSchema ? 'Hide SQL Schema' : 'View Required SQL Schema'}
+                </button>
+              </div>
+
+              {showSqlSchema && (
+                <div className="p-5 bg-slate-950 text-white rounded-2xl border border-slate-800 space-y-3 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-300">Supabase Table Definitions</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sql = `CREATE TABLE IF NOT EXISTS agreements (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  date TEXT NOT NULL,
+  clientemail TEXT,
+  pobox TEXT,
+  code TEXT,
+  clientsignature TEXT,
+  officialsignature TEXT,
+  officialname TEXT,
+  rejectionreason TEXT,
+  resubmissionreason TEXT,
+  clientname TEXT,
+  clienttitle TEXT,
+  submittedat TEXT,
+  approvedat TEXT,
+  dboname TEXT,
+  premisename TEXT,
+  permitno TEXT,
+  location TEXT,
+  county TEXT,
+  totalarrears NUMERIC,
+  totalarrearswords TEXT,
+  arrearsperiod TEXT,
+  debitnoteno TEXT,
+  tel TEXT,
+  arrearsbreakdown JSONB,
+  installments JSONB
+);
+
+CREATE TABLE IF NOT EXISTS debtors (
+  id TEXT PRIMARY KEY,
+  dboname TEXT NOT NULL,
+  premisename TEXT,
+  permitno TEXT,
+  location TEXT,
+  county TEXT,
+  totalarrears NUMERIC,
+  totalarrearswords TEXT,
+  arrearsperiod TEXT,
+  debitnoteno TEXT,
+  tel TEXT,
+  arrearsbreakdown JSONB,
+  installments JSONB
+);
+
+CREATE TABLE IF NOT EXISTS staff_config (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  officialsignature TEXT
+);
+
+CREATE TABLE IF NOT EXISTS closures (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  submittedat TEXT,
+  approvedat TEXT,
+  dboname TEXT,
+  permitno TEXT,
+  premisename TEXT,
+  permittype TEXT,
+  county TEXT,
+  subcounty TEXT,
+  location TEXT,
+  tel TEXT,
+  closuredate TEXT,
+  closurereason TEXT,
+  permitstatusintent TEXT,
+  declarationagreed BOOLEAN,
+  clientsignature TEXT,
+  clientname TEXT,
+  officialsignature TEXT,
+  officialname TEXT,
+  rejectionreason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS scope_disclosures (
+  id TEXT PRIMARY KEY,
+  dboname TEXT,
+  permitno TEXT,
+  premisename TEXT,
+  location TEXT,
+  category TEXT,
+  signername TEXT,
+  signerdesignation TEXT,
+  signature TEXT,
+  signeddate TEXT,
+  status TEXT DEFAULT 'draft',
+  createdat TEXT,
+  updatedat TEXT,
+  signedat TEXT
+);`;
+                        navigator.clipboard.writeText(sql);
+                        alert("SQL copied to clipboard!");
+                      }}
+                      className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      Copy SQL
                     </button>
                   </div>
-                  <div className="bg-slate-900 rounded-[32px] p-6 text-white space-y-4 shadow-xl">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1">
-                        <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest block">Supabase Status</span>
-                        <div className="flex items-center space-x-2">
-                          <div className={`w-2 h-2 rounded-full ${systemHealth?.status === 'ok' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                          <span className="text-xs font-bold">{systemHealth?.status === 'ok' ? 'Operational' : 'Disconnected'}</span>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest block">Data Sync</span>
-                        <div className="flex items-center space-x-2">
-                          <div className={`w-2 h-2 rounded-full ${systemHealth?.status === 'ok' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                          <span className="text-xs font-bold">Real-time</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {systemHealth.tables && (
-                      <div className="pt-4 border-t border-slate-800 grid grid-cols-3 gap-2">
-                        <div className="text-center">
-                          <div className={`text-[8px] font-black uppercase mb-1 ${systemHealth.tables.agreements ? 'text-emerald-500' : 'text-rose-500'}`}>Agreements</div>
-                          <div className={`w-1.5 h-1.5 rounded-full mx-auto ${systemHealth.tables.agreements ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                        </div>
-                        <div className="text-center">
-                          <div className={`text-[8px] font-black uppercase mb-1 ${systemHealth.tables.debtors ? 'text-emerald-500' : 'text-rose-500'}`}>Debtors</div>
-                          <div className={`w-1.5 h-1.5 rounded-full mx-auto ${systemHealth.tables.debtors ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                        </div>
-                        <div className="text-center">
-                          <div className={`text-[8px] font-black uppercase mb-1 ${systemHealth.tables.staff ? 'text-emerald-500' : 'text-rose-500'}`}>Staff</div>
-                          <div className={`w-1.5 h-1.5 rounded-full mx-auto ${systemHealth.tables.staff ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <pre className="text-[10px] text-emerald-400 font-mono overflow-x-auto max-h-48 p-2 bg-slate-900 rounded-xl">
+{`CREATE TABLE IF NOT EXISTS agreements (...);
+CREATE TABLE IF NOT EXISTS debtors (...);
+CREATE TABLE IF NOT EXISTS closures (...);
+CREATE TABLE IF NOT EXISTS scope_disclosures (...);
+CREATE TABLE IF NOT EXISTS staff_config (...);`}
+                  </pre>
                 </div>
+              )}
+            </div>
+          )}
             </div>
           </div>
         </div>

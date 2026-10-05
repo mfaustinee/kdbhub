@@ -25,7 +25,51 @@ const VALIDATIONS_FILE = path.join(DATA_DIR, "validations.json");
 const VALIDATION_DRAFTS_FILE = path.join(DATA_DIR, "validation_drafts.json");
 const SCOPE_DISCLOSURES_FILE = path.join(DATA_DIR, "scope_disclosures.json");
 const SECURITY_CONFIG_FILE = path.join(DATA_DIR, "security_config.json");
+const GOOGLE_CREDENTIALS_FILE = path.join(DATA_DIR, "google_credentials.json");
 const LOG_FILE = path.join(DATA_DIR, "server.log");
+
+// Helper to retrieve Google Service Account credentials from environment or persistent file
+const getGoogleCredentials = (): { clientEmail: string; privateKey: string; spreadsheetId: string } => {
+  let fileCreds: any = {};
+  try {
+    if (fs.existsSync(GOOGLE_CREDENTIALS_FILE)) {
+      const content = fs.readFileSync(GOOGLE_CREDENTIALS_FILE, "utf-8");
+      if (content && content.trim()) {
+        fileCreds = JSON.parse(content);
+      }
+    }
+  } catch (err) {
+    logToFile(`[Server] Warning reading google_credentials.json: ${err}`);
+  }
+
+  const clientEmail = (
+    process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 
+    fileCreds.client_email || 
+    fileCreds.clientEmail || 
+    ""
+  ).trim().replace(/^["']|["']$/g, '');
+
+  let privateKey = (
+    process.env.GOOGLE_PRIVATE_KEY || 
+    fileCreds.private_key || 
+    fileCreds.privateKey || 
+    ""
+  ).trim();
+
+  if ((privateKey.startsWith('"') && privateKey.endsWith('"')) || (privateKey.startsWith("'") && privateKey.endsWith("'"))) {
+    privateKey = privateKey.slice(1, -1);
+  }
+  privateKey = privateKey.replace(/\\n/g, '\n');
+
+  const spreadsheetId = (
+    process.env.GOOGLE_SPREADSHEET_ID || 
+    fileCreds.spreadsheet_id || 
+    fileCreds.spreadsheetId || 
+    ""
+  ).trim().replace(/^["']|["']$/g, '');
+
+  return { clientEmail, privateKey, spreadsheetId };
+};
 
 // Security & Access Control State
 interface SecurityConfig {
@@ -433,8 +477,11 @@ Allow: /cessations
         process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
       );
 
-      const googleConfigured = !!(
-        process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY
+      const creds = getGoogleCredentials();
+      const googleConfigured = Boolean(
+        creds.clientEmail && 
+        creds.privateKey && 
+        creds.privateKey.includes("-----BEGIN PRIVATE KEY-----")
       );
 
       logToFile(`[API] Health check result: writable=${writable}, supabaseConfigured=${supabaseConfigured}, googleConfigured=${googleConfigured}`);
@@ -445,8 +492,101 @@ Allow: /cessations
         supabaseConfigured,
         googleConfigured,
         configured: googleConfigured, // Checked by frontend DataValidationModule
+        spreadsheetConfigured: Boolean(creds.spreadsheetId),
         timestamp: new Date().toISOString()
       });
+    });
+
+    // Endpoint to retrieve Google Sheets & Service Account configuration status
+    app.get("/api/google-credentials", (req, res) => {
+      const creds = getGoogleCredentials();
+      const isConfigured = Boolean(
+        creds.clientEmail && 
+        creds.privateKey && 
+        creds.privateKey.includes("-----BEGIN PRIVATE KEY-----")
+      );
+      res.json({
+        configured: isConfigured,
+        clientEmail: creds.clientEmail,
+        spreadsheetId: creds.spreadsheetId,
+        hasPrivateKey: Boolean(creds.privateKey)
+      });
+    });
+
+    // Endpoint to save Google Service Account credentials & Spreadsheet ID
+    app.post("/api/google-credentials", async (req, res) => {
+      try {
+        const { clientEmail, privateKey, spreadsheetId, serviceAccountJson } = req.body;
+        let finalEmail = clientEmail || '';
+        let finalKey = privateKey || '';
+        let finalSpreadsheetId = spreadsheetId || '';
+
+        if (serviceAccountJson) {
+          try {
+            const parsed = typeof serviceAccountJson === 'string' ? JSON.parse(serviceAccountJson) : serviceAccountJson;
+            if (parsed.client_email) finalEmail = parsed.client_email;
+            if (parsed.private_key) finalKey = parsed.private_key;
+          } catch (e: any) {
+            return res.status(400).json({ error: "Invalid JSON format for Service Account credentials", details: e.message });
+          }
+        }
+
+        if (finalKey) {
+          finalKey = finalKey.trim();
+          if ((finalKey.startsWith('"') && finalKey.endsWith('"')) || (finalKey.startsWith("'") && finalKey.endsWith("'"))) {
+            finalKey = finalKey.slice(1, -1);
+          }
+          finalKey = finalKey.replace(/\\n/g, '\n');
+        }
+
+        const toSave = {
+          client_email: finalEmail.trim(),
+          private_key: finalKey,
+          spreadsheet_id: (finalSpreadsheetId || '').trim(),
+          updated_at: new Date().toISOString()
+        };
+
+        if (!fs.existsSync(DATA_DIR)) {
+          fs.mkdirSync(DATA_DIR, { recursive: true });
+        }
+
+        await fs.promises.writeFile(GOOGLE_CREDENTIALS_FILE, JSON.stringify(toSave, null, 2), "utf-8");
+        logToFile(`[API] Saved google_credentials.json successfully for email: ${finalEmail}`);
+
+        const isFullyConfigured = Boolean(
+          finalEmail && 
+          finalKey && 
+          finalKey.includes("-----BEGIN PRIVATE KEY-----")
+        );
+
+        let testStatus = isFullyConfigured ? 'saved' : 'incomplete';
+        if (isFullyConfigured) {
+          try {
+            const testAuth = new google.auth.JWT({
+              email: finalEmail,
+              key: finalKey,
+              scopes: ['https://www.googleapis.com/auth/spreadsheets']
+            });
+            await testAuth.authorize();
+            testStatus = 'verified';
+          } catch (authErr: any) {
+            logToFile(`[API] Warning: credentials saved but authorization returned: ${authErr.message}`);
+            testStatus = `warning: ${authErr.message}`;
+          }
+        }
+
+        res.json({
+          success: true,
+          message: "Google credentials saved successfully.",
+          testStatus,
+          configured: isFullyConfigured,
+          clientEmail: finalEmail,
+          spreadsheetId: finalSpreadsheetId
+        });
+      } catch (err: any) {
+        logToFile(`[API] Error saving google credentials: ${err.message}`);
+        res.status(500).json({ error: "Failed to save Google credentials", details: err.message });
+      }
     });
 
     app.get("/api/logs", (req, res) => {
@@ -1688,20 +1828,13 @@ Allow: /cessations
 
   // Service Account Auth Helper for Google Sheets
   const getSheetsClient = () => {
-    let clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    let privateKey = process.env.GOOGLE_PRIVATE_KEY;
+    const creds = getGoogleCredentials();
+    const clientEmail = creds.clientEmail;
+    const privateKey = creds.privateKey;
 
     if (!clientEmail || !privateKey) {
       return null;
     }
-
-    clientEmail = clientEmail.trim().replace(/^["']|["']$/g, '');
-
-    // Clean the private key:
-    // 1. Remove any surrounding quotes that might have been pasted accidentally
-    privateKey = privateKey.trim().replace(/^["']|["']$/g, '');
-    // 2. Convert literal \n strings into actual newlines
-    privateKey = privateKey.replace(/\\n/g, '\n');
 
     if (!privateKey.includes("-----BEGIN PRIVATE KEY-----")) {
       return null;
@@ -1801,9 +1934,10 @@ Allow: /cessations
       return res.status(400).json({ error: "Missing 'data' object" });
     }
 
-    let spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID || req.body.spreadsheetId;
+    const creds = getGoogleCredentials();
+    let spreadsheetId = req.body.spreadsheetId || creds.spreadsheetId || process.env.GOOGLE_SPREADSHEET_ID;
     if (!spreadsheetId) {
-      logToFile("[API] Google Sheets sync skipped: GOOGLE_SPREADSHEET_ID not configured");
+      logToFile("[API] Google Sheets sync skipped: Spreadsheet ID not configured");
       return res.status(200).json({ message: "Supabase saved. Google Sheets sync skipped (ID not configured)." });
     }
     spreadsheetId = spreadsheetId.trim().replace(/^["']|["']$/g, '');

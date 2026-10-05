@@ -4005,11 +4005,6 @@ export function DataValidationModule() {
     setStatus({ type: null, message: '' });
 
     // Validation
-    if (!isConnected) {
-      setStatus({ type: 'error', message: 'Google Sheets integration is not configured. Please check your environment variables.' });
-      setIsSubmitting(false);
-      return;
-    }
     if (!validateStep(1) || !validateStep(2)) {
       setIsSubmitting(false);
       return;
@@ -4241,12 +4236,18 @@ export function DataValidationModule() {
       };
 
       // 4. Concurrent execution of DBService save, Google Sheets submission, and Supabase sync
+      const storedSpreadsheetId = typeof window !== 'undefined' ? localStorage.getItem('kdb_google_spreadsheet_id') || '' : '';
       const [, submitRes] = await Promise.all([
         Promise.all([DBService.saveValidation(dataValObject), supabaseSyncPromise]),
         fetch('/api/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: updatedData, pdf, isAmendment }),
+          body: JSON.stringify({ 
+            data: updatedData, 
+            pdf, 
+            isAmendment,
+            spreadsheetId: storedSpreadsheetId
+          }),
         })
       ]);
 
@@ -4281,7 +4282,12 @@ export function DataValidationModule() {
       }, 100);
 
       if (submitRes.ok) {
-        setStatus({ type: 'success', message: 'Data successfully synced! Your PDF is downloading...' });
+        setStatus({ 
+          type: 'success', 
+          message: isConnected 
+            ? 'Data successfully synced to Google Sheets and database! Your PDF is downloading...'
+            : 'Validation saved to database and PDF downloaded! (Configure Google Sheets credentials in Settings for automated sync)'
+        });
         
         // Automatically remember DBO representative signature for this premise
         if (formData.dboSignature && (formData.confirmationName || formData.designation)) {
@@ -5370,7 +5376,7 @@ export function DataValidationModule() {
               <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
               <div>
                 <p className="text-xs font-semibold text-gray-900">Google Sheets Sync</p>
-                <p className="text-[10px] text-gray-500">{isConnected ? 'Service Account Active' : 'Credentials Missing'}</p>
+                <p className="text-[10px] text-gray-500">{isConnected ? 'Service Account Active' : 'Credentials Missing (Configure in Settings)'}</p>
               </div>
             </div>
             {isConnected && (
