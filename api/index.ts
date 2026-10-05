@@ -505,10 +505,20 @@ Allow: /cessations
         creds.privateKey && 
         creds.privateKey.includes("-----BEGIN PRIVATE KEY-----")
       );
+      let maskedEmail = '';
+      if (creds.clientEmail) {
+        const atIdx = creds.clientEmail.indexOf('@');
+        if (atIdx > 4) {
+          maskedEmail = `${creds.clientEmail.slice(0, 4)}••••${creds.clientEmail.slice(atIdx)}`;
+        } else {
+          maskedEmail = creds.clientEmail;
+        }
+      }
       res.json({
         configured: isConfigured,
-        clientEmail: creds.clientEmail,
+        clientEmail: maskedEmail,
         spreadsheetId: creds.spreadsheetId,
+        managedBy: "Cloudflare Environment Variables & Secrets",
         hasPrivateKey: Boolean(creds.privateKey)
       });
     });

@@ -332,19 +332,6 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ returnTo = '/admin', onS
             </div>
           )}
 
-          {/* Status / Notice if Supabase not configured */}
-          {!isConfigured && (
-            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-2.5 text-xs text-emerald-900">
-              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">Preview Environment Mode (Zero Egress)</p>
-                <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
-                  Supabase network queries are disabled to prevent egress. System is running securely via local data storage and offline authentication.
-                </p>
-              </div>
-            </div>
-          )}
-
           {/* Feedback Messages */}
           {errorMessage && !isAccessBlocked && !rateLimitLocked && (
             <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2.5 text-xs text-rose-800 animate-in fade-in duration-150">

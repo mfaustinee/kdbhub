@@ -1891,11 +1891,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <FileSpreadsheet className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
-                      <div className="text-xs font-bold truncate">Google Sheets & Sync</div>
+                      <div className="text-xs font-bold truncate">Google Sheets & Central Sync</div>
                       <div className={`text-[10px] truncate ${
                         settingsCategory === 'sheets' ? 'text-emerald-100' : 'text-slate-400'
                       }`}>
-                        Approach A Master Records
+                        Clients, Returns & Validation Sync
                       </div>
                     </div>
                   </div>
@@ -2091,9 +2091,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex items-center justify-between px-1">
                 <div className="flex items-center gap-2">
                   <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 font-black text-xs flex items-center justify-center">1</span>
-                  <h4 className="text-sm font-black text-slate-900 uppercase tracking-wider">Google Sheets Central Records & Sync Engine</h4>
+                  <h4 className="text-sm font-black text-slate-900 uppercase tracking-wider">Google Sheets Central Sync & Multi-Pipeline Hub</h4>
                 </div>
-                <span className="text-xs text-slate-500 font-medium">Approach A & Service Account Sync</span>
+                <span className="text-xs text-slate-500 font-medium">Clients & Returns DB + Data Validation Stream</span>
               </div>
               <GoogleSheetsBanner onSyncComplete={onRefresh} />
             </div>

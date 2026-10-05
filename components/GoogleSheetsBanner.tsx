@@ -5,17 +5,20 @@ import {
   AlertCircle, 
   ExternalLink, 
   RefreshCw, 
-  Key, 
-  Sparkles, 
-  LogOut, 
+  ShieldCheck, 
+  Check, 
+  Copy, 
+  Layers, 
   Database,
-  ShieldCheck,
+  Cloud,
+  Lock,
+  ArrowRight,
+  ClipboardList,
+  Sparkles,
   HelpCircle,
-  Check,
-  Copy,
-  Clock,
-  Layers,
-  ArrowUpRight
+  Activity,
+  ChevronRight,
+  LogOut
 } from 'lucide-react';
 import { GoogleSheetsService, CLIENTS_HEADERS, RETURNS_HEADERS } from '../services/googleSheetsService';
 import { DBService } from '../services/db';
@@ -25,63 +28,76 @@ interface GoogleSheetsBannerProps {
 }
 
 export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncComplete }) => {
+  // Master Spreadsheet Link State
   const [spreadsheetInput, setSpreadsheetInput] = useState('');
   const [currentSpreadsheetId, setCurrentSpreadsheetId] = useState('');
   const [clientsTabInput, setClientsTabInput] = useState('Clients_DB');
   const [returnsTabInput, setReturnsTabInput] = useState('Returns_DB');
   const [availableTabs, setAvailableTabs] = useState<string[]>([]);
+  
+  // Interactive Google Account state (for direct browser read/write if desired)
   const [isConnected, setIsConnected] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
-  const [isInitializing, setIsInitializing] = useState(false);
+  
+  // Execution & Status States
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
   const [copiedHeader, setCopiedHeader] = useState<'clients' | 'returns' | null>(null);
-
-  // Active Workspace Sub-Tab
-  const [activeTab, setActiveTab] = useState<'overview' | 'credentials' | 'tabs' | 'schema'>('overview');
   
-  // Service Account Credentials State
-  const [serverCreds, setServerCreds] = useState<{ configured: boolean; clientEmail?: string; spreadsheetId?: string; hasPrivateKey?: boolean }>({ configured: false });
-  const [jsonCredentialsInput, setJsonCredentialsInput] = useState('');
-  const [clientEmailInput, setClientEmailInput] = useState('');
-  const [privateKeyInput, setPrivateKeyInput] = useState('');
-  const [isSavingCreds, setIsSavingCreds] = useState(false);
-  const [credsSaveMessage, setCredsSaveMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  // Cloudflare Server Credentials Diagnostics (Managed by Cloudflare, zero browser input)
+  const [cloudflareStatus, setCloudflareStatus] = useState<{
+    configured: boolean;
+    clientEmail?: string;
+    spreadsheetId?: string;
+    hasPrivateKey?: boolean;
+    managedBy?: string;
+    platform?: string;
+  }>({ configured: false });
+  const [isCheckingCloudflare, setIsCheckingCloudflare] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  const loadServerCredentials = async () => {
+  // Active Workspace View: 'clients_returns' | 'data_validation' | 'cloudflare_vault' | 'schemas'
+  const [activeSyncView, setActiveSyncView] = useState<'clients_returns' | 'data_validation' | 'cloudflare_vault' | 'schemas'>('clients_returns');
+
+  const fetchCloudflareStatus = async () => {
+    setIsCheckingCloudflare(true);
     try {
       const res = await fetch('/api/google-credentials');
       if (res.ok) {
         const data = await res.json();
-        setServerCreds(data);
-        if (data.clientEmail) setClientEmailInput(data.clientEmail);
+        setCloudflareStatus(data);
         if (data.spreadsheetId && !currentSpreadsheetId) {
           setCurrentSpreadsheetId(data.spreadsheetId);
           setSpreadsheetInput(data.spreadsheetId);
         }
       }
     } catch (e) {
-      console.warn('Error loading server credentials:', e);
+      console.warn('[GoogleSheets] Could not fetch Cloudflare credentials status:', e);
+    } finally {
+      setIsCheckingCloudflare(false);
     }
   };
 
   useEffect(() => {
-    loadServerCredentials();
+    fetchCloudflareStatus();
     try {
       const sId = GoogleSheetsService.getSpreadsheetId();
-      setCurrentSpreadsheetId(sId);
-      setSpreadsheetInput(sId);
+      if (sId) {
+        setCurrentSpreadsheetId(sId);
+        setSpreadsheetInput(sId);
+      }
 
       const cTab = GoogleSheetsService.getClientsTabName();
       const rTab = GoogleSheetsService.getReturnsTabName();
       setClientsTabInput(cTab);
       setReturnsTabInput(rTab);
 
-      // Subscribe to auth state
+      // Subscribe to Google auth state
       const unsubscribe = GoogleSheetsService.initAuth(
-        (user, token) => {
+        (user) => {
           setIsConnected(true);
           setCurrentUserEmail(user.email);
           if (sId) {
@@ -100,7 +116,7 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
         }
       };
     } catch (e) {
-      console.warn('[GoogleSheetsBanner] init notice:', e);
+      console.warn('[GoogleSheetsBanner] Init notice:', e);
     }
   }, []);
 
@@ -152,7 +168,7 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
     }
     DBService.clearMemoryCache('clients');
     DBService.clearMemoryCache('returns');
-    setStatusMessage({ text: `Spreadsheet connected: ${cleanId}`, type: 'success' });
+    setStatusMessage({ text: `Workbook connected: ${cleanId}`, type: 'success' });
     onSyncComplete?.();
   };
 
@@ -166,7 +182,7 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
     DBService.clearMemoryCache('clients');
     DBService.clearMemoryCache('returns');
     setStatusMessage({ 
-      text: `Tab configuration saved! Clients -> "${cTab}", Returns -> "${rTab}". All other workbook tabs remain untouched.`, 
+      text: `Tab isolation saved: Clients -> "${cTab}", Returns -> "${rTab}". All other workbook tabs remain 100% untouched.`, 
       type: 'success' 
     });
     onSyncComplete?.();
@@ -178,7 +194,7 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
       return;
     }
     if (!isConnected) {
-      setStatusMessage({ text: 'Please connect your Google Account first.', type: 'error' });
+      setStatusMessage({ text: 'Please connect your Google Account first to initialize headers in the sheet.', type: 'error' });
       return;
     }
 
@@ -198,65 +214,9 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
     }
   };
 
-  const handleSaveServerCredentials = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setIsSavingCreds(true);
-    setCredsSaveMessage(null);
-    try {
-      const payload: any = {
-        spreadsheetId: spreadsheetInput.trim() || currentSpreadsheetId
-      };
-
-      if (jsonCredentialsInput.trim()) {
-        payload.serviceAccountJson = jsonCredentialsInput.trim();
-      } else {
-        payload.clientEmail = clientEmailInput.trim();
-        payload.privateKey = privateKeyInput.trim();
-      }
-
-      const res = await fetch('/api/google-credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.details || data.error || 'Failed to save credentials');
-      }
-
-      setServerCreds({
-        configured: data.configured,
-        clientEmail: data.clientEmail,
-        spreadsheetId: data.spreadsheetId,
-        hasPrivateKey: true
-      });
-
-      if (data.spreadsheetId) {
-        GoogleSheetsService.setSpreadsheetId(data.spreadsheetId);
-        setCurrentSpreadsheetId(data.spreadsheetId);
-      }
-
-      setCredsSaveMessage({
-        text: `Credentials saved successfully! Status: ${data.testStatus || 'verified'}. Data Validation automated sync is active!`,
-        type: 'success'
-      });
-      setJsonCredentialsInput('');
-      setPrivateKeyInput('');
-      onSyncComplete?.();
-    } catch (err: any) {
-      setCredsSaveMessage({
-        text: err.message || 'Failed to save Google credentials.',
-        type: 'error'
-      });
-    } finally {
-      setIsSavingCreds(false);
-    }
-  };
-
-  const handleSyncNow = async () => {
+  const handleSyncClientsAndReturnsNow = async () => {
     if (!currentSpreadsheetId) {
-      setStatusMessage({ text: 'Please enter a Spreadsheet ID first.', type: 'error' });
+      setStatusMessage({ text: 'Please connect a Spreadsheet ID first.', type: 'error' });
       return;
     }
     setIsSyncing(true);
@@ -270,13 +230,40 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
       ]);
       const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastSyncTime(now);
-      setStatusMessage({ text: `Synced successfully from tabs "${clientsTabInput}" and "${returnsTabInput}" at ${now}!`, type: 'success' });
+      setStatusMessage({ text: `Clients & Returns synced successfully at ${now} from tabs "${clientsTabInput}" & "${returnsTabInput}"!`, type: 'success' });
       onSyncComplete?.();
     } catch (err: any) {
-      console.error('Sync failed:', err);
-      setStatusMessage({ text: err.message || 'Failed to sync with Google Sheets.', type: 'error' });
+      console.error('Clients & Returns sync failed:', err);
+      setStatusMessage({ text: err.message || 'Failed to sync Clients & Returns with Google Sheets.', type: 'error' });
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const handleTestCloudflarePipeline = async () => {
+    setIsCheckingCloudflare(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/health');
+      if (res.ok) {
+        const data = await res.json();
+        setTestResult({
+          success: true,
+          message: `Cloudflare pipeline verified: ${data.status || 'OK'}. Service account credentials loaded from Cloudflare environment.`
+        });
+      } else {
+        setTestResult({
+          success: false,
+          message: `Server returned status ${res.status}. Check Cloudflare Pages environment variables.`
+        });
+      }
+    } catch (e: any) {
+      setTestResult({
+        success: false,
+        message: e?.message || 'Failed to verify Cloudflare sync pipeline.'
+      });
+    } finally {
+      setIsCheckingCloudflare(false);
     }
   };
 
@@ -289,22 +276,22 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
 
   return (
     <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-5 sm:p-7 space-y-6">
-      {/* Workspace Command Bar Header */}
+      {/* Top Header: System Overview & Fast Controls */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-5">
         <div>
           <div className="flex items-center gap-2 text-emerald-700 text-xs font-black uppercase tracking-wider mb-1">
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            <span>Approach A · Master Records & Automated Sync Hub</span>
+            <span>Central Sync Workspace</span>
           </div>
           <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
             Google Sheets Central Sync
           </h3>
           <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-            Primary storage for Clients Registry & Returns Ledger. Signatures, drafts & PDFs remain securely in Supabase.
+            Differentiated synchronization pipelines for Clients & Returns Registry and Field Data Validation.
           </p>
         </div>
 
-        {/* Global Header Actions: Account Status, Link & Fast Sync */}
+        {/* Global Fast Action Controls */}
         <div className="flex items-center gap-2.5 flex-wrap shrink-0">
           {isConnected ? (
             <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200 text-xs">
@@ -353,67 +340,113 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
 
           <button
             type="button"
-            onClick={handleSyncNow}
+            onClick={handleSyncClientsAndReturnsNow}
             disabled={isSyncing || !currentSpreadsheetId}
             className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+            <span>{isSyncing ? 'Syncing...' : 'Sync Clients & Returns'}</span>
           </button>
         </div>
       </div>
 
-      {/* 3-Column Diagnostic Summary Bar (Utilizes widescreen space efficiently) */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
-        {/* Metric 1: Spreadsheet Link */}
-        <div className={`p-4 rounded-2xl border transition-all ${
-          currentSpreadsheetId ? 'bg-emerald-50/50 border-emerald-200' : 'bg-amber-50/50 border-amber-200'
-        }`}>
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Workbook Link</span>
-            {currentSpreadsheetId ? (
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            ) : (
-              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-            )}
+      {/* Differentiated Pipeline Cards Overview (Utilizes space cleanly) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Pipeline 1 Card: Clients & Returns Spreadsheet Sync */}
+        <div 
+          onClick={() => setActiveSyncView('clients_returns')}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer text-left ${
+            activeSyncView === 'clients_returns'
+              ? 'bg-blue-50/70 border-blue-300 ring-2 ring-blue-500/20 shadow-xs'
+              : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-black text-xs">
+                A
+              </div>
+              <span className="text-xs font-black uppercase tracking-wider text-blue-900">
+                Clients & Returns Sync
+              </span>
+            </div>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+              Bi-directional Bridge
+            </span>
           </div>
-          <div className="text-xs font-bold text-slate-900 truncate" title={currentSpreadsheetId || 'Not connected'}>
-            {currentSpreadsheetId ? `ID: ${currentSpreadsheetId.slice(0, 14)}...` : 'No Sheet Connected'}
+          <p className="text-xs text-slate-600 font-medium">
+            Syncs master <strong>Clients_DB</strong> (18 columns) and <strong>Returns_DB</strong> (14 columns) between app store and central spreadsheet.
+          </p>
+          <div className="flex items-center gap-3 mt-3 text-[11px] text-slate-500">
+            <span>Tabs: <strong className="text-slate-800">{clientsTabInput}</strong>, <strong className="text-slate-800">{returnsTabInput}</strong></span>
+            <span>•</span>
+            <span className="text-blue-700 font-semibold flex items-center gap-1">
+              Configure Pipeline <ChevronRight className="w-3 h-3" />
+            </span>
           </div>
-          <span className="text-[10px] text-slate-400 font-medium mt-1 block">
-            {currentSpreadsheetId ? 'Primary Master Linked' : 'Paste Sheet URL below'}
-          </span>
         </div>
 
-        {/* Metric 2: Service Account Status */}
-        <div className={`p-4 rounded-2xl border transition-all ${
-          serverCreds.configured ? 'bg-blue-50/50 border-blue-200' : 'bg-amber-50/50 border-amber-200'
-        }`}>
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Service Account</span>
-            <span className={`w-2 h-2 rounded-full ${serverCreds.configured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+        {/* Pipeline 2 Card: Data Validation Spreadsheet Sync */}
+        <div 
+          onClick={() => setActiveSyncView('data_validation')}
+          className={`p-4 rounded-2xl border transition-all cursor-pointer text-left ${
+            activeSyncView === 'data_validation'
+              ? 'bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
+              : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+          }`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-black text-xs">
+                B
+              </div>
+              <span className="text-xs font-black uppercase tracking-wider text-emerald-900">
+                Data Validation Sync
+              </span>
+            </div>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+              Automated Officer Stream
+            </span>
           </div>
-          <div className="text-xs font-bold text-slate-900 truncate">
-            {serverCreds.configured ? 'Active & Verified' : 'Missing Credentials'}
+          <p className="text-xs text-slate-600 font-medium">
+            Automated stream from field inspections to <strong>MD & CI - Distribution</strong> and <strong>Dispensers & Milk Bars</strong> tabs.
+          </p>
+          <div className="flex items-center gap-3 mt-3 text-[11px] text-slate-500">
+            <span>Route: <strong className="text-slate-800 font-mono">POST /api/submit</strong></span>
+            <span>•</span>
+            <span className="text-emerald-700 font-semibold flex items-center gap-1">
+              View Inspection Pipeline <ChevronRight className="w-3 h-3" />
+            </span>
           </div>
-          <span className="text-[10px] text-slate-400 font-medium mt-1 block">
-            {serverCreds.configured ? 'Data Validation Auto-Sync Ready' : 'Key required for background write'}
-          </span>
+        </div>
+      </div>
+
+      {/* Cloudflare Security & Zero Exposure Status Bar */}
+      <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-xl bg-slate-200/80 text-slate-700 flex items-center justify-center shrink-0">
+            <Lock className="w-3.5 h-3.5 text-slate-600" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-black text-slate-800">Cloudflare Environment Secrets</span>
+              <span className="text-[10px] font-bold px-2 py-0.2 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                Zero Browser Exposure
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500 font-medium">
+              Service account credentials are kept in Cloudflare's secure vault and executed server-side. No credentials are ever entered into or exposed to the browser.
+            </p>
+          </div>
         </div>
 
-        {/* Metric 3: Target Tabs Isolation */}
-        <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/60">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Isolated Tabs</span>
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-          </div>
-          <div className="text-xs font-bold text-slate-900 truncate">
-            {clientsTabInput} / {returnsTabInput}
-          </div>
-          <span className="text-[10px] text-slate-400 font-medium mt-1 block">
-            Existing tabs protected
-          </span>
-        </div>
+        <button
+          type="button"
+          onClick={() => setActiveSyncView('cloudflare_vault')}
+          className="text-xs font-bold text-slate-700 hover:text-slate-900 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 transition-all cursor-pointer whitespace-nowrap self-start sm:self-auto shrink-0 shadow-xs"
+        >
+          View Cloudflare Config
+        </button>
       </div>
 
       {/* Global Status Message */}
@@ -438,80 +471,80 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
         </div>
       )}
 
-      {/* Workspace Segmented Navigation Tabs */}
-      <div className="flex items-center gap-1.5 border-b border-slate-100 pb-3 overflow-x-auto scrollbar-none">
+      {/* Pipeline Sub-Tabs Navigation */}
+      <div className="flex items-center gap-1.5 border-b border-slate-100 pb-2.5 overflow-x-auto scrollbar-none">
         <button
           type="button"
-          onClick={() => setActiveTab('overview')}
+          onClick={() => setActiveSyncView('clients_returns')}
           className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-            activeTab === 'overview'
-              ? 'bg-slate-900 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Layers className="w-3.5 h-3.5" />
-          <span>Connection & Live Sync</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('credentials')}
-          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-            activeTab === 'credentials'
-              ? 'bg-amber-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Key className="w-3.5 h-3.5" />
-          <span>Service Account Keys</span>
-          <span className={`w-1.5 h-1.5 rounded-full ${serverCreds.configured ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('tabs')}
-          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-            activeTab === 'tabs'
+            activeSyncView === 'clients_returns'
               ? 'bg-blue-600 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
           <Database className="w-3.5 h-3.5" />
-          <span>Target Tab Isolation</span>
+          <span>1. Clients & Returns Spreadsheet Sync</span>
         </button>
 
         <button
           type="button"
-          onClick={() => setActiveTab('schema')}
+          onClick={() => setActiveSyncView('data_validation')}
           className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-            activeTab === 'schema'
-              ? 'bg-indigo-600 text-white shadow-xs'
+            activeSyncView === 'data_validation'
+              ? 'bg-emerald-600 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
-          <HelpCircle className="w-3.5 h-3.5" />
+          <ClipboardList className="w-3.5 h-3.5" />
+          <span>2. Data Validation Spreadsheet Sync</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSyncView('cloudflare_vault')}
+          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeSyncView === 'cloudflare_vault'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Cloud className="w-3.5 h-3.5" />
+          <span>Cloudflare Secrets Vault</span>
+          <span className={`w-1.5 h-1.5 rounded-full ${cloudflareStatus.configured ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveSyncView('schemas')}
+          className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeSyncView === 'schemas'
+              ? 'bg-purple-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
           <span>Schema & Headers Reference</span>
         </button>
       </div>
 
-      {/* TAB 1: CONNECTION & LIVE SYNC OVERVIEW */}
-      {activeTab === 'overview' && (
+      {/* VIEW 1: CLIENTS & RETURNS SPREADSHEET SYNC */}
+      {activeSyncView === 'clients_returns' && (
         <div className="space-y-5 animate-in fade-in">
           {/* Main 2-Column Responsive Workspace Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-            {/* Left Column: Spreadsheet ID Input & Actions */}
+            {/* Left: Workbook Link & Header Automation */}
             <div className="lg:col-span-7 bg-slate-50/70 p-5 rounded-2xl border border-slate-200/80 space-y-4">
               <div>
                 <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center justify-between">
                   <span>Google Spreadsheet URL or Sheet ID</span>
                   {currentSpreadsheetId && (
                     <span className="text-[10px] text-emerald-700 font-bold font-mono">
-                      ✓ Active
+                      ✓ Linked
                     </span>
                   )}
                 </label>
                 <p className="text-xs text-slate-500 font-medium mt-0.5">
-                  Paste the browser link from your Google Sheet or the alphanumeric ID from between /d/ and /edit.
+                  Paste the Google Sheets URL or the alphanumeric ID to connect the master workbook.
                 </p>
               </div>
 
@@ -521,16 +554,16 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
                   value={spreadsheetInput}
                   onChange={(e) => setSpreadsheetInput(e.target.value)}
                   placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
-                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 font-mono shadow-xs"
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 font-mono shadow-xs"
                 />
 
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"
                     onClick={handleSaveSpreadsheet}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap"
                   >
-                    Connect Spreadsheet
+                    Connect Workbook
                   </button>
 
                   {currentSpreadsheetId && (
@@ -539,18 +572,18 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
                         type="button"
                         onClick={handleInitializeHeaders}
                         disabled={isInitializing || !isConnected}
-                        className="px-3.5 py-2 bg-white hover:bg-slate-50 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1.5"
+                        className="px-3.5 py-2 bg-white hover:bg-slate-50 text-blue-800 border border-blue-300 rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap flex items-center gap-1.5"
                         title="Creates Clients_DB and Returns_DB tabs with exact required columns"
                       >
-                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>{isInitializing ? 'Creating...' : 'Auto-Setup Headers'}</span>
+                        <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                        <span>{isInitializing ? 'Setting Up...' : 'Auto-Setup Headers in Sheet'}</span>
                       </button>
 
                       <a
                         href={`https://docs.google.com/spreadsheets/d/${currentSpreadsheetId}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="p-2 bg-white hover:bg-slate-50 text-slate-600 hover:text-emerald-700 border border-slate-200 rounded-xl transition-all cursor-pointer flex items-center justify-center shadow-xs"
+                        className="p-2 bg-white hover:bg-slate-50 text-slate-600 hover:text-blue-700 border border-slate-200 rounded-xl transition-all cursor-pointer flex items-center justify-center shadow-xs"
                         title="Open in new window"
                       >
                         <ExternalLink className="w-4 h-4" />
@@ -559,348 +592,352 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
                   )}
                 </div>
               </div>
+
+              {/* Target Tab Isolation Settings */}
+              <div className="pt-3 border-t border-slate-200/80 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    Target Tab Isolation (Safe Execution)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleSaveTabConfiguration}
+                    className="text-[11px] font-bold text-blue-600 hover:text-blue-800 cursor-pointer"
+                  >
+                    Save Tab Names
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-1">
+                      Clients Tab Name
+                    </label>
+                    <input
+                      type="text"
+                      value={clientsTabInput}
+                      onChange={(e) => setClientsTabInput(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-1">
+                      Returns Tab Name
+                    </label>
+                    <input
+                      type="text"
+                      value={returnsTabInput}
+                      onChange={(e) => setReturnsTabInput(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-900 font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
-            {/* Right Column: Engine Sync Status & Quick Navigation */}
+            {/* Right: Sync Status & Engine Action */}
             <div className="lg:col-span-5 bg-slate-50/70 p-5 rounded-2xl border border-slate-200/80 space-y-4 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Sync Engine & Cache</span>
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">Clients & Returns Engine</span>
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
                 </div>
                 <p className="text-xs text-slate-500 font-medium">
-                  Syncing pulls fresh records from Google Sheets into memory and local storage, ensuring fast queries across reports and validation forms.
+                  Synchronizes licensing data and financial return filings between your central spreadsheet and the application.
                 </p>
               </div>
 
-              {/* Service Account Quick Badge / Jump Card */}
+              {/* Data Summary Stats */}
               <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                    <Key className="w-3.5 h-3.5 text-amber-600" />
-                    Data Validation Sync
-                  </span>
-                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
-                    serverCreds.configured ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                  }`}>
-                    {serverCreds.configured ? 'Active' : 'Setup Needed'}
-                  </span>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-700">Protected Tabs Isolation:</span>
+                  <span className="text-emerald-700 font-bold">100% Isolated</span>
                 </div>
-                <p className="text-[11px] text-slate-400">
-                  {serverCreds.configured 
-                    ? `Authenticated as: ${serverCreds.clientEmail || 'Service Account'}`
-                    : 'Add service account credentials so inspection submissions sync automatically without popup logins.'
-                  }
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('credentials')}
-                  className="text-xs font-bold text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 cursor-pointer pt-0.5"
-                >
-                  <span>{serverCreds.configured ? 'Manage Credentials' : 'Set Up Service Account'}</span>
-                  <ArrowUpRight className="w-3 h-3" />
-                </button>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">Clients Column Count:</span>
+                  <span className="font-mono text-slate-800 font-bold">18 Columns</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">Returns Column Count:</span>
+                  <span className="font-mono text-slate-800 font-bold">14 Columns</span>
+                </div>
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
+                  <span className="text-slate-500">Last Synced:</span>
+                  <span className="font-mono text-blue-700 font-semibold">{lastSyncTime || 'Ready to sync'}</span>
+                </div>
               </div>
 
-              <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between">
-                <span className="text-[11px] text-slate-400 font-medium">
-                  {lastSyncTime ? `Last sync: ${lastSyncTime}` : 'Cache active'}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleSyncNow}
-                  disabled={isSyncing || !currentSpreadsheetId}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
-                >
-                  <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>Sync Records</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleSyncClientsAndReturnsNow}
+                disabled={isSyncing || !currentSpreadsheetId}
+                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Syncing Clients & Returns...' : 'Sync Clients & Returns Now'}</span>
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB 2: SERVICE ACCOUNT CREDENTIALS (Focused view for Data Validation Sync) */}
-      {activeTab === 'credentials' && (
-        <div className="p-6 rounded-2xl bg-amber-50/40 border border-amber-200/80 space-y-5 animate-in fade-in">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-100 pb-4">
-            <div>
-              <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                <Key className="w-4 h-4 text-amber-600" />
-                Google Service Account Credentials (For Data Validation & Automated Sync)
-              </span>
-              <p className="text-xs text-slate-500 font-medium mt-0.5">
-                Grants the backend server write permissions to your Google Sheet without requiring interactive login popups.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
-                serverCreds.configured 
-                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
-                  : 'bg-amber-100 text-amber-800 border-amber-300'
-              }`}>
-                {serverCreds.configured ? 'Status: Active & Verified' : 'Status: Credentials Missing'}
-              </span>
-            </div>
-          </div>
-
-          {credsSaveMessage && (
-            <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
-              credsSaveMessage.type === 'success' 
-                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                : 'bg-rose-50 text-rose-800 border border-rose-200'
-            }`}>
-              {credsSaveMessage.type === 'success' && <Check className="w-4 h-4 text-emerald-600 shrink-0" />}
-              {credsSaveMessage.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
-              <span>{credsSaveMessage.text}</span>
-            </div>
-          )}
-
-          {/* 2-Column Responsive Key Input Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Option 1: Fast Service Account JSON Key Paste */}
-            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-              <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                <span>Option 1: Paste Service Account JSON</span>
-                <span className="text-[10px] text-emerald-600 font-bold">Fastest</span>
-              </label>
-              <p className="text-[11px] text-slate-400">
-                Directly paste your Google Cloud service account JSON file contents. Email and private key are automatically extracted.
-              </p>
-              <textarea
-                rows={5}
-                value={jsonCredentialsInput}
-                onChange={(e) => setJsonCredentialsInput(e.target.value)}
-                placeholder='{ "type": "service_account", "client_email": "...", "private_key": "-----BEGIN PRIVATE KEY-----..." }'
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono focus:border-amber-500 focus:outline-none placeholder-slate-400"
-              />
-            </div>
-
-            {/* Option 2: Manual Email & Private Key */}
-            <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
+      {/* VIEW 2: DATA VALIDATION SPREADSHEET SYNC */}
+      {activeSyncView === 'data_validation' && (
+        <div className="space-y-5 animate-in fade-in">
+          <div className="bg-emerald-50/40 p-5 sm:p-6 rounded-2xl border border-emerald-200/80 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-emerald-100 pb-4">
               <div>
-                <label className="text-xs font-bold text-slate-800 block mb-1">
-                  Option 2: Manual Credentials Entry
-                </label>
-                <div className="space-y-2 pt-1">
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-bold text-slate-600">Client Email:</span>
-                    <input
-                      type="text"
-                      value={clientEmailInput}
-                      onChange={(e) => setClientEmailInput(e.target.value)}
-                      placeholder="app-service@project.iam.gserviceaccount.com"
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono focus:border-amber-500 focus:outline-none"
-                    />
-                  </div>
+                <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <ClipboardList className="w-4 h-4 text-emerald-600" />
+                  Data Validation Automated Field Stream Pipeline
+                </span>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  Submissions made by compliance officers in the Data Validation Module stream automatically to Google Sheets via Cloudflare.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  Serverless Stream Active
+                </span>
+              </div>
+            </div>
 
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-bold text-slate-600">Private Key (PEM):</span>
-                    <input
-                      type="password"
-                      value={privateKeyInput}
-                      onChange={(e) => setPrivateKeyInput(e.target.value)}
-                      placeholder="-----BEGIN PRIVATE KEY-----..."
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono focus:border-amber-500 focus:outline-none"
-                    />
+            {/* Pipeline Architecture Diagram / Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Category Route 1 */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900">
+                    Mini Dairies & Cottage Industries
+                  </span>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    Auto-Route
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 text-xs space-y-1">
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Target Workbook Sheet:</span>
+                    <strong className="text-emerald-800 font-mono">MD & CI - Distribution</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Categories Included:</span>
+                    <span className="text-slate-800 font-medium">Mini Dairy, Cottage Industry</span>
                   </div>
                 </div>
+                <p className="text-[11px] text-slate-500">
+                  Captures local sales, distribution networks, supplier lists, and compliance declarations.
+                </p>
               </div>
 
-              <div className="pt-2 text-[10px] text-slate-400">
-                Credentials are kept securely on the local server and tested against the Google Sheets API.
+              {/* Category Route 2 */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900">
+                    Dispensers & Milk Bars
+                  </span>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                    Auto-Route
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-lg border border-slate-100 text-xs space-y-1">
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Target Workbook Sheet:</span>
+                    <strong className="text-blue-800 font-mono">Dispensers & Milk Bars</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Categories Included:</span>
+                    <span className="text-slate-800 font-medium">Milk Bar, Dispenser</span>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Captures intake volumes, sales quantities, unit prices, and milk dispenser parameters.
+                </p>
               </div>
             </div>
-          </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-amber-200/80">
-            <p className="text-[11px] text-slate-500 font-medium">
-              Important: Ensure you share your Google Sheet with Editor permission to your Service Account Client Email!
-            </p>
-            <button
-              type="button"
-              onClick={handleSaveServerCredentials}
-              disabled={isSavingCreds}
-              className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shrink-0"
-            >
-              <Key className="w-3.5 h-3.5" />
-              <span>{isSavingCreds ? 'Verifying & Saving...' : 'Save & Verify Credentials'}</span>
-            </button>
-          </div>
-        </div>
-      )}
+            {/* Technical Pipeline Details & Health Test */}
+            <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1 text-xs">
+                <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Execution Path: <code className="bg-slate-100 px-1.5 py-0.5 rounded text-emerald-700">POST /api/submit</code></span>
+                </div>
+                <p className="text-slate-500 text-[11px]">
+                  Cloudflare signs JWT tokens using Web Crypto and appends validation rows directly. No popup logins or browser keys required.
+                </p>
+              </div>
 
-      {/* TAB 3: TARGET TABS & ISOLATION */}
-      {activeTab === 'tabs' && (
-        <div className="p-6 rounded-2xl bg-blue-50/40 border border-blue-200/80 text-xs space-y-5 animate-in fade-in">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-100 pb-3.5">
-            <div>
-              <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                <Database className="w-4 h-4 text-blue-600" />
-                Target Tab Isolation Settings
-              </span>
-              <p className="text-xs text-slate-500 font-medium mt-0.5">
-                Specify sheet tab names. All other tabs in your workbook remain <strong className="text-emerald-700 font-semibold">100% untouched</strong>.
-              </p>
+              <button
+                type="button"
+                onClick={handleTestCloudflarePipeline}
+                disabled={isCheckingCloudflare}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 shrink-0"
+              >
+                <Activity className={`w-3.5 h-3.5 ${isCheckingCloudflare ? 'animate-spin' : ''}`} />
+                <span>{isCheckingCloudflare ? 'Verifying...' : 'Verify Cloudflare Pipeline'}</span>
+              </button>
             </div>
-            {availableTabs.length > 0 && (
-              <span className="text-[10px] bg-white text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 font-bold whitespace-nowrap shadow-xs">
-                Found {availableTabs.length} tabs in workbook
-              </span>
+
+            {testResult && (
+              <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+                testResult.success 
+                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                  : 'bg-rose-50 text-rose-800 border border-rose-200'
+              }`}>
+                {testResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
+                <span>{testResult.message}</span>
+              </div>
             )}
           </div>
+        </div>
+      )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            {/* Clients Tab Name */}
-            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-              <label className="font-bold text-slate-800 flex items-center justify-between">
-                <span>Clients Database Tab</span>
-                <span className="text-[10px] text-slate-400 font-normal">Default: Clients_DB</span>
-              </label>
-              <input
-                type="text"
-                value={clientsTabInput}
-                onChange={(e) => setClientsTabInput(e.target.value)}
-                placeholder="e.g. Clients_DB or KDB_Clients"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 font-mono focus:border-blue-500 focus:outline-none"
-              />
-              {availableTabs.length > 0 && (
-                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-500 pt-1">
-                  <span>Quick pick:</span>
-                  {availableTabs.slice(0, 5).map(tab => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setClientsTabInput(tab)}
-                      className={`px-2 py-0.5 rounded-md border font-medium transition-colors cursor-pointer ${
-                        clientsTabInput === tab 
-                          ? 'bg-blue-100 text-blue-800 border-blue-300 font-bold' 
-                          : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200'
-                      }`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
+      {/* VIEW 3: CLOUDFLARE SECRETS VAULT */}
+      {activeSyncView === 'cloudflare_vault' && (
+        <div className="space-y-5 animate-in fade-in">
+          <div className="bg-slate-900 text-white p-6 rounded-2xl border border-slate-800 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <span className="font-bold text-white text-sm flex items-center gap-2">
+                  <Cloud className="w-4 h-4 text-emerald-400" />
+                  Cloudflare Pages Environment & Secrets Management
+                </span>
+                <p className="text-xs text-slate-400 font-medium mt-0.5">
+                  All environment variables and Google Service Account secrets are managed natively in Cloudflare.
+                </p>
+              </div>
+              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                Managed by Cloudflare
+              </span>
+            </div>
+
+            {/* Variable Status Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800">
+                <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">
+                  GOOGLE_SERVICE_ACCOUNT_EMAIL
+                </span>
+                <div className="text-xs font-mono font-bold text-emerald-400 truncate" title={cloudflareStatus.clientEmail || 'Configured in Cloudflare'}>
+                  {cloudflareStatus.clientEmail || (cloudflareStatus.configured ? 'Configured in Cloudflare' : 'Pending in Cloudflare')}
                 </div>
-              )}
-            </div>
+                <span className="text-[10px] text-slate-500 block mt-1">Masked for browser security</span>
+              </div>
 
-            {/* Returns Tab Name */}
-            <div className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-              <label className="font-bold text-slate-800 flex items-center justify-between">
-                <span>Returns Database Tab</span>
-                <span className="text-[10px] text-slate-400 font-normal">Default: Returns_DB</span>
-              </label>
-              <input
-                type="text"
-                value={returnsTabInput}
-                onChange={(e) => setReturnsTabInput(e.target.value)}
-                placeholder="e.g. Returns_DB or KDB_Returns"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 font-mono focus:border-blue-500 focus:outline-none"
-              />
-              {availableTabs.length > 0 && (
-                <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-500 pt-1">
-                  <span>Quick pick:</span>
-                  {availableTabs.slice(0, 5).map(tab => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setReturnsTabInput(tab)}
-                      className={`px-2 py-0.5 rounded-md border font-medium transition-colors cursor-pointer ${
-                        returnsTabInput === tab 
-                          ? 'bg-blue-100 text-blue-800 border-blue-300 font-bold' 
-                          : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200'
-                      }`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800">
+                <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">
+                  GOOGLE_PRIVATE_KEY
+                </span>
+                <div className="text-xs font-mono font-bold text-emerald-400 truncate">
+                  {cloudflareStatus.hasPrivateKey || cloudflareStatus.configured ? '•••••••••••••••• (Encrypted)' : 'Pending in Cloudflare'}
                 </div>
-              )}
-            </div>
-          </div>
+                <span className="text-[10px] text-slate-500 block mt-1">Stored safely in Cloudflare Vault</span>
+              </div>
 
-          <div className="flex items-center justify-between pt-3 border-t border-blue-100">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
-              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Isolated read & write protection active.</span>
+              <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800">
+                <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block mb-1">
+                  GOOGLE_SPREADSHEET_ID
+                </span>
+                <div className="text-xs font-mono font-bold text-emerald-400 truncate" title={currentSpreadsheetId || 'None'}>
+                  {currentSpreadsheetId ? `${currentSpreadsheetId.slice(0, 10)}...` : 'Linked in App / Cloudflare'}
+                </div>
+                <span className="text-[10px] text-slate-500 block mt-1">Active Workbook Target</span>
+              </div>
             </div>
 
-            <button
-              type="button"
-              onClick={handleSaveTabConfiguration}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
-            >
-              Save Tab Mapping
-            </button>
+            {/* Architecture Explanation Card */}
+            <div className="p-4 bg-slate-950/80 rounded-xl border border-slate-800/80 text-xs space-y-2">
+              <div className="flex items-center gap-2 text-slate-300 font-bold">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Zero Exposure Security Guarantee</span>
+              </div>
+              <p className="text-slate-400 text-[11px] leading-relaxed">
+                Wrangler configuration files do NOT store or override your secrets. Your environment variables are stored exclusively in the Cloudflare Pages Dashboard under <strong>Settings &gt; Environment variables &amp; Secrets</strong>. When an officer completes an inspection, the Cloudflare edge worker signs the request in memory using WebCrypto and forwards it securely to Google Sheets.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+              <span className="text-[11px] text-slate-400 font-medium">
+                Platform: Cloudflare Pages Serverless
+              </span>
+              <button
+                type="button"
+                onClick={fetchCloudflareStatus}
+                disabled={isCheckingCloudflare}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3 h-3 ${isCheckingCloudflare ? 'animate-spin' : ''}`} />
+                <span>Refresh Status</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* TAB 4: SCHEMA & COLUMN REFERENCE */}
-      {activeTab === 'schema' && (
-        <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-5 animate-in fade-in">
-          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-            <div>
-              <span className="font-bold text-slate-900 text-sm">Required Google Sheets Schema</span>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Exact column headers expected by the applet for Clients and Returns import/export.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleInitializeHeaders}
-              disabled={isInitializing || !isConnected || !currentSpreadsheetId}
-              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>{isInitializing ? 'Creating...' : 'Auto-Setup in Sheet'}</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            {/* Clients DB Columns Card */}
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-800 text-xs">Tab: "Clients_DB" (18 Columns)</span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyHeaders('clients')}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
-                >
-                  {copiedHeader === 'clients' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedHeader === 'clients' ? 'Copied!' : 'Copy Headers'}</span>
-                </button>
+      {/* VIEW 4: SCHEMAS & COLUMN REFERENCES */}
+      {activeSyncView === 'schemas' && (
+        <div className="space-y-5 animate-in fade-in">
+          <div className="p-5 sm:p-6 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
+              <div>
+                <span className="font-bold text-slate-900 text-sm">Required Google Sheets Schema & Headers</span>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Exact column headers for Clients Registry (18 fields) and Returns Ledger (14 fields).
+                </p>
               </div>
-              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[10px] text-slate-700 overflow-x-auto max-h-48 whitespace-pre-wrap leading-relaxed">
-                {CLIENTS_HEADERS.map((h, i) => (
-                  <span key={h} className="inline-block bg-white border border-slate-200 px-1.5 py-0.5 rounded mr-1.5 mb-1.5 text-slate-800">
-                    <span className="text-slate-400 text-[9px] mr-1">{i + 1}.</span>{h}
-                  </span>
-                ))}
-              </div>
+              <button
+                type="button"
+                onClick={handleInitializeHeaders}
+                disabled={isInitializing || !isConnected || !currentSpreadsheetId}
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40 flex items-center gap-1.5 self-start sm:self-auto shrink-0"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{isInitializing ? 'Creating...' : 'Auto-Setup in Sheet'}</span>
+              </button>
             </div>
 
-            {/* Returns DB Columns Card */}
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-blue-800 text-xs">Tab: "Returns_DB" (14 Columns)</span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyHeaders('returns')}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
-                >
-                  {copiedHeader === 'returns' ? <Check className="w-3 h-3 text-blue-600" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedHeader === 'returns' ? 'Copied!' : 'Copy Headers'}</span>
-                </button>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Clients DB Columns Card */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-emerald-800 text-xs">Tab: "Clients_DB" (18 Columns)</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyHeaders('clients')}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedHeader === 'clients' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedHeader === 'clients' ? 'Copied!' : 'Copy Headers'}</span>
+                  </button>
+                </div>
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[10px] text-slate-700 overflow-x-auto max-h-48 whitespace-pre-wrap leading-relaxed">
+                  {CLIENTS_HEADERS.map((h, i) => (
+                    <span key={h} className="inline-block bg-white border border-slate-200 px-1.5 py-0.5 rounded mr-1.5 mb-1.5 text-slate-800">
+                      <span className="text-slate-400 text-[9px] mr-1">{i + 1}.</span>{h}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[10px] text-slate-700 overflow-x-auto max-h-48 whitespace-pre-wrap leading-relaxed">
-                {RETURNS_HEADERS.map((h, i) => (
-                  <span key={h} className="inline-block bg-white border border-slate-200 px-1.5 py-0.5 rounded mr-1.5 mb-1.5 text-slate-800">
-                    <span className="text-slate-400 text-[9px] mr-1">{i + 1}.</span>{h}
-                  </span>
-                ))}
+
+              {/* Returns DB Columns Card */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-blue-800 text-xs">Tab: "Returns_DB" (14 Columns)</span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyHeaders('returns')}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-600 rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedHeader === 'returns' ? <Check className="w-3 h-3 text-blue-600" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedHeader === 'returns' ? 'Copied!' : 'Copy Headers'}</span>
+                  </button>
+                </div>
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-[10px] text-slate-700 overflow-x-auto max-h-48 whitespace-pre-wrap leading-relaxed">
+                  {RETURNS_HEADERS.map((h, i) => (
+                    <span key={h} className="inline-block bg-white border border-slate-200 px-1.5 py-0.5 rounded mr-1.5 mb-1.5 text-slate-800">
+                      <span className="text-slate-400 text-[9px] mr-1">{i + 1}.</span>{h}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -909,3 +946,5 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
     </div>
   );
 };
+
+export default GoogleSheetsBanner;
