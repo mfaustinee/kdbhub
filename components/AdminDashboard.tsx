@@ -1784,306 +1784,102 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Mobile Category Switcher (Visible on small screens) */}
-          <div className="lg:hidden flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+          {/* Top Category Segmented Tabs Bar (Spacious, prominent, full-width) */}
+          <div className="bg-white p-2.5 sm:p-3 rounded-3xl border border-slate-200/80 shadow-xs flex items-center gap-2 overflow-x-auto scrollbar-none">
             <button
               type="button"
               onClick={() => setSettingsCategory('sheets')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 settingsCategory === 'sheets'
-                  ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-white border border-slate-200 text-slate-700'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>Google Sheets</span>
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Google Sheets & Central Sync</span>
+              <span className={`w-2 h-2 rounded-full ${settingsCategory === 'sheets' ? 'bg-white' : 'bg-emerald-500'}`} />
             </button>
 
             <button
               type="button"
               onClick={() => setSettingsCategory('portal')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 settingsCategory === 'portal'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-white border border-slate-200 text-slate-700'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <Globe className="w-3.5 h-3.5" />
-              <span>Portal Modules</span>
+              <Globe className="w-4 h-4" />
+              <span>Client Portal Modules</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                settingsCategory === 'portal' ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'
+              }`}>
+                2
+              </span>
             </button>
 
             <button
               type="button"
               onClick={() => setSettingsCategory('signatures')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 settingsCategory === 'signatures'
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'bg-white border border-slate-200 text-slate-700'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <PenTool className="w-3.5 h-3.5" />
-              <span>Signatures ({authoritySigs.length})</span>
+              <PenTool className="w-4 h-4" />
+              <span>Authority Signatures</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                settingsCategory === 'signatures' ? 'bg-white/20 text-white' : 'bg-indigo-100 text-indigo-800'
+              }`}>
+                {authoritySigs.length}
+              </span>
             </button>
 
             <button
               type="button"
               onClick={() => setSettingsCategory('access')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 settingsCategory === 'access'
-                  ? 'bg-purple-600 text-white shadow-xs'
-                  : 'bg-white border border-slate-200 text-slate-700'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <QrCode className="w-3.5 h-3.5" />
-              <span>Mobile QR</span>
+              <QrCode className="w-4 h-4" />
+              <span>System Access & QR</span>
             </button>
 
             <button
               type="button"
               onClick={() => setSettingsCategory('database')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                 settingsCategory === 'database'
-                  ? 'bg-slate-900 text-white shadow-xs'
-                  : 'bg-white border border-slate-200 text-slate-700'
+                  ? 'bg-slate-900 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <Server className="w-3.5 h-3.5" />
+              <Server className="w-4 h-4" />
               <span>Database Health</span>
+              <span className={`w-2 h-2 rounded-full ${systemHealth?.status === 'ok' ? 'bg-emerald-400' : 'bg-rose-400'}`} />
             </button>
 
             <button
               type="button"
               onClick={() => setSettingsCategory('all')}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ml-auto ${
                 settingsCategory === 'all'
-                  ? 'bg-slate-800 text-white shadow-xs'
-                  : 'bg-white border border-slate-200 text-slate-700'
+                  ? 'bg-slate-800 text-white shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
               }`}
+              title="View all settings modules stacked"
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>All Sections</span>
+              <Layers className="w-4 h-4" />
+              <span>All Settings Stack</span>
             </button>
           </div>
 
-          {/* Master Dual-Column Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left Sidebar Menu (Desktop) */}
-            <div className="hidden lg:block lg:col-span-4 xl:col-span-3 space-y-4 sticky top-6">
-              <div className="bg-white p-3 rounded-3xl border border-slate-200/80 shadow-xs space-y-1">
-                <div className="px-3 pt-2 pb-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Settings Modules</span>
-                </div>
-
-                {/* Nav Item: Google Sheets */}
-                <button
-                  type="button"
-                  onClick={() => setSettingsCategory('sheets')}
-                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                    settingsCategory === 'sheets'
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`p-2 rounded-xl shrink-0 ${
-                      settingsCategory === 'sheets' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
-                    }`}>
-                      <FileSpreadsheet className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold truncate">Google Sheets & Central Sync</div>
-                      <div className={`text-[10px] truncate ${
-                        settingsCategory === 'sheets' ? 'text-emerald-100' : 'text-slate-400'
-                      }`}>
-                        Clients, Returns & Validation Sync
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    settingsCategory === 'sheets' ? 'bg-white' : 'bg-emerald-500'
-                  }`} />
-                </button>
-
-                {/* Nav Item: Client Portal */}
-                <button
-                  type="button"
-                  onClick={() => setSettingsCategory('portal')}
-                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                    settingsCategory === 'portal'
-                      ? 'bg-blue-600 text-white shadow-xs'
-                      : 'hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`p-2 rounded-xl shrink-0 ${
-                      settingsCategory === 'portal' ? 'bg-white/20 text-white' : 'bg-blue-50 text-blue-700'
-                    }`}>
-                      <Globe className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold truncate">Client Portal Modules</div>
-                      <div className={`text-[10px] truncate ${
-                        settingsCategory === 'portal' ? 'text-blue-100' : 'text-slate-400'
-                      }`}>
-                        Public self-service forms
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
-                    settingsCategory === 'portal' ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'
-                  }`}>
-                    2
-                  </span>
-                </button>
-
-                {/* Nav Item: Authority Signatures */}
-                <button
-                  type="button"
-                  onClick={() => setSettingsCategory('signatures')}
-                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                    settingsCategory === 'signatures'
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`p-2 rounded-xl shrink-0 ${
-                      settingsCategory === 'signatures' ? 'bg-white/20 text-white' : 'bg-indigo-50 text-indigo-700'
-                    }`}>
-                      <PenTool className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold truncate">Authority Signatures</div>
-                      <div className={`text-[10px] truncate ${
-                        settingsCategory === 'signatures' ? 'text-indigo-100' : 'text-slate-400'
-                      }`}>
-                        Official stamp registry
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${
-                    settingsCategory === 'signatures' ? 'bg-white/20 text-white' : 'bg-indigo-100 text-indigo-800'
-                  }`}>
-                    {authoritySigs.length}
-                  </span>
-                </button>
-
-                {/* Nav Item: Mobile Access & QR */}
-                <button
-                  type="button"
-                  onClick={() => setSettingsCategory('access')}
-                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                    settingsCategory === 'access'
-                      ? 'bg-purple-600 text-white shadow-xs'
-                      : 'hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`p-2 rounded-xl shrink-0 ${
-                      settingsCategory === 'access' ? 'bg-white/20 text-white' : 'bg-purple-50 text-purple-700'
-                    }`}>
-                      <QrCode className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold truncate">System Access & QR</div>
-                      <div className={`text-[10px] truncate ${
-                        settingsCategory === 'access' ? 'text-purple-100' : 'text-slate-400'
-                      }`}>
-                        Field tablet direct links
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${
-                    settingsCategory === 'access' ? 'bg-white/20 text-white' : 'bg-purple-100 text-purple-800'
-                  }`}>
-                    Field
-                  </span>
-                </button>
-
-                {/* Nav Item: Cloud Database Health */}
-                <button
-                  type="button"
-                  onClick={() => setSettingsCategory('database')}
-                  className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                    settingsCategory === 'database'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`p-2 rounded-xl shrink-0 ${
-                      settingsCategory === 'database' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'
-                    }`}>
-                      <Server className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold truncate">Database Health</div>
-                      <div className={`text-[10px] truncate ${
-                        settingsCategory === 'database' ? 'text-slate-300' : 'text-slate-400'
-                      }`}>
-                        PostgreSQL diagnostics
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${
-                    systemHealth?.status === 'ok' ? 'bg-emerald-400' : 'bg-rose-400'
-                  }`} />
-                </button>
-
-                {/* Nav Item: All Sections Overview */}
-                <div className="pt-2 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setSettingsCategory('all')}
-                    className={`w-full text-left p-3 rounded-2xl flex items-center justify-between gap-3 transition-all cursor-pointer ${
-                      settingsCategory === 'all'
-                        ? 'bg-slate-800 text-white shadow-xs'
-                        : 'hover:bg-slate-50 text-slate-600'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className={`p-2 rounded-xl shrink-0 ${
-                        settingsCategory === 'all' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
-                      }`}>
-                        <Layers className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold truncate">All Sections Overview</div>
-                        <div className={`text-[10px] truncate ${
-                          settingsCategory === 'all' ? 'text-slate-300' : 'text-slate-400'
-                        }`}>
-                          View complete settings stack
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              {/* Sidebar Quick Architecture Summary */}
-              <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-3">
-                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                  Quick Architecture Info
-                </span>
-                <div className="space-y-2.5 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 font-medium">Clients & Returns DB:</span>
-                    <span className="font-bold text-slate-800">Google Sheets</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 font-medium">Drafts & Signatures:</span>
-                    <span className="font-bold text-slate-800">Supabase</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 font-medium">Registered Officers:</span>
-                    <span className="font-bold text-indigo-700">{authoritySigs.length} Active</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Right Dedicated Workspace Canvas (Each section with its own stuff) */}
-            <div className="lg:col-span-8 xl:col-span-9 space-y-6">
+          {/* Active Workspace Canvas (Full Width & Spacious) */}
+          <div className="w-full space-y-8 animate-in fade-in duration-300">
 
           {/* Section 1: Google Sheets Live Database & Automated Sync */}
           {(settingsCategory === 'all' || settingsCategory === 'sheets') && (
@@ -2686,7 +2482,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   {/* Signatures List Grid */}
                   {authoritySigs.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
                       {authoritySigs.map((sig, index) => {
                         const isDefault = sig.isDefault || (!authoritySigs.some(s => s.isDefault) && sig.signature === staffConfig.officialSignature);
                         const isFirst = index === 0;
@@ -3056,7 +2852,6 @@ CREATE TABLE IF NOT EXISTS staff_config (...);`}
               )}
             </div>
           )}
-            </div>
           </div>
         </div>
       )}
