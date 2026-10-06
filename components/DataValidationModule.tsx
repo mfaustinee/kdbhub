@@ -4236,7 +4236,7 @@ export function DataValidationModule() {
       };
 
       // 4. Concurrent execution of DBService save, Google Sheets submission, and Supabase sync
-      const storedSpreadsheetId = typeof window !== 'undefined' ? localStorage.getItem('kdb_google_spreadsheet_id') || '' : '';
+      const storedSpreadsheetId = typeof window !== 'undefined' ? localStorage.getItem('kdb_data_validation_spreadsheet_id') || localStorage.getItem('kdb_google_spreadsheet_id') || '' : '';
       const [, submitRes] = await Promise.all([
         Promise.all([DBService.saveValidation(dataValObject), supabaseSyncPromise]),
         fetch('/api/submit', {
@@ -4246,7 +4246,8 @@ export function DataValidationModule() {
             data: updatedData, 
             pdf, 
             isAmendment,
-            spreadsheetId: storedSpreadsheetId
+            spreadsheetId: storedSpreadsheetId,
+            dataValidationSpreadsheetId: storedSpreadsheetId
           }),
         })
       ]);

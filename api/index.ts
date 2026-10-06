@@ -29,7 +29,13 @@ const GOOGLE_CREDENTIALS_FILE = path.join(DATA_DIR, "google_credentials.json");
 const LOG_FILE = path.join(DATA_DIR, "server.log");
 
 // Helper to retrieve Google Service Account credentials from environment or persistent file
-const getGoogleCredentials = (): { clientEmail: string; privateKey: string; spreadsheetId: string } => {
+const getGoogleCredentials = (): { 
+  clientEmail: string; 
+  privateKey: string; 
+  spreadsheetId: string;
+  dataValidationSpreadsheetId: string;
+  clientsReturnsSpreadsheetId: string;
+} => {
   let fileCreds: any = {};
   try {
     if (fs.existsSync(GOOGLE_CREDENTIALS_FILE)) {
@@ -68,7 +74,23 @@ const getGoogleCredentials = (): { clientEmail: string; privateKey: string; spre
     ""
   ).trim().replace(/^["']|["']$/g, '');
 
-  return { clientEmail, privateKey, spreadsheetId };
+  const dataValidationSpreadsheetId = (
+    process.env.DATA_VALIDATION_SPREADSHEET_ID || 
+    fileCreds.data_validation_spreadsheet_id || 
+    fileCreds.dataValidationSpreadsheetId || 
+    spreadsheetId || 
+    ""
+  ).trim().replace(/^["']|["']$/g, '');
+
+  const clientsReturnsSpreadsheetId = (
+    process.env.CLIENTS_RETURNS_SPREADSHEET_ID || 
+    fileCreds.clients_returns_spreadsheet_id || 
+    fileCreds.clientsReturnsSpreadsheetId || 
+    spreadsheetId || 
+    ""
+  ).trim().replace(/^["']|["']$/g, '');
+
+  return { clientEmail, privateKey, spreadsheetId, dataValidationSpreadsheetId, clientsReturnsSpreadsheetId };
 };
 
 // Security & Access Control State
@@ -508,7 +530,9 @@ Allow: /cessations
       res.json({
         configured: isConfigured,
         clientEmail: creds.clientEmail,
-        spreadsheetId: creds.spreadsheetId,
+        spreadsheetId: creds.dataValidationSpreadsheetId || creds.spreadsheetId,
+        dataValidationSpreadsheetId: creds.dataValidationSpreadsheetId,
+        clientsReturnsSpreadsheetId: creds.clientsReturnsSpreadsheetId,
         hasPrivateKey: Boolean(creds.privateKey)
       });
     });
@@ -516,10 +540,11 @@ Allow: /cessations
     // Endpoint to save Google Service Account credentials & Spreadsheet ID
     app.post("/api/google-credentials", async (req, res) => {
       try {
-        const { clientEmail, privateKey, spreadsheetId, serviceAccountJson } = req.body;
+        const { clientEmail, privateKey, spreadsheetId, dataValidationSpreadsheetId, clientsReturnsSpreadsheetId, serviceAccountJson } = req.body;
         let finalEmail = clientEmail || '';
         let finalKey = privateKey || '';
-        let finalSpreadsheetId = spreadsheetId || '';
+        let finalDataValSheetId = dataValidationSpreadsheetId || spreadsheetId || '';
+        let finalClientsSheetId = clientsReturnsSpreadsheetId || '';
 
         if (serviceAccountJson) {
           try {
@@ -542,7 +567,9 @@ Allow: /cessations
         const toSave = {
           client_email: finalEmail.trim(),
           private_key: finalKey,
-          spreadsheet_id: (finalSpreadsheetId || '').trim(),
+          spreadsheet_id: (finalDataValSheetId || '').trim(),
+          data_validation_spreadsheet_id: (finalDataValSheetId || '').trim(),
+          clients_returns_spreadsheet_id: (finalClientsSheetId || '').trim(),
           updated_at: new Date().toISOString()
         };
 
@@ -581,11 +608,228 @@ Allow: /cessations
           testStatus,
           configured: isFullyConfigured,
           clientEmail: finalEmail,
-          spreadsheetId: finalSpreadsheetId
+          spreadsheetId: finalDataValSheetId,
+          dataValidationSpreadsheetId: finalDataValSheetId,
+          clientsReturnsSpreadsheetId: finalClientsSheetId
         });
       } catch (err: any) {
         logToFile(`[API] Error saving google credentials: ${err.message}`);
         res.status(500).json({ error: "Failed to save Google credentials", details: err.message });
+      }
+    });
+
+    // Endpoint for headless Service-Account backed sync for Sheet 1 (Clients & Returns) - No user Google sign-in required!
+    app.post("/api/sync-clients-returns", async (req, res) => {
+      logToFile("[API] Received /api/sync-clients-returns request");
+      const creds = getGoogleCredentials();
+      const spreadsheetId = (
+        req.body?.spreadsheetId ||
+        creds.clientsReturnsSpreadsheetId ||
+        creds.spreadsheetId ||
+        process.env.CLIENTS_RETURNS_SPREADSHEET_ID ||
+        process.env.GOOGLE_SPREADSHEET_ID ||
+        ""
+      ).trim().replace(/^["']|["']$/g, '');
+
+      if (!spreadsheetId) {
+        return res.status(400).json({ error: "Clients & Returns Spreadsheet ID not configured" });
+      }
+
+      const sheets = getSheetsClient();
+      if (!sheets) {
+        return res.status(400).json({ error: "Google Service Account credentials not configured" });
+      }
+
+      try {
+        const metaRes = await sheets.spreadsheets.get({ spreadsheetId });
+        const sheetsList = (metaRes.data.sheets || []).map(s => s.properties?.title || '').filter(Boolean);
+
+        const customClientsTab = (req.body?.clientsTab || '').trim();
+        let clientsTab = sheetsList.find(s => s.toLowerCase().trim() === customClientsTab.toLowerCase().trim());
+        if (!clientsTab) {
+          clientsTab = sheetsList.find(s => ['clients', 'clients_db', 'clients db', 'clients registry'].includes(s.toLowerCase().trim()));
+        }
+        if (!clientsTab) {
+          clientsTab = sheetsList.find(s => s.toLowerCase().includes('client')) || 'Clients';
+        }
+
+        const customReturnsTab = (req.body?.returnsTab || '').trim();
+        let returnsTab = sheetsList.find(s => s.toLowerCase().trim() === customReturnsTab.toLowerCase().trim());
+        if (!returnsTab) {
+          returnsTab = sheetsList.find(s => ['returns', 'returns_db', 'returns db', 'client returns', 'returns registry'].includes(s.toLowerCase().trim()));
+        }
+        if (!returnsTab) {
+          returnsTab = sheetsList.find(s => s.toLowerCase().includes('return')) || 'Returns';
+        }
+
+        logToFile(`[API] Reading Sheet 1 via Service Account: Clients tab="${clientsTab}", Returns tab="${returnsTab}"`);
+
+        const [clientsDataRes, returnsDataRes] = await Promise.all([
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${clientsTab}!A1:R10000`
+          }).catch(err => {
+            logToFile(`[API] Warning reading clients tab "${clientsTab}": ${err.message}`);
+            return { data: { values: [] } };
+          }),
+          sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${returnsTab}!A1:N10000`
+          }).catch(err => {
+            logToFile(`[API] Warning reading returns tab "${returnsTab}": ${err.message}`);
+            return { data: { values: [] } };
+          })
+        ]);
+
+        const clientRows = clientsDataRes.data.values || [];
+        const returnRows = returnsDataRes.data.values || [];
+
+        const clients: any[] = [];
+        if (clientRows.length > 1) {
+          const headers = (clientRows[0] || []).map((h: any) => String(h || '').toLowerCase().trim().replace(/[^a-z0-9]/g, ''));
+          const getIdx = (name: string, fallbackIdx: number) => {
+            const idx = headers.indexOf(name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+            return idx >= 0 ? idx : fallbackIdx;
+          };
+          const clientNameIdx = getIdx('clientname', 0);
+          const premiseNameIdx = getIdx('premisename', 1);
+          const categoryIdx = getIdx('premisecategory', 2);
+          const startYearIdx = getIdx('startyear', 3);
+          const startMonthIdx = getIdx('startmonth', 4);
+          const endYearIdx = getIdx('endyear', 5);
+          const endMonthIdx = getIdx('endmonth', 6);
+          const telIdx = getIdx('tel', 7);
+          const contactPersonIdx = getIdx('contactperson', 8);
+          const locationIdx = getIdx('location', 9);
+          const countyIdx = getIdx('county', 10);
+          const coolingCapIdx = getIdx('coolingcapacity', 11);
+          const permitStatusIdx = getIdx('permitstatus', 12);
+          const opStatusIdx = getIdx('operationalstatus', 13);
+          const levyInfoIdx = getIdx('levyinfo', 14);
+          const expiryDateIdx = getIdx('expirydate', 15);
+          const permitNumIdx = getIdx('permitnumber', 16);
+          const branchesIdx = getIdx('branches', 17);
+
+          for (let i = 1; i < clientRows.length; i++) {
+            const r = clientRows[i];
+            if (!r || r.length === 0 || !r[clientNameIdx]) continue;
+            const cName = String(r[clientNameIdx] || '').trim();
+            const pName = String(r[premiseNameIdx] || '').trim();
+            const permitNo = String(r[permitNumIdx] || '').trim();
+
+            let branchesList: any[] = [];
+            const rawBranches = r[branchesIdx];
+            if (rawBranches && typeof rawBranches === 'string' && rawBranches.trim().startsWith('[')) {
+              try { branchesList = JSON.parse(rawBranches); } catch (_) {}
+            }
+
+            clients.push({
+              id: permitNo ? `CLI-${permitNo.replace(/[^a-zA-Z0-9]/g, '-')}` : `CLI-ROW-${i}-${cName.replace(/[^a-zA-Z0-9]/g, '')}`,
+              customerNumber: permitNo ? `CUST-${permitNo.replace(/[^a-zA-Z0-9]/g, '')}` : `CUST-${10000 + i}`,
+              clientName: cName,
+              premiseName: pName || cName,
+              premiseCategory: String(r[categoryIdx] || 'Milk Bar').trim(),
+              startYear: Number(r[startYearIdx]) || new Date().getFullYear(),
+              startMonth: String(r[startMonthIdx] || 'January').trim(),
+              endYear: r[endYearIdx] ? Number(r[endYearIdx]) : null,
+              endMonth: r[endMonthIdx] ? String(r[endMonthIdx]).trim() : null,
+              tel: String(r[telIdx] || '').trim(),
+              contactPerson: String(r[contactPersonIdx] || '').trim(),
+              location: String(r[locationIdx] || 'N/A').trim(),
+              county: String(r[countyIdx] || 'N/A').trim(),
+              coolingCapacity: r[coolingCapIdx] ? Number(r[coolingCapIdx]) : undefined,
+              permitStatus: String(r[permitStatusIdx] || 'valid').trim(),
+              operationalStatus: String(r[opStatusIdx] || 'operating').trim(),
+              levyInfo: String(r[levyInfoIdx] || '').trim(),
+              expiryDate: String(r[expiryDateIdx] || '').trim(),
+              permitNumber: permitNo,
+              branches: branchesList
+            });
+          }
+        }
+
+        const returns: any[] = [];
+        if (returnRows.length > 1) {
+          const headers = (returnRows[0] || []).map((h: any) => String(h || '').toLowerCase().trim().replace(/[^a-z0-9]/g, ''));
+          const getIdx = (name: string, fallbackIdx: number) => {
+            const idx = headers.indexOf(name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+            return idx >= 0 ? idx : fallbackIdx;
+          };
+          const cNameIdx = getIdx('clientname', 0);
+          const yearIdx = getIdx('year', 1);
+          const periodIdx = getIdx('period', 2);
+          const qtyIdx = getIdx('qty', 3);
+          const invoiceAmtIdx = getIdx('invoiceamount', 4);
+          const retDateIdx = getIdx('returndate', 5);
+          const payAmtIdx = getIdx('paymentamount', 6);
+          const payDateIdx = getIdx('paymentdate', 7);
+          const txnRefIdx = getIdx('txnref', 8);
+          const lessCfIdx = getIdx('lesscf', 9);
+          const outBalIdx = getIdx('outstandingbalance', 10);
+          const agingIdx = getIdx('agingdays', 11);
+          const payStatusIdx = getIdx('paymentstatus', 12);
+          const commentsIdx = getIdx('comments', 13);
+
+          for (let i = 1; i < returnRows.length; i++) {
+            const r = returnRows[i];
+            if (!r || r.length === 0 || !r[cNameIdx]) continue;
+            const cName = String(r[cNameIdx] || '').trim();
+            const rawYear = Number(r[yearIdx]) || new Date().getFullYear();
+            const rawPeriod = String(r[periodIdx] || 'January').trim();
+            const rawQty = Number(r[qtyIdx]) || 0;
+            const rawInv = Number(r[invoiceAmtIdx]) || 0;
+            const rawPay = Number(r[payAmtIdx]) || 0;
+            const rawTxn = String(r[txnRefIdx] || '').trim();
+            const rawLessCf = Number(r[lessCfIdx]) || 0;
+            const rawOutBal = r[outBalIdx] !== undefined ? Number(r[outBalIdx]) : (rawInv - rawPay - rawLessCf);
+            const rawAging = Number(r[agingIdx]) || 0;
+
+            returns.push({
+              clientName: cName,
+              year: rawYear,
+              period: rawPeriod,
+              qty: rawQty,
+              invoiceAmount: rawInv,
+              returnDate: String(r[retDateIdx] || new Date().toISOString().slice(0, 10)).trim(),
+              paymentAmount: rawPay,
+              paymentDate: String(r[payDateIdx] || '').trim(),
+              txnRef: rawTxn,
+              lessCF: rawLessCf,
+              outstandingBalance: rawOutBal,
+              agingDays: rawAging,
+              paymentStatus: String(r[payStatusIdx] || (rawOutBal <= 0 ? 'Paid' : 'Unpaid')).trim(),
+              comments: String(r[commentsIdx] || '').trim()
+            });
+          }
+        }
+
+        // Save into local files for persistence if available
+        if (clients.length > 0) {
+          try {
+            await fs.promises.writeFile(CLIENTS_FILE, JSON.stringify(clients, null, 2), "utf-8");
+          } catch (_) {}
+        }
+        if (returns.length > 0) {
+          try {
+            await fs.promises.writeFile(RETURNS_FILE, JSON.stringify(returns, null, 2), "utf-8");
+          } catch (_) {}
+        }
+
+        logToFile(`[API] Service Account Sync complete: ${clients.length} clients, ${returns.length} returns`);
+        const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        res.json({
+          success: true,
+          clients,
+          returns,
+          clientsCount: clients.length,
+          returnsCount: returns.length,
+          time: now,
+          clientsTab,
+          returnsTab
+        });
+      } catch (err: any) {
+        logToFile(`[API] Error during Service Account Sync: ${err.message}`);
+        res.status(500).json({ error: "Failed to sync clients and returns from Google Sheets", details: err.message });
       }
     });
 
@@ -1935,7 +2179,7 @@ Allow: /cessations
     }
 
     const creds = getGoogleCredentials();
-    let spreadsheetId = req.body.spreadsheetId || creds.spreadsheetId || process.env.GOOGLE_SPREADSHEET_ID;
+    let spreadsheetId = req.body.dataValidationSpreadsheetId || creds.dataValidationSpreadsheetId || req.body.spreadsheetId || creds.spreadsheetId || process.env.DATA_VALIDATION_SPREADSHEET_ID || process.env.GOOGLE_SPREADSHEET_ID;
     if (!spreadsheetId) {
       logToFile("[API] Google Sheets sync skipped: Spreadsheet ID not configured");
       return res.status(200).json({ message: "Supabase saved. Google Sheets sync skipped (ID not configured)." });

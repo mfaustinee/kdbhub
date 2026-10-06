@@ -109,7 +109,12 @@ export async function onRequest(context: { request: Request; env: Record<string,
     const env = context.env || {};
     let clientEmail = env.GOOGLE_SERVICE_ACCOUNT_EMAIL || (typeof process !== 'undefined' && process.env ? process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL : '');
     let privateKey = env.GOOGLE_PRIVATE_KEY || (typeof process !== 'undefined' && process.env ? process.env.GOOGLE_PRIVATE_KEY : '');
-    let spreadsheetId = env.GOOGLE_SPREADSHEET_ID || body.spreadsheetId || (typeof process !== 'undefined' && process.env ? process.env.GOOGLE_SPREADSHEET_ID : '');
+    let spreadsheetId = 
+      env.DATA_VALIDATION_SPREADSHEET_ID || 
+      body.dataValidationSpreadsheetId || 
+      env.GOOGLE_SPREADSHEET_ID || 
+      body.spreadsheetId || 
+      (typeof process !== 'undefined' && process.env ? (process.env.DATA_VALIDATION_SPREADSHEET_ID || process.env.GOOGLE_SPREADSHEET_ID) : '');
 
     if (clientEmail) clientEmail = clientEmail.trim().replace(/^["']|["']$/g, '');
     if (privateKey) privateKey = privateKey.trim().replace(/^["']|["']$/g, '');
@@ -117,7 +122,7 @@ export async function onRequest(context: { request: Request; env: Record<string,
 
     if (!spreadsheetId) {
       return new Response(
-        JSON.stringify({ error: "Spreadsheet ID missing. Please set GOOGLE_SPREADSHEET_ID environment variable in Cloudflare dashboard." }),
+        JSON.stringify({ error: "Spreadsheet ID missing. Please set DATA_VALIDATION_SPREADSHEET_ID or GOOGLE_SPREADSHEET_ID in Cloudflare secrets." }),
         { status: 400, headers: jsonHeaders }
       );
     }

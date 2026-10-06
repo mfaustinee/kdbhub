@@ -99,17 +99,72 @@ export const RETURNS_HEADERS = [
 ];
 
 export const SPREADSHEET_ID_STORAGE_KEY = 'kdb_google_spreadsheet_id';
+export const CLIENTS_RETURNS_SPREADSHEET_ID_KEY = 'kdb_google_clients_returns_spreadsheet_id';
+export const DATA_VALIDATION_SPREADSHEET_ID_KEY = 'kdb_data_validation_spreadsheet_id';
 export const CLIENTS_TAB_STORAGE_KEY = 'kdb_google_clients_tab';
 export const RETURNS_TAB_STORAGE_KEY = 'kdb_google_returns_tab';
 
 export const GoogleSheetsService = {
+  // Utility to clean raw ID or URL
+  cleanSpreadsheetId(idOrUrl: string): string {
+    if (!idOrUrl) return '';
+    let cleanId = idOrUrl.trim();
+    const match = cleanId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    if (match && match[1]) {
+      cleanId = match[1];
+    }
+    return cleanId.replace(/^["']|["']$/g, '').trim();
+  },
+
+  // Dedicated Sheet 1: Clients & Returns Spreadsheet ID Management
+  getClientsSpreadsheetId(): string {
+    try {
+      const stored = localStorage.getItem(CLIENTS_RETURNS_SPREADSHEET_ID_KEY);
+      if (stored && stored.trim()) return stored.trim();
+      const legacy = localStorage.getItem(SPREADSHEET_ID_STORAGE_KEY);
+      if (legacy && legacy.trim()) return legacy.trim();
+    } catch (_) {}
+    return '';
+  },
+
+  setClientsSpreadsheetId(idOrUrl: string): string {
+    const cleanId = this.cleanSpreadsheetId(idOrUrl);
+    try {
+      localStorage.setItem(CLIENTS_RETURNS_SPREADSHEET_ID_KEY, cleanId);
+      // Keep legacy key updated if empty for backwards compatibility
+      if (!localStorage.getItem(SPREADSHEET_ID_STORAGE_KEY)) {
+        localStorage.setItem(SPREADSHEET_ID_STORAGE_KEY, cleanId);
+      }
+    } catch (_) {}
+    return cleanId;
+  },
+
+  // Dedicated Sheet 2: Data Validation Submissions Spreadsheet ID Management
+  getDataValidationSpreadsheetId(): string {
+    try {
+      const stored = localStorage.getItem(DATA_VALIDATION_SPREADSHEET_ID_KEY);
+      if (stored && stored.trim()) return stored.trim();
+      const legacy = localStorage.getItem(SPREADSHEET_ID_STORAGE_KEY);
+      if (legacy && legacy.trim()) return legacy.trim();
+    } catch (_) {}
+    return '';
+  },
+
+  setDataValidationSpreadsheetId(idOrUrl: string): string {
+    const cleanId = this.cleanSpreadsheetId(idOrUrl);
+    try {
+      localStorage.setItem(DATA_VALIDATION_SPREADSHEET_ID_KEY, cleanId);
+    } catch (_) {}
+    return cleanId;
+  },
+
   // Tab Name Management to avoid colliding with other existing tabs
   getClientsTabName(): string {
     try {
       const stored = localStorage.getItem(CLIENTS_TAB_STORAGE_KEY);
       if (stored && stored.trim()) return stored.trim();
     } catch (_) {}
-    return 'Clients_DB';
+    return 'Clients';
   },
 
   setClientsTabName(name: string): void {
@@ -123,7 +178,7 @@ export const GoogleSheetsService = {
       const stored = localStorage.getItem(RETURNS_TAB_STORAGE_KEY);
       if (stored && stored.trim()) return stored.trim();
     } catch (_) {}
-    return 'Returns_DB';
+    return 'Returns';
   },
 
   setReturnsTabName(name: string): void {
@@ -297,18 +352,30 @@ export const GoogleSheetsService = {
 
       const meta = await this.getSpreadsheetMetadata(spreadsheetId);
       
-      // If user selected a custom tab name and it exists in the spreadsheet, prioritize it
+      // 1. If user configured a custom tab name and it exists, match it
       if (customTab) {
         const foundCustom = meta.sheets.find(s => s.toLowerCase().trim() === customTab.toLowerCase().trim());
         if (foundCustom) return foundCustom;
       }
 
-      // Otherwise match preferred names
+      // 2. Exact match in preferredNames list (e.g. Clients, Returns, Clients_DB, Returns_DB)
       for (const pref of preferredNames) {
         const found = meta.sheets.find(s => s.toLowerCase().trim() === pref.toLowerCase().trim());
         if (found) return found;
       }
-    } catch (_) {}
+
+      // 3. Substring match (e.g. if the tab is named "clients" or "clients tab" or "clients registry")
+      if (isClients) {
+        const foundSub = meta.sheets.find(s => s.toLowerCase().includes('client'));
+        if (foundSub) return foundSub;
+      }
+      if (isReturns) {
+        const foundSub = meta.sheets.find(s => s.toLowerCase().includes('return'));
+        if (foundSub) return foundSub;
+      }
+    } catch (e) {
+      console.warn('[GoogleSheetsService] resolveTabName notice:', e);
+    }
     return defaultFallback;
   },
 
@@ -395,17 +462,36 @@ export const GoogleSheetsService = {
   // CLIENTS REGISTRY OPERATIONS (18 Columns)
   // ----------------------------------------------------------------------
   async getClients(spreadsheetId?: string): Promise<LicensedClient[]> {
-    const sId = spreadsheetId || this.getSpreadsheetId();
+    const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
     if (!sId) return [];
 
     const token = await this.getAccessToken();
     if (!token) {
-      // Not connected to Google, cleanly return empty list so local storage database handles it
+      // Headless Service Account Sync (Zero Google sign-in required!)
+      try {
+        const res = await fetch('/api/sync-clients-returns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            spreadsheetId: sId,
+            clientsTab: this.getClientsTabName(),
+            returnsTab: this.getReturnsTabName()
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.clients) && data.clients.length > 0) {
+            return data.clients;
+          }
+        }
+      } catch (err) {
+        console.warn('[GoogleSheetsService] Headless getClients fallback notice:', err);
+      }
       return [];
     }
 
     try {
-      const tabName = await this.resolveTabName(sId, ['Clients', 'Clients Registry'], 'Clients');
+      const tabName = await this.resolveTabName(sId, ['Clients', 'clients', 'Clients_DB', 'Clients DB', 'Clients Registry', 'Client Details'], 'Clients');
       const range = `${encodeURIComponent(tabName)}!A1:R10000`;
       const res = await this.sheetsApiFetch(`${sId}/values/${range}`);
       const rows = res.values || [];
@@ -520,14 +606,14 @@ export const GoogleSheetsService = {
 
   // Save/Append or Update Client in Sheets
   async saveClient(client: LicensedClient, spreadsheetId?: string): Promise<void> {
-    const sId = spreadsheetId || this.getSpreadsheetId();
+    const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
     if (!sId) return;
 
     const token = await this.getAccessToken();
     if (!token) return;
 
     try {
-      const tabName = await this.resolveTabName(sId, ['Clients', 'Clients Registry'], 'Clients');
+      const tabName = await this.resolveTabName(sId, ['Clients', 'clients', 'Clients_DB', 'Clients DB', 'Clients Registry'], 'Clients');
       const existingClients = await this.getClients(sId);
 
       const clean = (s: any) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -586,14 +672,14 @@ export const GoogleSheetsService = {
 
   // Bulk save all clients to Sheets
   async saveClientsBulk(clients: LicensedClient[], spreadsheetId?: string): Promise<void> {
-    const sId = spreadsheetId || this.getSpreadsheetId();
+    const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
     if (!sId) return;
 
     const token = await this.getAccessToken();
     if (!token) return;
 
     try {
-      const tabName = await this.resolveTabName(sId, ['Clients', 'Clients Registry'], 'Clients');
+      const tabName = await this.resolveTabName(sId, ['Clients', 'clients', 'Clients_DB', 'Clients DB', 'Clients Registry'], 'Clients');
       const rows = [CLIENTS_HEADERS, ...clients.map(c => this.clientToRow(c))];
 
       await fetch(
@@ -631,16 +717,36 @@ export const GoogleSheetsService = {
   // RETURNS REGISTRY OPERATIONS (14 Columns)
   // ----------------------------------------------------------------------
   async getReturns(spreadsheetId?: string): Promise<ClientReturn[]> {
-    const sId = spreadsheetId || this.getSpreadsheetId();
+    const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
     if (!sId) return [];
 
     const token = await this.getAccessToken();
     if (!token) {
+      // Headless Service Account Sync (Zero Google sign-in required!)
+      try {
+        const res = await fetch('/api/sync-clients-returns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            spreadsheetId: sId,
+            clientsTab: this.getClientsTabName(),
+            returnsTab: this.getReturnsTabName()
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.returns) && data.returns.length > 0) {
+            return data.returns;
+          }
+        }
+      } catch (err) {
+        console.warn('[GoogleSheetsService] Headless getReturns fallback notice:', err);
+      }
       return [];
     }
 
     try {
-      const tabName = await this.resolveTabName(sId, ['Returns', 'Client Returns'], 'Returns');
+      const tabName = await this.resolveTabName(sId, ['Returns', 'returns', 'Returns_DB', 'Returns DB', 'Client Returns', 'Returns Registry'], 'Returns');
       const range = `${encodeURIComponent(tabName)}!A1:N10000`;
       const res = await this.sheetsApiFetch(`${sId}/values/${range}`);
       const rows = res.values || [];
@@ -734,14 +840,14 @@ export const GoogleSheetsService = {
   },
 
   async saveReturn(ret: ClientReturn, spreadsheetId?: string): Promise<void> {
-    const sId = spreadsheetId || this.getSpreadsheetId();
+    const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
     if (!sId) return;
 
     const token = await this.getAccessToken();
     if (!token) return;
 
     try {
-      const tabName = await this.resolveTabName(sId, ['Returns', 'Client Returns'], 'Returns');
+      const tabName = await this.resolveTabName(sId, ['Returns', 'returns', 'Returns_DB', 'Returns DB', 'Client Returns'], 'Returns');
       const existingReturns = await this.getReturns(sId);
 
       const clean = (s: any) => String(s || '').toLowerCase().trim();
@@ -797,14 +903,14 @@ export const GoogleSheetsService = {
   },
 
   async saveReturnsBulk(returnsList: ClientReturn[], spreadsheetId?: string): Promise<void> {
-    const sId = spreadsheetId || this.getSpreadsheetId();
+    const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
     if (!sId) return;
 
     const token = await this.getAccessToken();
     if (!token) return;
 
     try {
-      const tabName = await this.resolveTabName(sId, ['Returns', 'Client Returns'], 'Returns');
+      const tabName = await this.resolveTabName(sId, ['Returns', 'returns', 'Returns_DB', 'Returns DB', 'Client Returns'], 'Returns');
       const rows = [RETURNS_HEADERS, ...returnsList.map(r => this.returnToRow(r))];
 
       await fetch(
@@ -836,5 +942,37 @@ export const GoogleSheetsService = {
     } catch (err) {
       console.warn('[GoogleSheetsService] saveReturnsBulk warning:', err);
     }
+  },
+
+  // ----------------------------------------------------------------------
+  // DEDICATED SHEET 1 HEADLESS SYNC (Zero Google Sign-In Required!)
+  // ----------------------------------------------------------------------
+  async syncClientsAndReturns(spreadsheetId?: string): Promise<{ clients: LicensedClient[]; returns: ClientReturn[]; time: string }> {
+    const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
+    if (!sId) {
+      throw new Error('Spreadsheet ID for Sheet 1 (Clients & Returns) is not configured.');
+    }
+
+    const res = await fetch('/api/sync-clients-returns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        spreadsheetId: sId,
+        clientsTab: this.getClientsTabName(),
+        returnsTab: this.getReturnsTabName()
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Sync request failed' }));
+      throw new Error(err.error || err.details || `Sync failed with status ${res.status}`);
+    }
+
+    const data = await res.json();
+    const clients: LicensedClient[] = Array.isArray(data.clients) ? data.clients : [];
+    const returns: ClientReturn[] = Array.isArray(data.returns) ? data.returns : [];
+    const time: string = data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    return { clients, returns, time };
   }
 };

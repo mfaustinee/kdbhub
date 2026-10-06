@@ -875,50 +875,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     document.body.removeChild(link);
   };
 
-  const exportNonFilersCSV = (missingList: { client: LicensedClient; missingPeriods: { year: number; month: string }[] }[]) => {
-    if (missingList.length === 0) {
-      alert("No non-filers to export.");
-      return;
-    }
-    const headers = [
-      'Client Name',
-      'Premise Name',
-      'Contact Person',
-      'Phone Number',
-      'Location',
-      'County',
-      'Premise Category',
-      'Missing Periods'
-    ];
-    const rows = missingList.map(item => [
-      item.client.clientName,
-      item.client.premiseName,
-      item.client.contactPerson,
-      item.client.tel || '',
-      item.client.location,
-      item.client.county,
-      item.client.premiseCategory,
-      item.missingPeriods.map(p => `${p.month} ${p.year}`).join(', ')
-    ]);
-    const csvRows = [headers.join(',')];
-    rows.forEach(row => {
-      const formatted = row.map(val => {
-        const escaped = ('' + val).replace(/"/g, '""');
-        return `"${escaped}"`;
-      });
-      csvRows.push(formatted.join(','));
-    });
-    
-    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", `kdb_non_filers_${debtorFilterMonth}_${debtorFilterYear}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   const exportReturnsDebtorsCSV = () => {
     const debtorClients: { clientName: string; premiseName: string; tel: string; location: string; county: string; outstandingBalance: number; periods: string }[] = [];
     
@@ -1118,7 +1074,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
         if (hasClosed) return false;
       }
 
-      // If they have not filed a return in our registry, they are a debtor/non-filer
+      // If they have not filed a return in our registry, they are pending filing
       const returnExists = returns.some(r => 
         r.clientId === client.id && 
         r.year === year && 

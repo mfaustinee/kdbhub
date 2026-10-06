@@ -111,7 +111,6 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
 
   const compliantClientsCount = Math.max(0, totalClientsCount - effectiveDebtors.length);
   const inArrearsClientsCount = effectiveDebtors.length;
-  const nonFilersCount = Math.max(0, totalClientsCount - operatingClientsCount);
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
@@ -202,7 +201,7 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
             </div>
             <div className="text-[10px] text-rose-600 font-medium mt-1 flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-              <span>{inArrearsClientsCount} in arrears · {nonFilersCount} non-filers</span>
+              <span>{inArrearsClientsCount} in arrears</span>
             </div>
           </div>
         </div>
@@ -255,7 +254,7 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
             }`}
           >
             <AlertTriangle className={`w-4 h-4 shrink-0 ${activeTab === 'debtors' ? 'text-amber-400' : 'text-amber-500'}`} />
-            <span>Non-Filers & Debtors</span>
+            <span>Debtors</span>
           </button>
 
           <button
