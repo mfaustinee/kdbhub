@@ -95,30 +95,24 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
 
   // Headless sync for Clients & Returns (Sheet 1) - Zero Google Sign-In Required!
   const handleSyncClientsAndReturns = async () => {
-    if (!sheet1Id) {
-      setStatusMessage({ 
-        text: 'Sheet 1 (Clients & Returns) is not connected. Click the settings icon to configure the spreadsheet ID.', 
-        type: 'error' 
-      });
-      return;
-    }
+    const effectiveSheet1Id = sheet1Id || GoogleSheetsService.getClientsSpreadsheetId();
 
     setIsSyncing(true);
     setStatusMessage(null);
 
     try {
       // Direct headless sync using backend Service Account
-      const result = await GoogleSheetsService.syncClientsAndReturns(sheet1Id);
+      const result = await GoogleSheetsService.syncClientsAndReturns(effectiveSheet1Id || undefined);
 
-      // Save to DB caches
+      // Save to local and Supabase DB caches with skipGoogleSheetsSync: true
       if (result.clients && result.clients.length > 0) {
         try {
-          await DBService.saveClientsBulk(result.clients);
+          await DBService.saveClientsBulk(result.clients, true);
         } catch (_) {}
       }
       if (result.returns && result.returns.length > 0) {
         try {
-          await DBService.saveReturnsBulk(result.returns);
+          await DBService.saveReturnsBulk(result.returns, true);
         } catch (_) {}
       }
 

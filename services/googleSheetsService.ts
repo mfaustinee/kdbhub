@@ -58,6 +58,13 @@ const getProvider = (): GoogleAuthProvider => {
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
 
+// Backend Service Account credentials and Spreadsheet IDs cache
+let backendConfigured = false;
+let backendSheet1Id = '';
+let backendSheet2Id = '';
+let hasFetchedBackendCreds = false;
+let backendCredsPromise: Promise<any> | null = null;
+
 // 18-column header schema for Clients Registry
 export const CLIENTS_HEADERS = [
   'clientname',
@@ -116,11 +123,50 @@ export const GoogleSheetsService = {
     return cleanId.replace(/^["']|["']$/g, '').trim();
   },
 
+  // Initialize and auto-fetch IDs configured in Cloudflare / backend environment variables
+  async initFromBackend(): Promise<{ sheet1Id: string; sheet2Id: string; configured: boolean }> {
+    if (hasFetchedBackendCreds && (backendSheet1Id || backendSheet2Id)) {
+      return { sheet1Id: this.getClientsSpreadsheetId(), sheet2Id: this.getDataValidationSpreadsheetId(), configured: backendConfigured };
+    }
+    if (backendCredsPromise) return backendCredsPromise;
+
+    backendCredsPromise = (async () => {
+      try {
+        const res = await fetch('/api/google-credentials');
+        if (res.ok) {
+          const data = await res.json();
+          backendConfigured = Boolean(data.configured);
+          if (data.clientsReturnsSpreadsheetId) {
+            backendSheet1Id = data.clientsReturnsSpreadsheetId;
+            try { localStorage.setItem(CLIENTS_RETURNS_SPREADSHEET_ID_KEY, data.clientsReturnsSpreadsheetId); } catch (_) {}
+          }
+          if (data.dataValidationSpreadsheetId || data.spreadsheetId) {
+            backendSheet2Id = data.dataValidationSpreadsheetId || data.spreadsheetId;
+            try { localStorage.setItem(DATA_VALIDATION_SPREADSHEET_ID_KEY, backendSheet2Id); } catch (_) {}
+          }
+          hasFetchedBackendCreds = true;
+          return { sheet1Id: this.getClientsSpreadsheetId(), sheet2Id: this.getDataValidationSpreadsheetId(), configured: backendConfigured };
+        }
+      } catch (err) {
+        console.warn('[GoogleSheetsService] Backend credentials fetch notice:', err);
+      }
+      return { sheet1Id: this.getClientsSpreadsheetId(), sheet2Id: this.getDataValidationSpreadsheetId(), configured: false };
+    })();
+    return backendCredsPromise;
+  },
+
   // Dedicated Sheet 1: Clients & Returns Spreadsheet ID Management
   getClientsSpreadsheetId(): string {
+    if (backendSheet1Id && backendSheet1Id.trim()) return backendSheet1Id.trim();
     try {
       const stored = localStorage.getItem(CLIENTS_RETURNS_SPREADSHEET_ID_KEY);
       if (stored && stored.trim()) return stored.trim();
+      const wEnv = (window as any)._env_;
+      if (wEnv?.CLIENTS_RETURNS_SPREADSHEET_ID && String(wEnv.CLIENTS_RETURNS_SPREADSHEET_ID).trim()) {
+        return String(wEnv.CLIENTS_RETURNS_SPREADSHEET_ID).trim();
+      }
+      const envVal = (import.meta as any).env?.VITE_CLIENTS_RETURNS_SPREADSHEET_ID || (import.meta as any).env?.CLIENTS_RETURNS_SPREADSHEET_ID;
+      if (envVal && String(envVal).trim()) return String(envVal).trim();
       const legacy = localStorage.getItem(SPREADSHEET_ID_STORAGE_KEY);
       if (legacy && legacy.trim()) return legacy.trim();
     } catch (_) {}
@@ -129,9 +175,9 @@ export const GoogleSheetsService = {
 
   setClientsSpreadsheetId(idOrUrl: string): string {
     const cleanId = this.cleanSpreadsheetId(idOrUrl);
+    backendSheet1Id = cleanId;
     try {
       localStorage.setItem(CLIENTS_RETURNS_SPREADSHEET_ID_KEY, cleanId);
-      // Keep legacy key updated if empty for backwards compatibility
       if (!localStorage.getItem(SPREADSHEET_ID_STORAGE_KEY)) {
         localStorage.setItem(SPREADSHEET_ID_STORAGE_KEY, cleanId);
       }
@@ -141,9 +187,16 @@ export const GoogleSheetsService = {
 
   // Dedicated Sheet 2: Data Validation Submissions Spreadsheet ID Management
   getDataValidationSpreadsheetId(): string {
+    if (backendSheet2Id && backendSheet2Id.trim()) return backendSheet2Id.trim();
     try {
       const stored = localStorage.getItem(DATA_VALIDATION_SPREADSHEET_ID_KEY);
       if (stored && stored.trim()) return stored.trim();
+      const wEnv = (window as any)._env_;
+      if (wEnv?.DATA_VALIDATION_SPREADSHEET_ID && String(wEnv.DATA_VALIDATION_SPREADSHEET_ID).trim()) {
+        return String(wEnv.DATA_VALIDATION_SPREADSHEET_ID).trim();
+      }
+      const envVal = (import.meta as any).env?.VITE_DATA_VALIDATION_SPREADSHEET_ID || (import.meta as any).env?.DATA_VALIDATION_SPREADSHEET_ID;
+      if (envVal && String(envVal).trim()) return String(envVal).trim();
       const legacy = localStorage.getItem(SPREADSHEET_ID_STORAGE_KEY);
       if (legacy && legacy.trim()) return legacy.trim();
     } catch (_) {}
@@ -152,6 +205,7 @@ export const GoogleSheetsService = {
 
   setDataValidationSpreadsheetId(idOrUrl: string): string {
     const cleanId = this.cleanSpreadsheetId(idOrUrl);
+    backendSheet2Id = cleanId;
     try {
       localStorage.setItem(DATA_VALIDATION_SPREADSHEET_ID_KEY, cleanId);
     } catch (_) {}
@@ -949,30 +1003,40 @@ export const GoogleSheetsService = {
   // ----------------------------------------------------------------------
   async syncClientsAndReturns(spreadsheetId?: string): Promise<{ clients: LicensedClient[]; returns: ClientReturn[]; time: string }> {
     const sId = spreadsheetId || this.getClientsSpreadsheetId() || this.getSpreadsheetId();
-    if (!sId) {
-      throw new Error('Spreadsheet ID for Sheet 1 (Clients & Returns) is not configured.');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+    try {
+      const res = await fetch('/api/sync-clients-returns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          spreadsheetId: sId || undefined,
+          clientsTab: this.getClientsTabName(),
+          returnsTab: this.getReturnsTabName()
+        })
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Sync request failed' }));
+        throw new Error(err.error || err.details || `Sync failed with status ${res.status}`);
+      }
+
+      const data = await res.json();
+      const clients: LicensedClient[] = Array.isArray(data.clients) ? data.clients : [];
+      const returns: ClientReturn[] = Array.isArray(data.returns) ? data.returns : [];
+      const time: string = data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      return { clients, returns, time };
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        throw new Error('Google Sheets sync timed out after 25 seconds. Please verify your internet connection or spreadsheet ID.');
+      }
+      throw err;
     }
-
-    const res = await fetch('/api/sync-clients-returns', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        spreadsheetId: sId,
-        clientsTab: this.getClientsTabName(),
-        returnsTab: this.getReturnsTabName()
-      })
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Sync request failed' }));
-      throw new Error(err.error || err.details || `Sync failed with status ${res.status}`);
-    }
-
-    const data = await res.json();
-    const clients: LicensedClient[] = Array.isArray(data.clients) ? data.clients : [];
-    const returns: ClientReturn[] = Array.isArray(data.returns) ? data.returns : [];
-    const time: string = data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    return { clients, returns, time };
   }
 };

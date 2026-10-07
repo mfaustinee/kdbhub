@@ -966,104 +966,6 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
 
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
-      {/* 3 Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-0.5">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Licensed Entities</p>
-            <h3 className="text-base sm:text-lg font-bold text-slate-800">{totalCount}</h3>
-            <p className="text-[9px] text-slate-400 font-medium">Active in KDB system</p>
-          </div>
-          <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-700">
-            <Layers size={18} />
-          </div>
-        </div>
-
-        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-0.5">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Qualifies for Returns (QFR)</p>
-            <h3 className="text-base sm:text-lg font-bold text-emerald-600">{totalQFR}</h3>
-            <p className="text-[9px] text-emerald-600/70 font-semibold uppercase tracking-wider">Required to file</p>
-          </div>
-          <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
-            <TrendingUp size={18} />
-          </div>
-        </div>
-
-        <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div className="space-y-0.5">
-            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Exempt / Non-Qualifying (DNQ-R)</p>
-            <h3 className="text-base sm:text-lg font-bold text-amber-600">{totalDNQR}</h3>
-            <p className="text-[9px] text-amber-600/70 font-semibold uppercase tracking-wider">No returns filing required</p>
-          </div>
-          <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
-            <XCircle size={18} />
-          </div>
-        </div>
-      </div>
-
-      {/* Category Breakdown Table */}
-      <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-          <div>
-            <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest">Breakdown by Permit Category</h3>
-            <p className="text-[10px] text-slate-400 font-bold uppercase mt-0.5">Statistical status matrix per class</p>
-          </div>
-          <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 bg-white px-3 py-1 rounded-full border border-slate-150">
-            {categories.length} Registered Categories
-          </div>
-        </div>
-        
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/20 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
-                <th className="px-6 py-4">Permit Category</th>
-                <th className="px-6 py-4 text-center">Total Licensed</th>
-                <th className="px-6 py-4 text-center text-emerald-600">QFR (Files Returns)</th>
-                <th className="px-6 py-4 text-center text-amber-600">DNQ-R (Exempt)</th>
-                <th className="px-6 py-4 text-right">Cooling Capacity</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-              {categoryStats.map(stat => (
-                <tr key={stat.category} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4 flex items-center gap-2.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
-                    <span>
-                      {stat.category === 'Mini Dairy' || stat.category === 'Cottage Industry'
-                        ? stat.category
-                        : `${stat.category}s`}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center text-slate-800 font-black">{stat.licensed}</td>
-                  <td className="px-6 py-4 text-center">
-                    <span className="bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full font-black text-[10px]">
-                      {stat.qfr}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <span className="bg-amber-50 text-amber-700 px-2.5 py-1 rounded-full font-black text-[10px]">
-                      {stat.dnqr}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right font-mono font-medium text-slate-500">
-                    {stat.category === 'Cooling Plant' || stat.category === 'Processor' ? (
-                      <span className="text-slate-800 font-bold flex items-center justify-end gap-1">
-                        <ThermometerSnowflake size={12} className="text-blue-500" />
-                        {stat.capacitySum.toLocaleString()} Litres
-                      </span>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
       {/* Main Registry List */}
       <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-sm p-4 sm:p-6 space-y-6">
         
@@ -1129,28 +1031,6 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {clients.length > 0 && (
-              <button
-                onClick={async () => {
-                  if (!confirm(`Push all ${clients.length} clients to Supabase now?`)) return;
-                  setLoading(true);
-                  try {
-                    await DBService.saveClientsBulk(clients);
-                    await fetchClients();
-                    alert(`Successfully pushed ${clients.length} clients to Supabase!`);
-                  } catch (err: any) {
-                    alert(`Sync failed: ${err?.message || 'Check connection'}`);
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-                disabled={loading}
-                className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm"
-                title="Push current list of clients directly to Supabase table"
-              >
-                <Database size={13} /> Sync to Supabase
-              </button>
-            )}
             <button
               onClick={() => {
                 setCsvFile(null);

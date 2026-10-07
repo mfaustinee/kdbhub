@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import SignatureCanvas from 'react-signature-canvas';
 import { AgreementData, DebtorRecord, ArrearItem, Installment, StaffConfig, ClosureNotificationData, EnabledModules, AuthoritySignature } from '../types';
 import { DBService } from '../services/db';
-import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw, FileSpreadsheet, QrCode, Layers } from 'lucide-react';
+import { Eye, Plus, Trash2, Database, FileCheck, UserPlus, MapPin, ShieldCheck, AlertTriangle, Send, Settings, Upload, CheckCircle2, Briefcase, FileText, FileSearch, Mail, Calendar, Check, Loader2, Search, X, Download, Server, Cpu, Globe, Key, Lock, AlertCircle, ExternalLink, PenTool, Trash, Activity, Building, Building2, TrendingUp, Menu, ToggleLeft, ToggleRight, EyeOff, HelpCircle, ArrowUp, ArrowDown, ArrowUpDown, ChevronUp, ChevronDown, Edit3, LogOut, User, RefreshCw, FileSpreadsheet, QrCode, Layers, BarChart3 } from 'lucide-react';
 import { useAuth } from '../src/contexts/AuthContext';
 import { PDFPreview } from './PDFPreview';
 import { ClosurePDFPreview } from './ClosurePDFPreview';
@@ -47,7 +47,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onStaffUpdate 
 }) => {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'clients_and_returns' | 'data_validation' | 'scope_disclosure' | 'requests_to_approve' | 'debtors' | 'settings'>('data_validation');
+  const [tab, setTab] = useState<'analysis' | 'clients_and_returns' | 'data_validation' | 'scope_disclosure' | 'requests_to_approve' | 'debtors' | 'settings'>('data_validation');
   const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations'>('agreements');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -58,6 +58,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const getTabLabel = (currentTab: typeof tab) => {
     switch (currentTab) {
+      case 'analysis': return 'Analysis Module';
       case 'clients_and_returns': return 'Clients & Returns Hub';
       case 'data_validation': return 'Data Validation Form';
       case 'scope_disclosure': return 'Scope Disclosure Form';
@@ -1726,6 +1727,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
+      {tab === 'analysis' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <ClientsAndReturnsHub 
+            defaultTab="analysis"
+            onSyncComplete={onRefresh}
+            onDebtorUpdate={onDebtorUpdate}
+          />
+        </div>
+      )}
+
       {tab === 'clients_and_returns' && (
         <div className="space-y-6 animate-in fade-in duration-300">
           <ClientsAndReturnsHub 
@@ -1762,12 +1773,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {/* Settings Top Header */}
           <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-1.5 text-emerald-700 text-[10px] font-black uppercase tracking-wider mb-0.5">
-                <Settings className="w-3.5 h-3.5 text-emerald-600" />
+              <div className="flex items-center gap-1.5 text-emerald-700 text-[9px] font-bold uppercase tracking-wider mb-0.5">
+                <Settings className="w-3 h-3 text-emerald-600" />
                 <span>System Administration & Governance</span>
               </div>
-              <h3 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">System Settings & Infrastructure</h3>
-              <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5">
+              <h3 className="text-xs sm:text-sm font-bold text-slate-800 tracking-tight">System Settings & Infrastructure</h3>
+              <p className="text-[10px] text-slate-500 font-normal mt-0.5 max-w-2xl">
                 Dedicated governance workspaces for Google database sync, client portal modules, official authority signatures, and cloud infrastructure.
               </p>
             </div>

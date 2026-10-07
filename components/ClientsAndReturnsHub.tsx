@@ -1,23 +1,18 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { LicensedClient, ClientReturn, DebtorRecord, IntegratedClientAccount } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { LicensedClient, ClientReturn, DebtorRecord } from '../types';
 import { DBService } from '../services/db';
-import { ClientReturnsPipeline } from '../services/clientReturnsPipeline';
 import { LicensedClientsModule } from './LicensedClientsModule';
 import { ClientReturnsModule } from './ClientReturnsModule';
+import { AnalysisModule } from './AnalysisModule';
 import { 
   Building2, 
   Database, 
   AlertTriangle, 
-  FileText, 
-  RefreshCw, 
-  CheckCircle2, 
-  TrendingUp, 
-  Layers, 
-  DollarSign,
-  Briefcase
+  BarChart3,
+  RefreshCw 
 } from 'lucide-react';
 
-export type ClientsAndReturnsTab = 'clients' | 'returns' | 'debtors' | 'statements';
+export type ClientsAndReturnsTab = 'clients' | 'returns' | 'debtors' | 'analysis';
 
 export interface ClientsAndReturnsHubProps {
   initialTab?: ClientsAndReturnsTab;
@@ -71,13 +66,21 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
     }
 
     try {
-      const [metrics, fetchedDebtors] = await Promise.all([
+      const [metrics, fetchedDebtors, fetchedClients, fetchedReturns] = await Promise.all([
         DBService.getHubMetrics(),
-        DBService.getDebtors(forceFresh)
+        DBService.getDebtors(forceFresh),
+        DBService.getClients(forceFresh),
+        DBService.getReturns(forceFresh)
       ]);
 
       setHubMetrics(metrics);
       setLocalDebtors(fetchedDebtors);
+      if (fetchedClients && fetchedClients.length > 0) {
+        setClients(fetchedClients);
+      }
+      if (fetchedReturns && fetchedReturns.length > 0) {
+        setReturns(fetchedReturns);
+      }
       setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (err) {
       console.error('[ClientsAndReturnsHub] Failed to fetch shared metrics:', err);
@@ -104,13 +107,7 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
   // High-level shared aggregate statistics from server-calculated metrics
   const effectiveDebtors = propDebtors || localDebtors;
   const totalClientsCount = hubMetrics.totalClients || clients.length;
-  const operatingClientsCount = hubMetrics.operatingClients || clients.filter(c => c.operationalStatus === 'operating').length;
   const totalFilingsCount = hubMetrics.totalReturns || returns.length;
-  const totalVolumeLitres = hubMetrics.totalVolume || returns.reduce((acc, r) => acc + (r.qty || 0), 0);
-  const totalOutstandingBalance = hubMetrics.totalOutstanding || returns.reduce((acc, r) => acc + (r.outstandingBalance || 0), 0);
-
-  const compliantClientsCount = Math.max(0, totalClientsCount - effectiveDebtors.length);
-  const inArrearsClientsCount = effectiveDebtors.length;
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
@@ -150,64 +147,8 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
           </div>
         </div>
 
-        {/* Refined Single Metric Strip (Eliminates redundant cards and stacked pill rows) */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-slate-100 bg-slate-50/50">
-          <div className="p-4 sm:px-6">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Licensed Clients</span>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-xl font-extrabold text-slate-900">{totalClientsCount.toLocaleString()}</span>
-              <span className="text-[11px] font-medium text-emerald-700">
-                {operatingClientsCount.toLocaleString()} active
-              </span>
-            </div>
-            <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <span>{compliantClientsCount} compliant</span>
-            </div>
-          </div>
-
-          <div className="p-4 sm:px-6">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Returns Filings</span>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-xl font-extrabold text-slate-900">{totalFilingsCount.toLocaleString()}</span>
-              <span className="text-[11px] font-medium text-slate-500">submissions</span>
-            </div>
-            <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-              <span>Monthly records</span>
-            </div>
-          </div>
-
-          <div className="p-4 sm:px-6">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Declared Intake Volume</span>
-            <div className="flex items-baseline gap-1 mt-1">
-              <span className="text-xl font-extrabold text-slate-900">
-                {totalVolumeLitres.toLocaleString()}
-              </span>
-              <span className="text-xs font-bold text-slate-400">L</span>
-            </div>
-            <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
-              <span>Aggregate verified</span>
-            </div>
-          </div>
-
-          <div className="p-4 sm:px-6">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Outstanding Arrears</span>
-            <div className="flex items-baseline gap-1.5 mt-1">
-              <span className="text-xl font-extrabold text-rose-600">
-                KES {totalOutstandingBalance.toLocaleString()}
-              </span>
-            </div>
-            <div className="text-[10px] text-rose-600 font-medium mt-1 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-              <span>{inArrearsClientsCount} in arrears</span>
-            </div>
-          </div>
-        </div>
-
         {/* Clean, Modern Segmented Tabs */}
-        <div className="px-4 sm:px-6 py-2 bg-white border-t border-slate-100 flex items-center gap-1 overflow-x-auto">
+        <div className="px-4 sm:px-6 py-2.5 bg-white flex items-center gap-1.5 overflow-x-auto">
           <button
             type="button"
             onClick={() => handleTabSwitch('clients')}
@@ -255,19 +196,26 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
           >
             <AlertTriangle className={`w-4 h-4 shrink-0 ${activeTab === 'debtors' ? 'text-amber-400' : 'text-amber-500'}`} />
             <span>Debtors</span>
+            {effectiveDebtors.length > 0 && (
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                activeTab === 'debtors' ? 'bg-slate-800 text-rose-400' : 'bg-rose-50 text-rose-700'
+              }`}>
+                {effectiveDebtors.length}
+              </span>
+            )}
           </button>
 
           <button
             type="button"
-            onClick={() => handleTabSwitch('statements')}
+            onClick={() => handleTabSwitch('analysis')}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'statements'
+              activeTab === 'analysis'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
             }`}
           >
-            <FileText className="w-4 h-4 shrink-0" />
-            <span>Client Statements</span>
+            <BarChart3 className={`w-4 h-4 shrink-0 ${activeTab === 'analysis' ? 'text-indigo-400' : 'text-slate-500'}`} />
+            <span>Analysis Module</span>
           </button>
         </div>
       </div>
@@ -282,16 +230,26 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
           />
         </div>
 
-        <div className={activeTab !== 'clients' ? 'block animate-in fade-in duration-200' : 'hidden'}>
+        <div className={activeTab === 'returns' || activeTab === 'debtors' ? 'block animate-in fade-in duration-200' : 'hidden'}>
           <ClientReturnsModule 
             debtors={effectiveDebtors}
             onDebtorUpdate={onDebtorUpdate}
             onReturnsChange={setReturns}
             onClientsChange={setClients}
             onRefresh={handleManualRefresh}
-            defaultSubTab={activeTab === 'debtors' ? 'debtors' : activeTab === 'statements' ? 'statements' : 'registry'}
+            defaultSubTab={activeTab === 'debtors' ? 'debtors' : 'registry'}
             standalone={true}
             hideNavigationHeader={true}
+          />
+        </div>
+
+        <div className={activeTab === 'analysis' ? 'block animate-in fade-in duration-200' : 'hidden'}>
+          <AnalysisModule 
+            clients={clients}
+            debtors={effectiveDebtors}
+            returns={returns}
+            onNavigateToTab={(target) => handleTabSwitch(target)}
+            onRefresh={handleManualRefresh}
           />
         </div>
       </div>

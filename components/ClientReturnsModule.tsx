@@ -47,7 +47,7 @@ export interface ClientReturnsModuleProps {
   loading?: boolean;
   onReturnsChange?: (returns: ClientReturn[]) => void;
   onClientsChange?: (clients: LicensedClient[]) => void;
-  defaultSubTab?: 'registry' | 'debtors' | 'statements';
+  defaultSubTab?: 'registry' | 'debtors';
   standalone?: boolean;
   hideNavigationHeader?: boolean;
   debtorsOnly?: boolean;
@@ -72,15 +72,12 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   const [returns, setReturns] = useState<ClientReturn[]>(propReturns || []);
   const [localDebtors, setLocalDebtors] = useState<DebtorRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(propLoading !== undefined ? propLoading : (standalone || !propClients || !propReturns));
-  const [activeSubTab, setActiveSubTab] = useState<'registry' | 'debtors' | 'statements'>(debtorsOnly ? 'debtors' : defaultSubTab);
+  const [activeSubTab, setActiveSubTab] = useState<'registry' | 'debtors'>(debtorsOnly ? 'debtors' : (defaultSubTab === 'debtors' ? 'debtors' : 'registry'));
 
   // Sync state when props update
   useEffect(() => {
     if (propClients !== undefined) {
       setClients(propClients);
-      if (propClients.length > 0 && !selectedStatementClientId) {
-        setSelectedStatementClientId(propClients[0].id);
-      }
     }
   }, [propClients]);
 
@@ -173,11 +170,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   // Multi-select batch state for debtors ledger
   const [selectedDebtorIds, setSelectedDebtorIds] = useState<string[]>([]);
 
-  // Statement client selection state
-  const [selectedStatementClientId, setSelectedStatementClientId] = useState<string>('');
-  const [statementFilterYear, setStatementFilterYear] = useState<string>('All');
-  const [statementSearchQuery, setStatementSearchQuery] = useState<string>('');
-
   const monthsList = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'
@@ -217,18 +209,14 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   const fetchReturnsBatch = useCallback(async (page: number = currentPage, size: 10 | 25 | 50 | 100 = batchSize) => {
     setLoading(true);
     try {
-      const [res, fetchedClients, fetchedDebtors] = await Promise.all([
-        DBService.getReturnsPaginated({
-          page,
-          pageSize: size,
-          search: searchQuery,
-          year: filterYear,
-          month: filterMonth,
-          status: filterStatus
-        }),
-        clients.length === 0 ? DBService.getClients(false) : Promise.resolve(clients),
-        localDebtors.length === 0 ? DBService.getDebtors(false) : Promise.resolve(localDebtors)
-      ]);
+      const res = await DBService.getReturnsPaginated({
+        page,
+        pageSize: size,
+        search: searchQuery,
+        year: filterYear,
+        month: filterMonth,
+        status: filterStatus
+      });
 
       setReturns(res.data);
       const total = res.count ?? res.totalCount ?? res.data.length;
@@ -239,24 +227,39 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
         setReturnsSummary(res.summary);
       }
       onReturnsChange?.(res.data);
-
-      if (fetchedClients && fetchedClients.length > 0 && clients.length === 0) {
-        setClients(fetchedClients);
-        onClientsChange?.(fetchedClients);
-        if (!selectedStatementClientId) {
-          setSelectedStatementClientId(fetchedClients[0].id);
-        }
-      }
-      if (fetchedDebtors && fetchedDebtors.length > 0 && localDebtors.length === 0) {
-        setLocalDebtors(fetchedDebtors);
-      }
       onRefresh?.();
     } catch (error) {
       console.error("Error fetching returns batch:", error);
     } finally {
       setLoading(false);
     }
-  }, [currentPage, batchSize, searchQuery, filterYear, filterMonth, filterStatus, clients, localDebtors, onReturnsChange, onClientsChange, onRefresh, selectedStatementClientId]);
+  }, [currentPage, batchSize, searchQuery, filterYear, filterMonth, filterStatus, onReturnsChange, onRefresh]);
+
+  // Load supporting clients and debtors in the background without blocking returns loading
+  useEffect(() => {
+    let isMounted = true;
+    const loadSupportingData = async () => {
+      try {
+        if (clients.length === 0) {
+          const fetchedClients = await DBService.getClients(false);
+          if (isMounted && fetchedClients && fetchedClients.length > 0) {
+            setClients(fetchedClients);
+            onClientsChange?.(fetchedClients);
+          }
+        }
+        if (localDebtors.length === 0) {
+          const fetchedDebtors = await DBService.getDebtors(false);
+          if (isMounted && fetchedDebtors && fetchedDebtors.length > 0) {
+            setLocalDebtors(fetchedDebtors);
+          }
+        }
+      } catch (err) {
+        console.warn("[ClientReturnsModule] Supporting data fetch notice:", err);
+      }
+    };
+    loadSupportingData();
+    return () => { isMounted = false; };
+  }, [clients.length, localDebtors.length, onClientsChange]);
 
   // Fetch only the selected batch on filter/batch changes
   useEffect(() => {
@@ -1155,50 +1158,11 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     return matchesSearch && matchesStatusFilter;
   });
 
-  const handleViewStatement = (clientId: string) => {
-    setSelectedStatementClientId(clientId);
-    setActiveSubTab('statements');
-  };
-
   // Calculations for registry sub-tab summary
   const totalInvoiced = returnsSummary.totalInvoicedAmt || returns.reduce((sum, r) => sum + r.invoiceAmount, 0);
   const totalPaid = returnsSummary.totalPaidAmt || returns.reduce((sum, r) => sum + r.paymentAmount, 0);
   const totalLessCF = returnsSummary.totalLessCFAmt || returns.reduce((sum, r) => sum + r.lessCF, 0);
   const totalOutstanding = returnsSummary.totalOutstanding || returns.reduce((sum, r) => sum + r.outstandingBalance, 0);
-
-  // Client Statement calculations
-  const statementClientObj = clients.find(c => c.id === selectedStatementClientId);
-  const statementReturns = returns
-    .filter(r => r.clientId === selectedStatementClientId || (statementClientObj && areNamesMatching(r.clientName, statementClientObj.clientName)))
-    .sort((a, b) => b.year - a.year || monthsList.indexOf(b.period) - monthsList.indexOf(a.period));
-
-  const filteredStatementReturns = statementReturns.filter(r => {
-    const matchesYear = statementFilterYear === 'All' || r.year.toString() === statementFilterYear;
-    if (!matchesYear) return false;
-
-    const qSafe = (statementSearchQuery || '').trim().toLowerCase();
-    if (qSafe === '') return true;
-    return (
-      (r.period || '').toLowerCase().includes(qSafe) ||
-      (r.year || '').toString().includes(qSafe) ||
-      (r.txnRef && r.txnRef.toLowerCase().includes(qSafe)) ||
-      (r.comments && r.comments.toLowerCase().includes(qSafe)) ||
-      (r.qty || '').toString().includes(qSafe) ||
-      (r.invoiceAmount || '').toString().includes(qSafe) ||
-      (r.paymentAmount || '').toString().includes(qSafe) ||
-      (r.paymentDate && r.paymentDate.toLowerCase().includes(qSafe))
-    );
-  });
-
-  const stmtTotalQty = filteredStatementReturns.reduce((sum, r) => sum + r.qty, 0);
-  const stmtTotalInvoiced = filteredStatementReturns.reduce((sum, r) => sum + r.invoiceAmount, 0);
-  const stmtTotalPaid = filteredStatementReturns.reduce((sum, r) => sum + r.paymentAmount, 0);
-  const stmtTotalLessCF = filteredStatementReturns.reduce((sum, r) => sum + r.lessCF, 0);
-  const stmtTotalOutstanding = filteredStatementReturns.reduce((sum, r) => sum + r.outstandingBalance, 0);
-  
-  const stmtUnfiledPeriods = statementClientObj ? getUnfiledPeriodsForClient(statementClientObj) : [];
-  const stmtTotalMonths = (statementReturns.length + stmtUnfiledPeriods.length) || 1;
-  const complianceRate = Math.round((statementReturns.length / stmtTotalMonths) * 100);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-KE', { style: 'currency', currency: 'KES', minimumFractionDigits: 0 }).format(amount);
@@ -1871,28 +1835,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
                 {/* Import/Export buttons */}
                 <div className="flex flex-wrap items-center gap-2">
-                  {returns.length > 0 && (
-                    <button
-                      onClick={async () => {
-                        if (!confirm(`Push all ${returns.length} returns to Supabase now?`)) return;
-                        setLoading(true);
-                        try {
-                          await DBService.saveReturnsBulk(returns);
-                          await fetchData();
-                          alert(`Successfully pushed ${returns.length} returns to Supabase!`);
-                        } catch (err: any) {
-                          alert(`Sync failed: ${err?.message || 'Check connection'}`);
-                        } finally {
-                          setLoading(false);
-                        }
-                      }}
-                      disabled={loading}
-                      className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-sm"
-                      title="Push current list of returns directly to Supabase table"
-                    >
-                      <Database size={13} /> Sync to Supabase
-                    </button>
-                  )}
                   <button
                     onClick={() => {
                       setCsvFile(null);

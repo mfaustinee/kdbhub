@@ -2138,23 +2138,6 @@ export const DBService = {
     }
 
     const fetchFreshPromise = (async (): Promise<LicensedClient[]> => {
-      // 0. Primary Database: Check Google Sheets
-      const sheetId = GoogleSheetsService.getSpreadsheetId();
-      if (sheetId) {
-        try {
-          const sheetClients = await GoogleSheetsService.getClients(sheetId);
-          if (sheetClients && sheetClients.length > 0) {
-            const deduplicated = deduplicateClients(sheetClients);
-            clientsMemoryCache = deduplicated;
-            clientsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_clients_cache', JSON.stringify(deduplicated));
-            return deduplicated;
-          }
-        } catch (sheetErr) {
-          console.warn("[DBService] Google Sheets getClients notice, falling back:", sheetErr);
-        }
-      }
-
       const fetchLocal = async () => {
         try {
           const response = await fetch('/api/clients');
@@ -2185,12 +2168,17 @@ export const DBService = {
           let from = 0;
           const pageSize = 1000;
           while (true) {
-            const { data, error } = await client
+            const pageQuery = client
               .from('licensed_clients')
               .select('*')
               .order('clientname', { ascending: true })
               .order('id', { ascending: true })
               .range(from, from + pageSize - 1);
+
+            const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
+              setTimeout(() => reject(new Error('Supabase getClients timeout')), 3500)
+            );
+            const { data, error } = await Promise.race([pageQuery, timeoutPromise]);
 
             if (error) {
               console.warn("[DBService] Supabase getClients page error:", error);
@@ -2259,8 +2247,11 @@ export const DBService = {
         query = query.order('id', { ascending: true });
         query = query.range(from, to);
 
-        const { data, count, error } = await query;
-        if (!error && data) {
+        const timeoutPromise = new Promise<{ data: any; count: any; error: any }>((_, reject) =>
+          setTimeout(() => reject(new Error('Supabase getClientsPaginated timeout')), 3000)
+        );
+        const { data, count, error } = await Promise.race([query, timeoutPromise]);
+        if (!error && data && data.length > 0) {
           const total = count ?? data.length;
           return {
             data: data.map(c => clientFromDb(c)),
@@ -2516,12 +2507,14 @@ export const DBService = {
     }
   },
 
-  async saveClientsBulk(clientsList: LicensedClient[]): Promise<void> {
-    const sheetId = GoogleSheetsService.getSpreadsheetId();
-    if (sheetId) {
-      GoogleSheetsService.saveClientsBulk(clientsList, sheetId).catch(err => {
-        console.warn("[DBService] Google Sheets saveClientsBulk error:", err);
-      });
+  async saveClientsBulk(clientsList: LicensedClient[], skipGoogleSheetsSync?: boolean): Promise<void> {
+    if (!skipGoogleSheetsSync) {
+      const sheetId = GoogleSheetsService.getSpreadsheetId();
+      if (sheetId) {
+        GoogleSheetsService.saveClientsBulk(clientsList, sheetId).catch(err => {
+          console.warn("[DBService] Google Sheets saveClientsBulk error:", err);
+        });
+      }
     }
 
     const getMergedLocal = async () => {
@@ -2618,22 +2611,6 @@ export const DBService = {
     }
 
     const fetchReturnsPromise = (async (): Promise<ClientReturn[]> => {
-      // 0. Primary Database: Check Google Sheets
-      const sheetId = GoogleSheetsService.getSpreadsheetId();
-      if (sheetId) {
-        try {
-          const sheetReturns = await GoogleSheetsService.getReturns(sheetId);
-          if (sheetReturns && sheetReturns.length > 0) {
-            returnsMemoryCache = sheetReturns;
-            returnsCacheTimestamp = Date.now();
-            safeSetLocalStorage('kdb_returns_cache', JSON.stringify(sheetReturns));
-            return sheetReturns;
-          }
-        } catch (sheetErr) {
-          console.warn("[DBService] Google Sheets getReturns notice, falling back:", sheetErr);
-        }
-      }
-
       const fetchLocal = async () => {
         const data = await safeFetchJson<any[]>('/api/returns');
         if (data && Array.isArray(data) && data.length > 0) {
@@ -2660,13 +2637,18 @@ export const DBService = {
         let from = 0;
         const pageSize = 1000;
         while (true) {
-          const { data, error } = await client
+          const pageQuery = client
             .from('client_returns')
             .select('*')
             .order('year', { ascending: false })
             .order('id', { ascending: true })
             .range(from, from + pageSize - 1);
           
+          const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
+            setTimeout(() => reject(new Error('Supabase getReturns timeout')), 3500)
+          );
+          const { data, error } = await Promise.race([pageQuery, timeoutPromise]);
+
           if (error) {
             console.warn("[DBService] Supabase getReturns page failed:", error);
             break;
@@ -2735,8 +2717,11 @@ export const DBService = {
         query = query.order('id', { ascending: true });
         query = query.range(from, to);
 
-        const { data, count, error } = await query;
-        if (!error && data) {
+        const timeoutPromise = new Promise<{ data: any; count: any; error: any }>((_, reject) =>
+          setTimeout(() => reject(new Error('Supabase getReturnsPaginated timeout')), 3000)
+        );
+        const { data, count, error } = await Promise.race([query, timeoutPromise]);
+        if (!error && data && data.length > 0) {
           const total = count ?? data.length;
           const mapped = data.map(r => returnFromDb(r));
           return {
@@ -2821,12 +2806,14 @@ export const DBService = {
   },
 
   async getHubMetrics(): Promise<{ totalClients: number; operatingClients: number; totalReturns: number; totalVolume: number; totalOutstanding: number }> {
-    const sheetId = GoogleSheetsService.getSpreadsheetId();
-    if (sheetId) {
-      const [localClients, localReturns] = await Promise.all([
-        this.getClients(),
-        this.getReturns()
-      ]);
+    const localClients = (clientsMemoryCache && clientsMemoryCache.length > 0)
+      ? clientsMemoryCache
+      : (getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache') || []);
+    const localReturns = (returnsMemoryCache && returnsMemoryCache.length > 0)
+      ? returnsMemoryCache
+      : (getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache') || []);
+
+    if (localClients.length > 0 || localReturns.length > 0) {
       return {
         totalClients: localClients.length,
         operatingClients: localClients.filter(c => c.operationalStatus === 'operating').length,
@@ -2836,17 +2823,30 @@ export const DBService = {
       };
     }
 
+    try {
+      const res = await fetch('/api/hub-summary');
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
+
     const client = await getSupabase();
     if (client) {
       try {
-        const [clientsCountRes, operatingClientsRes, returnsCountRes] = await Promise.all([
-          client.from('licensed_clients').select('*', { count: 'exact', head: true }),
-          client.from('licensed_clients').select('*', { count: 'exact', head: true }).eq('operationalstatus', 'operating'),
-          client.from('client_returns').select('*', { count: 'exact', head: true })
+        const timeoutPromise = new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('Supabase getHubMetrics timeout')), 2500)
+        );
+        const [clientsCountRes, operatingClientsRes, returnsCountRes] = await Promise.race([
+          Promise.all([
+            client.from('licensed_clients').select('*', { count: 'exact', head: true }),
+            client.from('licensed_clients').select('*', { count: 'exact', head: true }).eq('operationalstatus', 'operating'),
+            client.from('client_returns').select('*', { count: 'exact', head: true })
+          ]),
+          timeoutPromise
         ]);
-        const totalClients = clientsCountRes.count ?? 0;
-        const operatingClients = operatingClientsRes.count ?? 0;
-        const totalReturns = returnsCountRes.count ?? 0;
+        const totalClients = clientsCountRes?.count ?? 0;
+        const operatingClients = operatingClientsRes?.count ?? 0;
+        const totalReturns = returnsCountRes?.count ?? 0;
 
         return {
           totalClients,
@@ -2860,15 +2860,6 @@ export const DBService = {
       }
     }
 
-    try {
-      const res = await fetch('/api/hub-summary');
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {}
-
-    const localClients = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache') || [];
-    const localReturns = getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache') || [];
     return {
       totalClients: localClients.length,
       operatingClients: localClients.filter(c => c.operationalStatus === 'operating').length,
@@ -2985,12 +2976,14 @@ export const DBService = {
     }
   },
 
-  async saveReturnsBulk(returnsList: ClientReturn[]): Promise<void> {
-    const sheetId = GoogleSheetsService.getSpreadsheetId();
-    if (sheetId) {
-      GoogleSheetsService.saveReturnsBulk(returnsList, sheetId).catch(err => {
-        console.warn("[DBService] Google Sheets saveReturnsBulk error:", err);
-      });
+  async saveReturnsBulk(returnsList: ClientReturn[], skipGoogleSheetsSync?: boolean): Promise<void> {
+    if (!skipGoogleSheetsSync) {
+      const sheetId = GoogleSheetsService.getSpreadsheetId();
+      if (sheetId) {
+        GoogleSheetsService.saveReturnsBulk(returnsList, sheetId).catch(err => {
+          console.warn("[DBService] Google Sheets saveReturnsBulk error:", err);
+        });
+      }
     }
 
     const getMergedLocal = async () => {

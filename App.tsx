@@ -15,6 +15,7 @@ import { useAuth } from './src/contexts/AuthContext.tsx';
 import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient } from './types.ts';
 import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp, FileSpreadsheet } from 'lucide-react';
 import { DBService } from './services/db.ts';
+import { GoogleSheetsService } from './services/googleSheetsService.ts';
 import { isSupabaseDisabled } from './components/lib/supabase.ts';
 import { numberToWords } from './utils/numberToWords.ts';
 import { ScrollToTopButton } from './components/ScrollToTopButton.tsx';
@@ -45,6 +46,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     loadDatabase();
+    GoogleSheetsService.initFromBackend().catch(() => {});
   }, []);
 
   // Cross-device synchronization engine: Supabase Realtime channel + focus/visibility revalidation + heartbeat
@@ -85,34 +87,11 @@ const App: React.FC = () => {
 
     setupRealtimeSync();
 
-    // Auto-sync when window regains focus or tab becomes visible (cross-device wake)
-    let lastFocusSync = 0;
-    const handleSyncTrigger = () => {
-      const now = Date.now();
-      if (document.visibilityState === 'visible' && (now - lastFocusSync > 5000)) {
-        lastFocusSync = now;
-        loadDatabase(true);
-      }
-    };
-
-    window.addEventListener('visibilitychange', handleSyncTrigger);
-    window.addEventListener('focus', handleSyncTrigger);
-
-    // Periodic heartbeat to guarantee freshness across devices even without websocket
-    const heartbeatInterval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        loadDatabase(true);
-      }
-    }, 20000);
-
     return () => {
       isSubscribed = false;
       if (channel) {
         channel.unsubscribe();
       }
-      window.removeEventListener('visibilitychange', handleSyncTrigger);
-      window.removeEventListener('focus', handleSyncTrigger);
-      clearInterval(heartbeatInterval);
     };
   }, [isAdminAuthenticated, location.pathname]);
 
@@ -567,6 +546,13 @@ const App: React.FC = () => {
             />
           } />
           <Route path="/data-validation" element={<DataValidationModule />} />
+          <Route path="/analysis" element={
+            isAdminAuthenticated ? (
+              <ClientsAndReturnsHub defaultTab="analysis" onSyncComplete={handleRefreshDatabase} onDebtorUpdate={handleDebtorUpdate} />
+            ) : (
+              <Navigate to="/admin" replace />
+            )
+          } />
           <Route path="/clients-returns" element={
             isAdminAuthenticated ? (
               <ClientsAndReturnsHub onSyncComplete={handleRefreshDatabase} onDebtorUpdate={handleDebtorUpdate} />

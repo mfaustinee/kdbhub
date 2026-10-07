@@ -667,14 +667,14 @@ Allow: /cessations
         const [clientsDataRes, returnsDataRes] = await Promise.all([
           sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: `${clientsTab}!A1:R10000`
+            range: `'${clientsTab}'!A1:R10000`
           }).catch(err => {
             logToFile(`[API] Warning reading clients tab "${clientsTab}": ${err.message}`);
             return { data: { values: [] } };
           }),
           sheets.spreadsheets.values.get({
             spreadsheetId,
-            range: `${returnsTab}!A1:N10000`
+            range: `'${returnsTab}'!A1:N25000`
           }).catch(err => {
             logToFile(`[API] Warning reading returns tab "${returnsTab}": ${err.message}`);
             return { data: { values: [] } };
@@ -684,36 +684,64 @@ Allow: /cessations
         const clientRows = clientsDataRes.data.values || [];
         const returnRows = returnsDataRes.data.values || [];
 
+        const cleanNum = (val: any): number => {
+          if (val === null || val === undefined) return 0;
+          if (typeof val === 'number') return isNaN(val) ? 0 : val;
+          const str = String(val).replace(/,/g, '').replace(/[\s-]/g, '').trim();
+          if (!str) return 0;
+          const num = parseFloat(str);
+          return isNaN(num) ? 0 : num;
+        };
+
+        const isSummaryOrFooter = (name: string): boolean => {
+          const n = name.toLowerCase().trim();
+          return !n || n === 'summary' || n === 'total' || n === 'milk bars' || n === 'dispensers' ||
+            n === 'cooling plants' || n === 'mini dairy' || n === 'cottage' || n === 'processors' ||
+            n.startsWith('valid:') || n.includes('permit status count');
+        };
+
+        // 1. Parse Clients
         const clients: any[] = [];
-        if (clientRows.length > 1) {
-          const headers = (clientRows[0] || []).map((h: any) => String(h || '').toLowerCase().trim().replace(/[^a-z0-9]/g, ''));
+        let clientHeaderRowIdx = clientRows.findIndex(row => 
+          Array.isArray(row) && row.some(cell => {
+            const c = String(cell || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            return c === 'client' || c === 'clientname' || c === 'premisename' || c === 'dbo';
+          })
+        );
+        if (clientHeaderRowIdx === -1 && clientRows.length > 0) clientHeaderRowIdx = 0;
+
+        if (clientHeaderRowIdx !== -1 && clientRows.length > clientHeaderRowIdx + 1) {
+          const headers = (clientRows[clientHeaderRowIdx] || []).map((h: any) => String(h || '').toLowerCase().trim().replace(/[^a-z0-9]/g, ''));
           const getIdx = (name: string, fallbackIdx: number) => {
-            const idx = headers.indexOf(name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+            const idx = headers.findIndex(h => h.includes(name));
             return idx >= 0 ? idx : fallbackIdx;
           };
-          const clientNameIdx = getIdx('clientname', 0);
-          const premiseNameIdx = getIdx('premisename', 1);
-          const categoryIdx = getIdx('premisecategory', 2);
+
+          const clientNameIdx = getIdx('client', 0);
+          const premiseNameIdx = getIdx('premise', 1);
+          const categoryIdx = getIdx('category', 2);
           const startYearIdx = getIdx('startyear', 3);
           const startMonthIdx = getIdx('startmonth', 4);
           const endYearIdx = getIdx('endyear', 5);
           const endMonthIdx = getIdx('endmonth', 6);
-          const telIdx = getIdx('tel', 7);
-          const contactPersonIdx = getIdx('contactperson', 8);
+          const telIdx = getIdx('contact', 7);
+          const contactPersonIdx = getIdx('person', 8);
           const locationIdx = getIdx('location', 9);
           const countyIdx = getIdx('county', 10);
-          const coolingCapIdx = getIdx('coolingcapacity', 11);
+          const coolingCapIdx = getIdx('capacity', 11);
           const permitStatusIdx = getIdx('permitstatus', 12);
           const opStatusIdx = getIdx('operationalstatus', 13);
-          const levyInfoIdx = getIdx('levyinfo', 14);
-          const expiryDateIdx = getIdx('expirydate', 15);
+          const levyInfoIdx = getIdx('levy', 14);
+          const expiryDateIdx = getIdx('expiry', 15);
           const permitNumIdx = getIdx('permitnumber', 16);
-          const branchesIdx = getIdx('branches', 17);
+          const branchesIdx = getIdx('branch', 17);
 
-          for (let i = 1; i < clientRows.length; i++) {
+          for (let i = clientHeaderRowIdx + 1; i < clientRows.length; i++) {
             const r = clientRows[i];
             if (!r || r.length === 0 || !r[clientNameIdx]) continue;
             const cName = String(r[clientNameIdx] || '').trim();
+            if (isSummaryOrFooter(cName)) continue;
+
             const pName = String(r[premiseNameIdx] || '').trim();
             const permitNo = String(r[permitNumIdx] || '').trim();
 
@@ -729,15 +757,15 @@ Allow: /cessations
               clientName: cName,
               premiseName: pName || cName,
               premiseCategory: String(r[categoryIdx] || 'Milk Bar').trim(),
-              startYear: Number(r[startYearIdx]) || new Date().getFullYear(),
+              startYear: cleanNum(r[startYearIdx]) || new Date().getFullYear(),
               startMonth: String(r[startMonthIdx] || 'January').trim(),
-              endYear: r[endYearIdx] ? Number(r[endYearIdx]) : null,
+              endYear: r[endYearIdx] ? cleanNum(r[endYearIdx]) : null,
               endMonth: r[endMonthIdx] ? String(r[endMonthIdx]).trim() : null,
               tel: String(r[telIdx] || '').trim(),
               contactPerson: String(r[contactPersonIdx] || '').trim(),
               location: String(r[locationIdx] || 'N/A').trim(),
               county: String(r[countyIdx] || 'N/A').trim(),
-              coolingCapacity: r[coolingCapIdx] ? Number(r[coolingCapIdx]) : undefined,
+              coolingCapacity: r[coolingCapIdx] ? cleanNum(r[coolingCapIdx]) : undefined,
               permitStatus: String(r[permitStatusIdx] || 'valid').trim(),
               operationalStatus: String(r[opStatusIdx] || 'operating').trim(),
               levyInfo: String(r[levyInfoIdx] || '').trim(),
@@ -748,41 +776,53 @@ Allow: /cessations
           }
         }
 
+        // 2. Parse Returns (Find dynamic header row)
         const returns: any[] = [];
-        if (returnRows.length > 1) {
-          const headers = (returnRows[0] || []).map((h: any) => String(h || '').toLowerCase().trim().replace(/[^a-z0-9]/g, ''));
+        let returnHeaderRowIdx = returnRows.findIndex(row => 
+          Array.isArray(row) && row.some(cell => {
+            const c = String(cell || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            return c.includes('dboname') || c.includes('clientname') || (c.includes('period') && c.includes('csl'));
+          })
+        );
+        if (returnHeaderRowIdx === -1 && returnRows.length > 0) returnHeaderRowIdx = 0;
+
+        if (returnHeaderRowIdx !== -1 && returnRows.length > returnHeaderRowIdx + 1) {
+          const headers = (returnRows[returnHeaderRowIdx] || []).map((h: any) => String(h || '').toLowerCase().trim().replace(/[^a-z0-9]/g, ''));
           const getIdx = (name: string, fallbackIdx: number) => {
-            const idx = headers.indexOf(name.toLowerCase().replace(/[^a-z0-9]/g, ''));
+            const idx = headers.findIndex(h => h.includes(name));
             return idx >= 0 ? idx : fallbackIdx;
           };
-          const cNameIdx = getIdx('clientname', 0);
-          const yearIdx = getIdx('year', 1);
-          const periodIdx = getIdx('period', 2);
-          const qtyIdx = getIdx('qty', 3);
-          const invoiceAmtIdx = getIdx('invoiceamount', 4);
-          const retDateIdx = getIdx('returndate', 5);
-          const payAmtIdx = getIdx('paymentamount', 6);
-          const payDateIdx = getIdx('paymentdate', 7);
-          const txnRefIdx = getIdx('txnref', 8);
-          const lessCfIdx = getIdx('lesscf', 9);
-          const outBalIdx = getIdx('outstandingbalance', 10);
-          const agingIdx = getIdx('agingdays', 11);
-          const payStatusIdx = getIdx('paymentstatus', 12);
-          const commentsIdx = getIdx('comments', 13);
 
-          for (let i = 1; i < returnRows.length; i++) {
+          const cNameIdx = getIdx('dbo', getIdx('client', 1));
+          const yearIdx = getIdx('year', 2);
+          const periodIdx = getIdx('period', 3);
+          const qtyIdx = getIdx('qty', 4);
+          const invoiceAmtIdx = getIdx('invoice', 5);
+          const retDateIdx = getIdx('returndate', 6);
+          const payAmtIdx = getIdx('paid', getIdx('paymentamount', 7));
+          const payDateIdx = getIdx('paymentdate', 8);
+          const txnRefIdx = getIdx('txn', getIdx('mr', 9));
+          const lessCfIdx = getIdx('cf', 10);
+          const outBalIdx = getIdx('outstanding', getIdx('balance', 11));
+          const agingIdx = getIdx('aging', 12);
+          const payStatusIdx = getIdx('status', 13);
+          const commentsIdx = getIdx('comment', 14);
+
+          for (let i = returnHeaderRowIdx + 1; i < returnRows.length; i++) {
             const r = returnRows[i];
             if (!r || r.length === 0 || !r[cNameIdx]) continue;
             const cName = String(r[cNameIdx] || '').trim();
-            const rawYear = Number(r[yearIdx]) || new Date().getFullYear();
+            if (!cName || cName.toLowerCase() === 'dbo name' || cName.toLowerCase() === 'total') continue;
+
+            const rawYear = cleanNum(r[yearIdx]) || new Date().getFullYear();
             const rawPeriod = String(r[periodIdx] || 'January').trim();
-            const rawQty = Number(r[qtyIdx]) || 0;
-            const rawInv = Number(r[invoiceAmtIdx]) || 0;
-            const rawPay = Number(r[payAmtIdx]) || 0;
+            const rawQty = cleanNum(r[qtyIdx]);
+            const rawInv = cleanNum(r[invoiceAmtIdx]);
+            const rawPay = cleanNum(r[payAmtIdx]);
             const rawTxn = String(r[txnRefIdx] || '').trim();
-            const rawLessCf = Number(r[lessCfIdx]) || 0;
-            const rawOutBal = r[outBalIdx] !== undefined ? Number(r[outBalIdx]) : (rawInv - rawPay - rawLessCf);
-            const rawAging = Number(r[agingIdx]) || 0;
+            const rawLessCf = cleanNum(r[lessCfIdx]);
+            const rawOutBal = r[outBalIdx] !== undefined ? cleanNum(r[outBalIdx]) : (rawInv - rawPay - rawLessCf);
+            const rawAging = cleanNum(r[agingIdx]);
 
             returns.push({
               clientName: cName,
@@ -798,7 +838,7 @@ Allow: /cessations
               outstandingBalance: rawOutBal,
               agingDays: rawAging,
               paymentStatus: String(r[payStatusIdx] || (rawOutBal <= 0 ? 'Paid' : 'Unpaid')).trim(),
-              comments: String(r[commentsIdx] || '').trim()
+              comments: commentsIdx >= 0 && r[commentsIdx] ? String(r[commentsIdx]).trim() : ''
             });
           }
         }
