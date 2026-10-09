@@ -152,13 +152,12 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
       setTotalRecords(total);
       setTotalPages(res.totalPages || Math.ceil(total / size) || 1);
       setCurrentPage(page);
-      onClientsChange?.(res.data);
     } catch (error) {
       console.error('Error fetching clients batch:', error);
     } finally {
       setLoading(false);
     }
-  }, [currentPage, batchSize, searchTerm, categoryFilter, statusFilter, levyFilter, onClientsChange]);
+  }, [currentPage, batchSize, searchTerm, categoryFilter, statusFilter, levyFilter]);
 
   // Fetch only the selected batch when filters or batch size change
   useEffect(() => {
@@ -242,6 +241,7 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
     try {
       await DBService.deleteClient(id);
       await fetchClients();
+      onRefresh?.();
     } catch (error) {
       console.error('Failed to delete client:', error);
       alert('Failed to delete client');
@@ -319,6 +319,7 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
       await DBService.saveClient(record);
       setIsModalOpen(false);
       await fetchClients();
+      onRefresh?.();
     } catch (error) {
       console.error('Failed to save client:', error);
       alert('Failed to save client');
@@ -925,6 +926,7 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
       setParsedRecords([]);
       setParseErrors([]);
       await fetchClients();
+      onRefresh?.();
       alert(`Successfully imported ${parsedRecords.length} clients!`);
     } catch (error: any) {
       console.error("Bulk import failed:", error);

@@ -47,7 +47,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onStaffUpdate 
 }) => {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'analysis' | 'clients_and_returns' | 'data_validation' | 'scope_disclosure' | 'requests_to_approve' | 'debtors' | 'settings'>('data_validation');
+  const [tab, setTab] = useState<'clients_and_returns' | 'data_validation' | 'scope_disclosure' | 'requests_to_approve' | 'debtors' | 'settings'>('data_validation');
   const [approvalSubTab, setApprovalSubTab] = useState<'agreements' | 'cessations'>('agreements');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -58,7 +58,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const getTabLabel = (currentTab: typeof tab) => {
     switch (currentTab) {
-      case 'analysis': return 'Analysis Module';
       case 'clients_and_returns': return 'Clients & Returns Hub';
       case 'data_validation': return 'Data Validation Form';
       case 'scope_disclosure': return 'Scope Disclosure Form';
@@ -1724,16 +1723,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
-        </div>
-      )}
-
-      {tab === 'analysis' && (
-        <div className="space-y-6 animate-in fade-in duration-300">
-          <ClientsAndReturnsHub 
-            defaultTab="analysis"
-            onSyncComplete={onRefresh}
-            onDebtorUpdate={onDebtorUpdate}
-          />
         </div>
       )}
 

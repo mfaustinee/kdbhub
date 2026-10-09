@@ -54,6 +54,12 @@
         }
       });
       document.addEventListener('focusout', enforceScale);
+
+      // Explicitly enable native right click context menu across entire application
+      window.addEventListener('contextmenu', function(e) {
+        // Allow default right click options
+        return true;
+      }, { capture: true, passive: true });
     })();
   </script>
 </head>

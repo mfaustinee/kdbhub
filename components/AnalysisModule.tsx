@@ -46,9 +46,11 @@ export const AnalysisModule: React.FC<AnalysisModuleProps> = ({
         DBService.getReturns(forceFresh)
       ]);
 
-      setClients(fetchedClients || []);
-      setDebtors(fetchedDebtors || []);
-      setReturns(fetchedReturns || []);
+      if (fetchedClients && Array.isArray(fetchedClients)) {
+        setClients(fetchedClients);
+      }
+      if (fetchedDebtors) setDebtors(fetchedDebtors);
+      if (fetchedReturns) setReturns(fetchedReturns);
       setLastRefreshed(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       console.warn('[AnalysisModule] Data load notice:', err);
@@ -59,15 +61,27 @@ export const AnalysisModule: React.FC<AnalysisModuleProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!propClients || propClients.length === 0 || !propDebtors || propDebtors.length === 0) {
-      loadAllData(false);
-    } else {
-      if (propClients) setClients(propClients);
+    if (propClients !== undefined) {
+      setClients(propClients);
       if (propDebtors) setDebtors(propDebtors);
       if (propReturns) setReturns(propReturns);
       setLoading(false);
+    } else {
+      loadAllData(false);
     }
   }, [propClients, propDebtors, propReturns, loadAllData]);
+
+  useEffect(() => {
+    if (propDebtors !== undefined) {
+      setDebtors(propDebtors);
+    }
+  }, [propDebtors]);
+
+  useEffect(() => {
+    if (propReturns !== undefined) {
+      setReturns(propReturns);
+    }
+  }, [propReturns]);
 
   const handleManualRefresh = async () => {
     await loadAllData(true);
@@ -85,8 +99,8 @@ export const AnalysisModule: React.FC<AnalysisModuleProps> = ({
     return returns.reduce((sum, r) => sum + (r.outstandingBalance || 0), 0);
   }, [effectiveDebtors, returns]);
 
-  // Order of categories explicitly matching regulatory classifications
-  const orderedCategories: LicensedClient['premiseCategory'][] = [
+  // Standard regulatory classifications in mandated order
+  const standardCategories: LicensedClient['premiseCategory'][] = [
     'Milk Bar',
     'Dispenser',
     'Cooling Plant',
@@ -95,28 +109,82 @@ export const AnalysisModule: React.FC<AnalysisModuleProps> = ({
     'Processor'
   ];
 
-  const getClientCategory = (client: LicensedClient): string => {
-    return String(client.premiseCategory || '').trim();
+  // Helper to normalize any category text/shortcode to canonical name
+  const normalizePermitCategory = (category?: string): string => {
+    if (!category) return 'Milk Bar';
+    const c = category.toLowerCase().trim();
+    if (c.includes('cool') || c === 'cp' || c.includes('chill')) return 'Cooling Plant';
+    if (c.includes('cottage') || c === 'ci') return 'Cottage Industry';
+    if (c.includes('process') || c === 'pr') return 'Processor';
+    if (c.includes('mini') || c === 'md') return 'Mini Dairy';
+    if (c.includes('dispens') || c === 'dp') return 'Dispenser';
+    if (c.includes('milk') || c.includes('bar') || c === 'mb') return 'Milk Bar';
+    return category.trim();
   };
 
-  const isSameCategory = (cat1: string, cat2: string): boolean => {
-    return cat1.toLowerCase().replace(/[^a-z0-9]/g, '') === cat2.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Check the client registry and derive all registered permit categories
+  const orderedCategories = useMemo(() => {
+    const list = [...standardCategories];
+    const registeredNorms = new Set(standardCategories.map(c => normalizePermitCategory(c)));
+    
+    // Check if client registry contains any custom or additional categories
+    for (const client of clients) {
+      if (client?.premiseCategory) {
+        const norm = normalizePermitCategory(client.premiseCategory);
+        if (!registeredNorms.has(norm)) {
+          registeredNorms.add(norm);
+          list.push(client.premiseCategory as any);
+        }
+      }
+    }
+    return list;
+  }, [clients]);
+
+  // Status check helpers matching regulatory rules:
+  // Operating + Closed = Licensed
+  const isClientClosed = (c: LicensedClient): boolean => {
+    const status = (c.operationalStatus || '').toLowerCase().trim();
+    if (status === 'closed') return true;
+    const pStatus = (c.permitStatus || '').toLowerCase().trim();
+    if (pStatus === 'closed') return true;
+    return false;
   };
 
-  // 2. Breakdown by Permit Category stats
+  const isClientOperating = (c: LicensedClient): boolean => {
+    return !isClientClosed(c);
+  };
+
+  // Levy qualification helpers:
+  // QFR + DNQ-R = Licensed
+  const isClientQFR = (c: LicensedClient): boolean => {
+    // Closed entities automatically become DNQ-R and exempt from monthly returns
+    if (isClientClosed(c)) return false;
+    return (c.levyInfo || '').toUpperCase().trim() === 'QFR';
+  };
+
+  const isClientDNQR = (c: LicensedClient): boolean => {
+    return !isClientQFR(c);
+  };
+
+  // Breakdown by Permit Category: checks client registry and updates all columns per permit category
   const categoryStats = useMemo(() => {
     return orderedCategories.map(cat => {
-      const catClients = clients.filter(c => isSameCategory(getClientCategory(c), cat));
-      const licensed = catClients.length;
-      const operating = catClients.filter(c => (c.operationalStatus || '').toLowerCase() === 'operating').length;
-      const closed = catClients.filter(c => (c.operationalStatus || '').toLowerCase() === 'closed').length;
-      const qfr = catClients.filter(c => (c.levyInfo || '').toUpperCase() === 'QFR').length;
-      const dnqr = catClients.filter(c => (c.levyInfo || '').toUpperCase() === 'DNQ-R').length;
+      const catNorm = normalizePermitCategory(cat);
+      // Filter clients from client registry matching this permit category
+      const catClients = clients.filter(c => normalizePermitCategory(c.premiseCategory) === catNorm);
       
-      let capacitySum = 0;
-      if (cat === 'Cooling Plant' || cat === 'Processor') {
-        capacitySum = catClients.reduce((sum, c) => sum + (c.coolingCapacity || 0), 0);
-      }
+      // Calculate breakdown columns as per the permit category
+      const licensed = catClients.length;
+      const operating = catClients.filter(isClientOperating).length;
+      const closed = catClients.filter(isClientClosed).length;
+      const qfr = catClients.filter(isClientQFR).length;
+      const dnqr = catClients.filter(isClientDNQR).length;
+      const capacitySum = catClients.reduce((sum, c) => {
+        const raw = c.coolingCapacity;
+        if (raw === undefined || raw === null) return sum;
+        const val = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(/[^0-9.]/g, ''));
+        return sum + (isNaN(val) ? 0 : val);
+      }, 0);
 
       return {
         category: cat,
@@ -128,9 +196,9 @@ export const AnalysisModule: React.FC<AnalysisModuleProps> = ({
         capacitySum
       };
     });
-  }, [clients]);
+  }, [clients, orderedCategories]);
 
-  // Totals across all categories for the 'Total ' row
+  // Totals across all categories for the 'Total ' row explicitly after processors
   const categoryTotals = useMemo(() => {
     return categoryStats.reduce((acc, curr) => ({
       licensed: acc.licensed + curr.licensed,

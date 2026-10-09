@@ -533,6 +533,37 @@ export const generateValidationPdfDoc = async (data: any, globalUnit: string = '
     }
   }
 
+  // Stamp Custom Watermark across all pages
+  const rawWatermark = data.watermarkText !== undefined 
+    ? data.watermarkText 
+    : (typeof window !== 'undefined' ? localStorage.getItem('kdb_validation_pdf_watermark') || '' : '');
+  const watermarkText = (String(rawWatermark || '')).trim();
+
+  if (watermarkText) {
+    const totalPages = doc.getNumberOfPages();
+    const fontSize = watermarkText.length > 35 ? 22 : watermarkText.length > 22 ? 28 : 36;
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.saveGraphicsState();
+      try {
+        if ((doc as any).GState) {
+          doc.setGState(new (doc as any).GState({ opacity: 0.08 }));
+        }
+      } catch (gErr) {
+        console.warn('[PDF] GState opacity notice:', gErr);
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(fontSize);
+      doc.setTextColor(100, 116, 139);
+      // Stamp diagonally across the center of standard A4 (210mm x 297mm)
+      doc.text(watermarkText.toUpperCase(), 105, 145, {
+        align: 'center',
+        angle: 45
+      });
+      doc.restoreGraphicsState();
+    }
+  }
+
   return doc;
 };
 

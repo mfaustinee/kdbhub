@@ -75,10 +75,10 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
 
       setHubMetrics(metrics);
       setLocalDebtors(fetchedDebtors);
-      if (fetchedClients && fetchedClients.length > 0) {
+      if (fetchedClients && Array.isArray(fetchedClients)) {
         setClients(fetchedClients);
       }
-      if (fetchedReturns && fetchedReturns.length > 0) {
+      if (fetchedReturns && Array.isArray(fetchedReturns)) {
         setReturns(fetchedReturns);
       }
       setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
@@ -102,6 +102,14 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
   const handleTabSwitch = (tab: ClientsAndReturnsTab) => {
     setActiveTab(tab);
     onTabChange?.(tab);
+    if (tab === 'analysis') {
+      // Check client registry and sync immediately so breakdown by permit category has latest records
+      DBService.getClients(false).then((freshClients) => {
+        if (freshClients && Array.isArray(freshClients)) {
+          setClients(freshClients);
+        }
+      }).catch(err => console.warn('[ClientsAndReturnsHub] Analysis sync notice:', err));
+    }
   };
 
   // High-level shared aggregate statistics from server-calculated metrics

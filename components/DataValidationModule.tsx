@@ -208,6 +208,7 @@ interface FormData {
   actionDueDate?: string;
   actionOwner?: string;
   pastExceptions?: ExceptionRegisterItem[];
+  watermarkText?: string;
 }
 
 const parseSellingPrices = (sellingPriceStr: string): Record<string, string> => {
@@ -842,7 +843,8 @@ const initialData: FormData = {
   recommendedActions: '',
   actionDueDate: '',
   actionOwner: '',
-  pastExceptions: []
+  pastExceptions: [],
+  watermarkText: typeof window !== 'undefined' ? localStorage.getItem('kdb_validation_pdf_watermark') || '' : ''
 };
 
 const getMirroredSellingPrice = (product: string, sales: SalesEntry[]): string => {
@@ -3144,6 +3146,23 @@ export function DataValidationModule() {
     if (name === 'validationPeriod') {
       setIsValidationPeriodEdited(true);
     }
+    if (name === 'watermarkText') {
+      try {
+        localStorage.setItem('kdb_validation_pdf_watermark', value);
+      } catch (e) {
+        console.warn('Could not store watermark in localStorage', e);
+      }
+    }
+  };
+
+  const handleWatermarkChange = (val: string) => {
+    setFormData(prev => ({ ...prev, watermarkText: val }));
+    setFailedFields(prev => prev.filter(f => f !== 'watermarkText'));
+    try {
+      localStorage.setItem('kdb_validation_pdf_watermark', val);
+    } catch (e) {
+      console.warn('Could not store watermark in localStorage', e);
+    }
   };
 
   const validateStep = (s: number) => {
@@ -3823,9 +3842,25 @@ export function DataValidationModule() {
   };
 
   const handlePreview = async () => {
+    const wm = (formData.watermarkText || (typeof window !== 'undefined' ? localStorage.getItem('kdb_validation_pdf_watermark') || '' : '')).trim();
+    if (!wm) {
+      setStatus({ type: 'error', message: 'PDF Watermark is mandatory. Please enter your watermark text on Step 6 before previewing.' });
+      setFailedFields(prev => Array.from(new Set([...prev, 'watermarkText'])));
+      setStep(6);
+      setTimeout(() => {
+        const watermarkEl = document.getElementById('watermark-input');
+        if (watermarkEl) {
+          watermarkEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          watermarkEl.focus();
+        }
+      }, 100);
+      return;
+    }
+
     try {
       const previewData: FormData = {
         ...formData,
+        watermarkText: wm,
         endTime: formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       const pdf = await generatePDF(previewData);
@@ -4029,11 +4064,28 @@ export function DataValidationModule() {
       return;
     }
 
+    const watermarkVal = (formData.watermarkText || (typeof window !== 'undefined' ? localStorage.getItem('kdb_validation_pdf_watermark') || '' : '')).trim();
+    if (!watermarkVal) {
+      setStatus({ type: 'error', message: 'PDF Watermark is mandatory. Please enter your watermark text on Step 6 before submitting.' });
+      setFailedFields(prev => Array.from(new Set([...prev, 'watermarkText'])));
+      setIsSubmitting(false);
+      setStep(6);
+      setTimeout(() => {
+        const watermarkEl = document.getElementById('watermark-input');
+        if (watermarkEl) {
+          watermarkEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          watermarkEl.focus();
+        }
+      }, 100);
+      return;
+    }
+
     try {
       // Preserve locked endTime from draft state, amendment, or manual entry; fallback to current time
       const endTime = formData.endTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const updatedData = { 
         ...formData, 
+        watermarkText: watermarkVal,
         endTime,
         isBranchFacility,
         isBranch: isBranchFacility,
@@ -9006,6 +9058,67 @@ export function DataValidationModule() {
                           </div>
                         </div>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Mandatory PDF Watermark Box (Compact) */}
+                  <div className={`px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl border transition-all shadow-2xs ${
+                    failedFields.includes('watermarkText') || (!formData.watermarkText || !formData.watermarkText.trim())
+                      ? 'bg-amber-50/30 border-amber-300 ring-1 ring-amber-400/20'
+                      : 'bg-white border-blue-200/70'
+                  }`}>
+                    <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-100">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                          <Sparkles className="w-3 h-3" />
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                          <label htmlFor="watermark-input" className="text-xs font-bold text-slate-900 tracking-tight flex items-center gap-1">
+                            <span>PDF Watermark</span>
+                            <span className="text-rose-600 font-bold">*</span>
+                          </label>
+                          <span className="text-[9px] bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.2 rounded font-bold uppercase tracking-wider">
+                            Mandatory
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-normal hidden md:inline truncate">
+                            • Stamped diagonally across all PDF pages
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md font-bold flex items-center gap-1 shrink-0">
+                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                        <span>Browser Remembered</span>
+                      </span>
+                    </div>
+
+                    <div className="pt-2 space-y-1">
+                      <div className="relative">
+                        <input
+                          id="watermark-input"
+                          name="watermarkText"
+                          type="text"
+                          required
+                          value={formData.watermarkText || ''}
+                          onChange={(e) => handleWatermarkChange(e.target.value)}
+                          placeholder="Type desired PDF watermark (e.g. OFFICIAL KDB AUDIT)..."
+                          className={`w-full px-3 py-1.5 pr-28 rounded-lg border text-xs font-medium tracking-wide transition-all focus:outline-none focus:ring-1.5 ${
+                            failedFields.includes('watermarkText') || (!formData.watermarkText || !formData.watermarkText.trim())
+                              ? 'border-amber-400 bg-amber-50/40 text-slate-900 focus:ring-amber-400'
+                              : 'border-slate-300 bg-white text-slate-900 focus:ring-blue-500 focus:border-blue-500'
+                          }`}
+                        />
+                        {formData.watermarkText && formData.watermarkText.trim() && (
+                          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] font-bold text-slate-500 uppercase tracking-wider hidden sm:inline-block bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+                            Stamped on PDF
+                          </span>
+                        )}
+                      </div>
+                      {(!formData.watermarkText || !formData.watermarkText.trim()) && (
+                        <p className="text-[10px] text-amber-800 font-medium flex items-center gap-1 pt-0.5">
+                          <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                          <span>Custom watermark is required before previewing or submitting.</span>
+                        </p>
+                      )}
                     </div>
                   </div>
 
