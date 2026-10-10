@@ -7,7 +7,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
-import { LicensedClient, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, DboPremiseSignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem, ExceptionStatus, ScopeDisclosureRecord } from '../types';
+import { LicensedClient, ClientBranch, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, DboPremiseSignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem, ExceptionStatus, ScopeDisclosureRecord } from '../types';
 import { FieldChecklistComponent } from './FieldChecklistComponent';
 import { FIELD_CHECKLIST_SECTIONS, hasAnyChecklistValue, getActiveChecklistItems } from './fieldChecklistData';
 import { TransactionReconciliationComponent } from './TransactionReconciliationComponent';
@@ -48,6 +48,7 @@ import {
   ArrowUp,
   Store,
   GitBranch,
+  GitCompare,
   FolderOpen,
   Search,
   X,
@@ -872,6 +873,33 @@ export function DataValidationModule() {
   const [selectedClient, setSelectedClient] = useState<LicensedClient | null>(null);
   const [validationPremiseMode, setValidationPremiseMode] = useState<string>('main');
   const [dboHasBranches, setDboHasBranches] = useState<boolean | null>(null);
+
+  // 7-Point Reconciliation State
+  const [isReconModalOpen, setIsReconModalOpen] = useState(false);
+  const [isApplyingRecon, setIsApplyingRecon] = useState(false);
+  const [mismatchFields, setMismatchFields] = useState<Array<{
+    key: 'dboName' | 'premiseName' | 'permitNo' | 'location' | 'category' | 'contacts' | 'expiryDate';
+    label: string;
+    validationVal: string;
+    clientVal: string;
+    selectedVal: 'validation' | 'client';
+  }>>([]);
+  const [reconStatus, setReconStatus] = useState<{ type: 'match' | 'mismatch' | 'no-client'; message: string } | null>(null);
+
+  // Interactive registry suggestions for DBO & Premise inputs
+  const [activeRegistryField, setActiveRegistryField] = useState<'dbo' | 'premise' | null>(null);
+  const [registrySuggestions, setRegistrySuggestions] = useState<Array<{
+    client: LicensedClient;
+    branch?: ClientBranch;
+    isBranch: boolean;
+    displayName: string;
+    premiseName: string;
+    permitNo: string;
+    category: string;
+    location: string;
+    contacts: string;
+    expiryDate: string;
+  }>>([]);
 
   // Unified branch facility detection: branch premise selected or new branch being created
   const isBranchFacility = Boolean(
@@ -2842,19 +2870,210 @@ export function DataValidationModule() {
     }
   }, [formData.sales, formData.intakes, formData.hasLocalSales, formData.category, formData.date, isValidationPeriodEdited]);
 
-  // Fetch returns data on mount
+  // Fetch clients and returns data on mount
   useEffect(() => {
+    let isMounted = true;
     const fetchInitialData = async () => {
-      setIsLoadingClients(false);
+      setIsLoadingClients(true);
       try {
-        const returnsList = await DBService.getReturns();
-        setReturnsData(returnsList);
+        const [cList, returnsList] = await Promise.all([
+          DBService.getClients(),
+          DBService.getReturns()
+        ]);
+        if (!isMounted) return;
+        if (Array.isArray(cList) && cList.length > 0) {
+          setClients(cList);
+        }
+        if (Array.isArray(returnsList) && returnsList.length > 0) {
+          setReturnsData(returnsList);
+        }
       } catch (e) {
         console.error('[DataValidationModule] Error fetching initial data:', e);
+      } finally {
+        if (isMounted) setIsLoadingClients(false);
       }
     };
     fetchInitialData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
+
+  // Helper to extract matching registry clients & branches across 7 attributes
+  const getRegistrySuggestions = (term: string, clientsList: LicensedClient[]) => {
+    if (!term || term.trim().length < 2 || !clientsList || clientsList.length === 0) return [];
+    const cleanTerm = normStr(term);
+    const tokens = cleanTerm.split(/\s+/).filter(t => t.length >= 2);
+
+    const results: Array<{
+      client: LicensedClient;
+      branch?: ClientBranch;
+      isBranch: boolean;
+      displayName: string;
+      premiseName: string;
+      permitNo: string;
+      category: string;
+      location: string;
+      contacts: string;
+      expiryDate: string;
+    }> = [];
+
+    const seenKeys = new Set<string>();
+
+    clientsList.forEach(c => {
+      if (!c || isClosedStatus(c.operationalStatus) || isClosedStatus(c.permitStatus)) return;
+
+      const cDbo = normStr(c.clientName);
+      const cPrem = normStr(c.premiseName);
+      const cPerm = cleanPermitNumber(c.permitNumber || c.id);
+      const cLoc = normStr(c.location);
+
+      const matchesClient = 
+        (cleanTerm && (cDbo.includes(cleanTerm) || cPrem.includes(cleanTerm) || cPerm.includes(cleanTerm) || cLoc.includes(cleanTerm))) ||
+        (tokens.length > 0 && tokens.some(tok => cDbo.includes(tok) || cPrem.includes(tok) || cLoc.includes(tok)));
+
+      // Map category to form categories
+      let mappedCat = c.premiseCategory || '';
+      if (mappedCat === 'Cooling Plant') {
+        mappedCat = (c.coolingCapacity && c.coolingCapacity >= 5000) ? 'CP>5,000 L/D' : 'CP<5,000 L/D';
+      }
+
+      const clientKey = `main-${c.id || c.clientName}-${c.premiseName}`.toLowerCase();
+      if (matchesClient && !seenKeys.has(clientKey)) {
+        seenKeys.add(clientKey);
+        results.push({
+          client: c,
+          isBranch: false,
+          displayName: c.clientName,
+          premiseName: c.premiseName || 'Main Premise',
+          permitNo: c.permitNumber || c.id || '',
+          category: mappedCat,
+          location: c.location || '',
+          contacts: c.tel || '',
+          expiryDate: formatToYYYYMMDD(c.expiryDate || c.endDate || '')
+        });
+      }
+
+      // Check branches
+      if (c.branches && c.branches.length > 0) {
+        c.branches.forEach(b => {
+          const bPrem = normStr(b.premiseName);
+          const bPerm = cleanPermitNumber(b.permitNumber || b.id);
+          const bLoc = normStr(b.location);
+
+          const matchesBranch = 
+            (cleanTerm && (bPrem.includes(cleanTerm) || bPerm.includes(cleanTerm) || bLoc.includes(cleanTerm) || cDbo.includes(cleanTerm))) ||
+            (tokens.length > 0 && tokens.some(tok => bPrem.includes(tok) || bLoc.includes(tok)));
+
+          const branchKey = `branch-${c.id}-${b.id || b.premiseName}`.toLowerCase();
+          if (matchesBranch && !seenKeys.has(branchKey)) {
+            seenKeys.add(branchKey);
+            results.push({
+              client: c,
+              branch: b,
+              isBranch: true,
+              displayName: `${c.clientName} (Branch: ${b.premiseName})`,
+              premiseName: b.premiseName,
+              permitNo: b.permitNumber || b.id || '',
+              category: mappedCat,
+              location: b.location || '',
+              contacts: c.tel || '',
+              expiryDate: formatToYYYYMMDD(c.expiryDate || c.endDate || '')
+            });
+          }
+        });
+      }
+    });
+
+    return results.slice(0, 8);
+  };
+
+  // Re-compute registry suggestions when active field or search terms change
+  useEffect(() => {
+    if (!activeRegistryField || clients.length === 0) {
+      setRegistrySuggestions([]);
+      return;
+    }
+    const term = (activeRegistryField === 'dbo' ? formData.dboName : formData.premiseName) || '';
+    if (term.trim().length < 2) {
+      setRegistrySuggestions([]);
+      return;
+    }
+    const matches = getRegistrySuggestions(term, clients);
+    setRegistrySuggestions(matches);
+  }, [formData.dboName, formData.premiseName, activeRegistryField, clients]);
+
+  // Click outside to dismiss registry suggestions
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.registry-dropdown-container')) {
+        setActiveRegistryField(null);
+      }
+    };
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, []);
+
+  // Selection handler that populates ALL 7 requested attributes from Clients Registry
+  const handleSelectRegistrySuggestion = (item: {
+    client: LicensedClient;
+    branch?: ClientBranch;
+    isBranch: boolean;
+    displayName: string;
+    premiseName: string;
+    permitNo: string;
+    category: string;
+    location: string;
+    contacts: string;
+    expiryDate: string;
+  }) => {
+    const { client, branch, isBranch } = item;
+
+    let mappedCategory = client.premiseCategory || '';
+    if (mappedCategory === 'Cooling Plant') {
+      mappedCategory = (client.coolingCapacity && client.coolingCapacity >= 5000) ? 'CP>5,000 L/D' : 'CP<5,000 L/D';
+    }
+
+    const pNo = (branch ? branch.permitNumber : client.permitNumber) || client.id || '';
+    const pName = branch ? branch.premiseName : client.premiseName;
+    const loc = branch ? branch.location : client.location;
+    const expDate = formatToYYYYMMDD(client.expiryDate || client.endDate || formData.expiryDate || '');
+    const currentMonthYear = `${new Date().toLocaleString('default', { month: 'long' })} ${new Date().getFullYear()}`;
+
+    setFormData(prev => ({
+      ...prev,
+      dboName: client.clientName || prev.dboName,
+      premiseName: pName || prev.premiseName,
+      permitNo: pNo || prev.permitNo,
+      location: loc || prev.location,
+      category: mappedCategory || prev.category,
+      contacts: client.tel || prev.contacts,
+      expiryDate: expDate || prev.expiryDate,
+      county: toSentenceCase(client.county || prev.county || 'Kericho'),
+      distPermitNo: prev.distPermitNo || pNo,
+      validationPeriod: prev.validationPeriod || currentMonthYear
+    }));
+
+    setSelectedClient(client);
+    setDboHasBranches(!!(client.branches && client.branches.length > 0));
+    if (isBranch && branch) {
+      setValidationPremiseMode(`branch-${branch.id}`);
+    } else {
+      setValidationPremiseMode('main');
+    }
+
+    setActiveRegistryField(null);
+    setRegistrySuggestions([]);
+    setHasAutofilledDbo(true);
+    setIsCheckingDbo(false);
+    setLastDboRecords([]);
+
+    // Clear failed fields for the 7 populated attributes
+    setFailedFields(prev => prev.filter(f => ![
+      'dboName', 'premiseName', 'permitNo', 'location', 'category', 'contacts', 'expiryDate', 'county'
+    ].includes(f)));
+  };
 
   const findMatchingClient = (pNo: string, name: string) => {
     if (clients.length === 0) return null;
@@ -2894,77 +3113,254 @@ export function DataValidationModule() {
   // Track manual edits to qtyDeclared so returns auto-injection doesn't overwrite user edits
   const [manuallyEditedQtyDeclared, setManuallyEditedQtyDeclared] = useState<Record<number, boolean>>({});
 
-  // Returns quantity injection pipeline
-  useEffect(() => {
+  // Returns quantity injection pipeline matching premise name & selected months
+  const runReturnsIngestion = (
+    salesList: SalesEntry[],
+    currentPremise: string,
+    currentDbo: string,
+    currentPermit: string,
+    clientObj: LicensedClient | null,
+    retData: ClientReturn[]
+  ): SalesEntry[] => {
     if (isBranchFacility) {
-      // Branches are not subject to quantity declared or returns injection
-      return;
+      return salesList;
     }
-    if ((!formData.dboName && !formData.premiseName && !formData.permitNo && !selectedClient) || returnsData.length === 0) return;
+    const hasIdentifier = currentPremise?.trim() || currentDbo?.trim() || currentPermit?.trim() || clientObj;
+    if (!hasIdentifier) {
+      return salesList;
+    }
+
+    return salesList.map((sale, sIdx) => {
+      if (!sale.month || !sale.year) return sale;
+      // If user has explicitly edited this month's declared quantity, preserve their input
+      if (manuallyEditedQtyDeclared[sIdx]) return sale;
+
+      const matchingReturn = findMatchingReturn(
+        sale.month,
+        sale.year,
+        currentDbo,
+        currentPremise,
+        currentPermit,
+        clientObj,
+        retData
+      );
+
+      const targetQty = matchingReturn && matchingReturn.qty !== undefined && matchingReturn.qty !== null && !isNaN(Number(matchingReturn.qty))
+        ? Number(matchingReturn.qty).toString()
+        : 'Not filed';
+
+      const isNumeric = targetQty !== 'Not filed' && targetQty !== 'Not Filed' && targetQty.trim() !== '';
+
+      return {
+        ...sale,
+        qtyDeclared: targetQty,
+        verifiedQty: sale.verifiedQty && sale.verifiedQty !== '0' && sale.verifiedQty !== sale.qtyDeclared ? sale.verifiedQty : (isNumeric ? targetQty : (sale.verifiedQty || '0')),
+        avgVolPerDay: isNumeric ? (parseFloat(targetQty) / 30).toFixed(2).replace(/\.?0+$/, '') : (sale.avgVolPerDay || '0')
+      };
+    });
+  };
+
+  const handleManualIngestReturns = () => {
+    setManuallyEditedQtyDeclared({});
+    setFormData(prev => ({
+      ...prev,
+      sales: runReturnsIngestion(prev.sales, prev.premiseName, prev.dboName, prev.permitNo, selectedClient, returnsData)
+    }));
+    setStatus({
+      type: 'success',
+      message: 'Monthly returns ingested from Returns Registry for current premise and selected months.'
+    });
+  };
+
+  // Reactive Returns quantity injection pipeline
+  useEffect(() => {
+    if (isBranchFacility) return;
+    const hasIdentifier = formData.premiseName?.trim() || formData.dboName?.trim() || formData.permitNo?.trim() || selectedClient;
+    if (!hasIdentifier) return;
 
     setFormData(prev => {
-      let hasChanged = false;
-      const updatedSales = prev.sales.map((sale, sIdx) => {
-        if (!sale.month || !sale.year) {
-          return sale;
-        }
+      const updatedSales = runReturnsIngestion(
+        prev.sales,
+        prev.premiseName,
+        prev.dboName,
+        prev.permitNo,
+        selectedClient,
+        returnsData
+      );
 
-        // If officer has manually edited this month's declared quantity, do not overwrite it
-        if (manuallyEditedQtyDeclared[sIdx]) {
-          return sale;
-        }
-
-        const matchingReturn = findMatchingReturn(
-          sale.month,
-          sale.year,
-          prev.dboName,
-          prev.premiseName,
-          prev.permitNo,
-          selectedClient,
-          returnsData
-        );
-
-        const targetQty = matchingReturn && matchingReturn.qty !== undefined && matchingReturn.qty !== null && !isNaN(Number(matchingReturn.qty))
-          ? Number(matchingReturn.qty).toString()
-          : 'Not Filed';
-
-        const isTargetNumeric = targetQty !== 'Not Filed' && targetQty.trim() !== '';
-
-        if (isTargetNumeric) {
-          if (sale.qtyDeclared !== targetQty) {
-            hasChanged = true;
-            return { 
-              ...sale, 
-              qtyDeclared: targetQty,
-              verifiedQty: sale.verifiedQty && sale.verifiedQty !== '0' && sale.verifiedQty !== sale.qtyDeclared ? sale.verifiedQty : targetQty,
-              avgVolPerDay: (parseFloat(targetQty) / 30).toFixed(2).replace(/\.?0+$/, '')
-            };
-          }
-        } else {
-          if (sale.qtyDeclared !== 'Not Filed') {
-            hasChanged = true;
-            return { 
-              ...sale, 
-              qtyDeclared: 'Not Filed',
-              verifiedQty: sale.verifiedQty && sale.verifiedQty !== '0' && sale.verifiedQty !== sale.qtyDeclared ? sale.verifiedQty : '0',
-              avgVolPerDay: '0'
-            };
-          }
-        }
-        return sale;
-      });
-
+      const hasChanged = updatedSales.some((s, i) => s.qtyDeclared !== prev.sales[i]?.qtyDeclared);
       if (hasChanged) {
         return { ...prev, sales: updatedSales };
       }
       return prev;
     });
-  }, [formData.dboName, formData.premiseName, formData.permitNo, selectedClient, returnsData, formData.sales, manuallyEditedQtyDeclared, isBranchFacility]);
+  }, [
+    formData.premiseName,
+    formData.dboName,
+    formData.permitNo,
+    selectedClient,
+    returnsData,
+    formData.sales.map(s => `${s.month}-${s.year}`).join(','),
+    manuallyEditedQtyDeclared,
+    isBranchFacility
+  ]);
+
+  // 7-Point Reconciliation Pre-Flight Runner
+  const handleOpen7PointRecon = () => {
+    let targetClient: LicensedClient | null = selectedClient;
+    if (!targetClient && clients.length > 0) {
+      targetClient = findMatchingClient(formData.permitNo, formData.dboName) ||
+        clients.find(c => {
+          const cPrem = normStr(c.premiseName);
+          const fPrem = normStr(formData.premiseName);
+          return fPrem && cPrem && (fPrem.includes(cPrem) || cPrem.includes(fPrem));
+        }) || null;
+      if (targetClient) {
+        setSelectedClient(targetClient);
+      }
+    }
+
+    if (!targetClient) {
+      setReconStatus({
+        type: 'no-client',
+        message: 'No client from the registry is linked yet. Enter or select a DBO Name or Premise Name to reconcile.'
+      });
+      setMismatchFields([]);
+      setIsReconModalOpen(true);
+      return;
+    }
+
+    const activeBranch = validationPremiseMode.startsWith('branch-')
+      ? (targetClient.branches || []).find(b => `branch-${b.id}` === validationPremiseMode)
+      : null;
+
+    const expectedPremiseName = activeBranch ? activeBranch.premiseName : targetClient.premiseName;
+    const expectedPermitNo = (activeBranch ? activeBranch.permitNumber : targetClient.permitNumber) || targetClient.id || '';
+    const expectedLocation = activeBranch ? activeBranch.location : targetClient.location;
+
+    let expectedCategory = targetClient.premiseCategory || '';
+    if (expectedCategory === 'Cooling Plant') {
+      expectedCategory = (targetClient.coolingCapacity && targetClient.coolingCapacity >= 5000) ? 'CP>5,000 L/D' : 'CP<5,000 L/D';
+    }
+
+    const expectedContacts = targetClient.tel || '';
+    const expectedExpiry = formatToYYYYMMDD(targetClient.expiryDate || targetClient.endDate || '');
+
+    const checkPoints: Array<{
+      key: 'dboName' | 'premiseName' | 'permitNo' | 'location' | 'category' | 'contacts' | 'expiryDate';
+      label: string;
+      validationVal: string;
+      clientVal: string;
+    }> = [
+      { key: 'dboName', label: 'Name of DBO', validationVal: (formData.dboName || '').trim(), clientVal: (targetClient.clientName || '').trim() },
+      { key: 'premiseName', label: 'Premise Name', validationVal: (formData.premiseName || '').trim(), clientVal: (expectedPremiseName || '').trim() },
+      { key: 'permitNo', label: 'Permit Number', validationVal: (formData.permitNo || '').trim(), clientVal: (expectedPermitNo || '').trim() },
+      { key: 'location', label: 'Physical Location', validationVal: (formData.location || '').trim(), clientVal: (expectedLocation || '').trim() },
+      { key: 'category', label: 'Permit Category', validationVal: (formData.category || '').trim(), clientVal: (expectedCategory || '').trim() },
+      { key: 'contacts', label: 'Contact Numbers', validationVal: (formData.contacts || '').trim(), clientVal: (expectedContacts || '').trim() },
+      { key: 'expiryDate', label: 'Permit Expiry Date', validationVal: (formData.expiryDate || '').trim(), clientVal: (expectedExpiry || '').trim() }
+    ];
+
+    const mismatches = checkPoints
+      .filter(pt => normStr(pt.validationVal) !== normStr(pt.clientVal))
+      .map(pt => ({
+        ...pt,
+        selectedVal: (pt.validationVal ? 'validation' : 'client') as 'validation' | 'client'
+      }));
+
+    setMismatchFields(mismatches);
+    if (mismatches.length === 0) {
+      setReconStatus({ type: 'match', message: 'All 7 data points match the clients registry perfectly (100% Match).' });
+    } else {
+      setReconStatus({ type: 'mismatch', message: `${mismatches.length} of 7 data points differ between validation form and clients registry.` });
+    }
+
+    setIsReconModalOpen(true);
+  };
+
+  // Synchronize Authoritative Source of Truth to BOTH form and client row in licensed_clients
+  const handleApplyReconciliation = async () => {
+    if (!selectedClient) return;
+
+    try {
+      setIsApplyingRecon(true);
+      const updatedForm = { ...formData };
+      const updatedClient: LicensedClient = { ...selectedClient };
+
+      mismatchFields.forEach(field => {
+        const valToKeep = field.selectedVal === 'validation' ? field.validationVal : field.clientVal;
+        (updatedForm as any)[field.key] = valToKeep;
+
+        if (field.key === 'dboName') updatedClient.clientName = valToKeep;
+        if (field.key === 'premiseName') {
+          if (validationPremiseMode.startsWith('branch-') && updatedClient.branches) {
+            const bId = validationPremiseMode.replace('branch-', '');
+            updatedClient.branches = updatedClient.branches.map(b => b.id === bId ? { ...b, premiseName: valToKeep } : b);
+          } else {
+            updatedClient.premiseName = valToKeep;
+          }
+        }
+        if (field.key === 'permitNo') {
+          if (validationPremiseMode.startsWith('branch-') && updatedClient.branches) {
+            const bId = validationPremiseMode.replace('branch-', '');
+            updatedClient.branches = updatedClient.branches.map(b => b.id === bId ? { ...b, permitNumber: valToKeep } : b);
+          } else {
+            updatedClient.permitNumber = valToKeep;
+          }
+        }
+        if (field.key === 'location') {
+          if (validationPremiseMode.startsWith('branch-') && updatedClient.branches) {
+            const bId = validationPremiseMode.replace('branch-', '');
+            updatedClient.branches = updatedClient.branches.map(b => b.id === bId ? { ...b, location: valToKeep } : b);
+          } else {
+            updatedClient.location = valToKeep;
+          }
+        }
+        if (field.key === 'category') {
+          if (['Milk Bar', 'Dispenser', 'Cooling Plant', 'Mini Dairy', 'Cottage Industry', 'Processor'].includes(valToKeep)) {
+            updatedClient.premiseCategory = valToKeep as any;
+          } else if (valToKeep.startsWith('CP')) {
+            updatedClient.premiseCategory = 'Cooling Plant';
+          }
+        }
+        if (field.key === 'contacts') updatedClient.tel = valToKeep;
+        if (field.key === 'expiryDate') updatedClient.expiryDate = valToKeep;
+      });
+
+      // Synchronize into both form state and existing client row in licensed_clients
+      setFormData(updatedForm);
+      await DBService.saveClient(updatedClient);
+
+      setSelectedClient(updatedClient);
+      setClients(prev => prev.map(c => c.id === updatedClient.id ? updatedClient : c));
+
+      setFailedFields(prev => prev.filter(f => ![
+        'dboName', 'premiseName', 'permitNo', 'location', 'category', 'contacts', 'expiryDate'
+      ].includes(f)));
+
+      setIsReconModalOpen(false);
+      setStatus({
+        type: 'success',
+        message: '7-Point Reconciliation Successful: Synchronized source of truth to validation form and clients registry.'
+      });
+    } catch (err: any) {
+      console.error('[7-Point Recon] Error applying reconciliation:', err);
+      setStatus({
+        type: 'error',
+        message: `Failed to synchronize reconciliation: ${err?.message || err}`
+      });
+    } finally {
+      setIsApplyingRecon(false);
+    }
+  };
 
   // Re-fetch returnsData when step changes or client changes to keep absolute sync
   useEffect(() => {
     if (step === 1 || step === 2) {
       DBService.getReturns().then(r => setReturnsData(r)).catch(() => {});
+      if (clients.length === 0) {
+        DBService.getClients().then(c => setClients(c)).catch(() => {});
+      }
     }
   }, [step, selectedClient]);
 
@@ -5869,10 +6265,30 @@ export function DataValidationModule() {
                   exit={{ opacity: 0, x: -20 }}
                   className="space-y-6"
                 >
-                  <div className="flex items-center justify-between gap-3 mb-6 pb-3 border-b border-gray-100">
+                  <div className="flex items-center justify-between gap-3 mb-6 pb-3 border-b border-gray-100 flex-wrap">
                     <div className="flex items-center gap-2">
                       <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">1</div>
-                      <h2 className="text-lg font-bold text-gray-900">General Information</h2>
+                      <div>
+                        <h2 className="text-lg font-bold text-gray-900">General Information</h2>
+                        <p className="text-[11px] text-gray-500 font-medium">Facility profile, licensing details, and 7-point client reconciliation</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpen7PointRecon}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs transition-all shadow-sm cursor-pointer"
+                        title="Open 7-Point Reconciliation Pre-Flight Modal"
+                        id="seven-point-recon-btn"
+                      >
+                        <GitCompare className="w-3.5 h-3.5" />
+                        <span>7-Point Recon</span>
+                        {selectedClient && (
+                          <span className="text-[9px] bg-white/20 px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider">
+                            Linked
+                          </span>
+                        )}
+                      </button>
                     </div>
                   </div>
 
@@ -5959,17 +6375,69 @@ export function DataValidationModule() {
                       />
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Name of DBO</label>
+                    <div className="space-y-2 relative registry-dropdown-container">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Name of DBO</label>
+                        {selectedClient && (
+                          <span className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-bold">
+                            Registry Linked
+                          </span>
+                        )}
+                      </div>
                       <input
                         type="text"
                         name="dboName"
                         value={formData.dboName}
                         onChange={handleChange}
+                        onFocus={() => setActiveRegistryField('dbo')}
                         onBlur={handleInputBlur}
                         className={getInputClass('dboName')}
-                        placeholder="Enter DBO name..."
+                        placeholder="Enter DBO name (auto-populates from registry)..."
+                        autoComplete="off"
                       />
+                      {activeRegistryField === 'dbo' && registrySuggestions.length > 0 && (
+                        <div className="absolute left-0 right-0 top-full mt-1 z-40 bg-white rounded-2xl shadow-xl border border-blue-200 overflow-hidden max-h-64 overflow-y-auto">
+                          <div className="p-2.5 bg-blue-50/80 border-b border-blue-100 flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
+                              <Database className="w-3.5 h-3.5 text-blue-600" />
+                              Clients Registry Matches ({registrySuggestions.length})
+                            </span>
+                            <span className="text-[9px] text-blue-600 font-semibold">Click to auto-populate all 7 fields</span>
+                          </div>
+                          <div className="divide-y divide-slate-100">
+                            {registrySuggestions.map((item, index) => (
+                              <button
+                                key={index}
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleSelectRegistrySuggestion(item);
+                                }}
+                                className="w-full text-left p-3 hover:bg-blue-50/70 transition-all flex flex-col gap-1 cursor-pointer group"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-bold text-slate-900 group-hover:text-blue-700 truncate">
+                                    {item.displayName}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-blue-800 bg-blue-100/70 px-1.5 py-0.5 rounded font-bold shrink-0">
+                                    {item.category}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 flex items-center justify-between gap-2">
+                                  <span className="truncate">Premise: <strong className="text-slate-800">{item.premiseName}</strong></span>
+                                  <span className="text-[9px] font-mono bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                                    Permit: {item.permitNo || 'N/A'}
+                                  </span>
+                                </div>
+                                <div className="text-[9px] text-slate-400 flex items-center justify-between">
+                                  <span className="truncate">Location: {item.location}</span>
+                                  {item.contacts && <span>Tel: {item.contacts}</span>}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {isCheckingDbo && (
                         <p className="text-[10px] text-blue-500 font-medium mt-1 flex items-center gap-1 animate-pulse">
                           <Loader2 className="w-3 h-3 animate-spin" />
@@ -6152,16 +6620,25 @@ export function DataValidationModule() {
                         )}
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Premise Name</label>
+                    <div className="space-y-2 relative registry-dropdown-container">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Premise Name</label>
+                        {formData.premiseName && selectedClient && (
+                          <span className="text-[9px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded font-bold">
+                            {validationPremiseMode.startsWith('branch-') ? 'Branch Premise' : 'Main Premise'}
+                          </span>
+                        )}
+                      </div>
                       <div className="relative">
                         <input
                           type="text"
                           name="premiseName"
                           value={formData.premiseName}
                           onChange={handleChange}
+                          onFocus={() => setActiveRegistryField('premise')}
                           className={getInputClass('premiseName', 'pr-10')}
-                          placeholder="Type premise name to check history..."
+                          placeholder="Type premise name (auto-populates from registry)..."
+                          autoComplete="off"
                         />
                         {isCheckingHistory && (
                           <div className="absolute right-3 top-2.5">
@@ -6169,6 +6646,56 @@ export function DataValidationModule() {
                           </div>
                         )}
                       </div>
+
+                      {/* Clients Registry Dropdown Suggestions */}
+                      {activeRegistryField === 'premise' && registrySuggestions.length > 0 && (
+                        <div className="absolute left-0 right-0 top-full mt-1 z-40 bg-white rounded-2xl shadow-xl border border-blue-200 overflow-hidden max-h-64 overflow-y-auto">
+                          <div className="p-2.5 bg-blue-50/80 border-b border-blue-100 flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
+                              <Database className="w-3.5 h-3.5 text-blue-600" />
+                              Registry Matches ({registrySuggestions.length})
+                            </span>
+                            <span className="text-[9px] text-blue-600 font-semibold">Click to auto-populate all 7 fields</span>
+                          </div>
+                          <div className="divide-y divide-slate-100">
+                            {registrySuggestions.map((item, index) => (
+                              <button
+                                key={index}
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  handleSelectRegistrySuggestion(item);
+                                }}
+                                className="w-full text-left p-3 hover:bg-blue-50/70 transition-all flex flex-col gap-1 cursor-pointer group"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-bold text-slate-900 group-hover:text-blue-700 truncate">
+                                    {item.premiseName}
+                                    {item.isBranch && (
+                                      <span className="ml-1.5 text-[9px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">
+                                        Branch
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-blue-800 bg-blue-100/70 px-1.5 py-0.5 rounded font-bold shrink-0">
+                                    {item.category}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 flex items-center justify-between gap-2">
+                                  <span className="truncate">DBO: <strong className="text-slate-800">{item.client.clientName}</strong></span>
+                                  <span className="text-[9px] font-mono bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                                    Permit: {item.permitNo || 'N/A'}
+                                  </span>
+                                </div>
+                                <div className="text-[9px] text-slate-400 flex items-center justify-between">
+                                  <span className="truncate">Location: {item.location}</span>
+                                  {item.contacts && <span>Tel: {item.contacts}</span>}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       
                       {/* History Banner */}
                       <AnimatePresence>
@@ -7054,9 +7581,20 @@ export function DataValidationModule() {
                         )}
                       </div>
                       {formData.hasLocalSales && (
-                        <button
-                          type="button"
-                          onClick={() => {
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={handleManualIngestReturns}
+                            className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                            title="Ingest monthly return figures from Returns Registry for current premise and selected months"
+                            id="ingest-returns-btn"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+                            <span>Ingest Returns</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
                             // Compute default selling price from section settings
                             const activeProducts = formData.natureOfProduce.length > 0 ? formData.natureOfProduce : ['Raw Milk'];
                             const defaultSellingObj: Record<string, string> = {};
@@ -7091,7 +7629,8 @@ export function DataValidationModule() {
                         >
                           + Add Month ({formData.sales.length})
                         </button>
-                      )}
+                      </div>
+                    )}
                     </div>
 
                     {/* Section: Universal Buying Price & Product-Specific Selling Prices Configuration */}
@@ -10089,6 +10628,253 @@ export function DataValidationModule() {
             </div>
           </div>
         )}
+
+        {/* 7-Point Reconciliation Pre-Flight Modal */}
+        <AnimatePresence>
+          {isReconModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className="bg-white rounded-3xl p-6 sm:p-7 max-w-2xl w-full shadow-2xl border border-slate-100 space-y-5 my-8 max-h-[90vh] flex flex-col"
+              >
+                {/* Modal Header */}
+                <div className="flex items-start justify-between border-b border-slate-100 pb-3.5 shrink-0">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-xs shrink-0">
+                      <GitCompare className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                        <span>7-Point Client Registry Reconciliation</span>
+                        {mismatchFields.length === 0 && selectedClient && (
+                          <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                            100% Match
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-xs text-slate-500 font-medium mt-0.5">
+                        Pre-flight cross-verification between Data Validation and Master Clients Registry
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsReconModalOpen(false)}
+                    className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+                  {/* Branch Differentiation & Facility Context */}
+                  {selectedClient ? (
+                    <div className="p-4 bg-blue-50/70 rounded-2xl border border-blue-100 space-y-2 text-xs">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <span className="font-extrabold text-blue-950 flex items-center gap-1.5">
+                          <Building2 className="w-4 h-4 text-blue-600" />
+                          <span>Registered Client: {selectedClient.clientName}</span>
+                        </span>
+                        <span className="text-[10px] font-mono font-bold bg-blue-200/70 text-blue-900 px-2 py-0.5 rounded-md">
+                          Permit: {selectedClient.permitNumber || selectedClient.id || 'N/A'}
+                        </span>
+                      </div>
+                      
+                      {/* Branch Differentiation Banner */}
+                      <div className="pt-2 border-t border-blue-200/50 flex flex-col gap-1 text-[11px] text-blue-800">
+                        <div className="flex items-center justify-between">
+                          <span>Primary HQ / Premise: <strong>{selectedClient.premiseName}</strong> ({selectedClient.location})</span>
+                          <span className="font-bold text-blue-900">
+                            Mode: {validationPremiseMode.startsWith('branch-') ? 'Validating Branch Station' : 'Validating Main HQ'}
+                          </span>
+                        </div>
+                        {selectedClient.branches && selectedClient.branches.length > 0 && (
+                          <div className="mt-1 p-2 bg-white/80 rounded-xl border border-blue-200/60">
+                            <span className="font-bold text-[10px] uppercase text-blue-900 flex items-center gap-1">
+                              <Store className="w-3 h-3 text-blue-600" />
+                              Associated Branches ({selectedClient.branches.length}):
+                            </span>
+                            <div className="flex flex-wrap gap-1.5 mt-1">
+                              {selectedClient.branches.map(br => (
+                                <span key={br.id} className="text-[10px] bg-blue-100/70 text-blue-900 px-2 py-0.5 rounded-md font-semibold">
+                                  {br.premiseName} ({br.location}, Permit: {br.permitNumber})
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-xs text-amber-900 space-y-2">
+                      <p className="font-bold flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>No Client Selected from Registry</span>
+                      </p>
+                      <p className="text-[11px] text-amber-800">
+                        Please type a DBO Name or Premise Name on Step 1 to link a client from the registry, or pick from the list below:
+                      </p>
+                      {clients.length > 0 && (
+                        <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto mt-2">
+                          {clients.slice(0, 5).map(c => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => {
+                                handleSelectRegistrySuggestion({
+                                  client: c,
+                                  isBranch: false,
+                                  displayName: c.clientName,
+                                  premiseName: c.premiseName,
+                                  permitNo: c.permitNumber || c.id || '',
+                                  category: c.premiseCategory,
+                                  location: c.location,
+                                  contacts: c.tel || '',
+                                  expiryDate: formatToYYYYMMDD(c.expiryDate || c.endDate || '')
+                                });
+                                setReconStatus(null);
+                                setMismatchFields([]);
+                              }}
+                              className="text-left p-2 rounded-lg bg-white border border-amber-200 hover:border-blue-400 hover:bg-blue-50/50 text-[11px] font-bold text-slate-800 flex justify-between items-center cursor-pointer"
+                            >
+                              <span>{c.clientName} — {c.premiseName}</span>
+                              <span className="text-[9px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-mono">
+                                {c.permitNumber || c.id}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Status Banner */}
+                  {selectedClient && mismatchFields.length === 0 ? (
+                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center gap-3 text-emerald-900">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <div>
+                        <p className="text-xs font-black">All 7 Parameters Reconciled (100% Match)</p>
+                        <p className="text-[11px] text-emerald-800 mt-0.5">
+                          Name of DBO, Premise Name, Permit Number, Physical Location, Permit Category, Contact Numbers, and Permit Expiry Date match the master client record with complete fidelity.
+                        </p>
+                      </div>
+                    </div>
+                  ) : selectedClient && mismatchFields.length > 0 ? (
+                    <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-2.5 text-amber-900 text-xs">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">
+                          {mismatchFields.length} Discrepanc{mismatchFields.length > 1 ? 'ies' : 'y'} Detected
+                        </p>
+                        <p className="text-[11px] text-amber-800 mt-0.5">
+                          Select the authoritative source of truth for each differing field below. Clicking <strong>Apply & Synchronize</strong> will overwrite both this validation form and the master client row in <code>licensed_clients</code>.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Side-by-Side Mismatch Selection Cards */}
+                  {selectedClient && mismatchFields.length > 0 && (
+                    <div className="space-y-3">
+                      <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                        Reconciliation Parameters ({mismatchFields.length} Differences):
+                      </p>
+                      <div className="space-y-2.5">
+                        {mismatchFields.map((field, idx) => (
+                          <div key={field.key} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-800">{field.label}</span>
+                              <span className="text-[10px] font-bold text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-full">
+                                Needs Decision
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {/* Option 1: Keep Validation Form Value */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMismatchFields(prev => prev.map((f, i) => i === idx ? { ...f, selectedVal: 'validation' } : f));
+                                }}
+                                className={`text-left p-2.5 rounded-xl border text-xs transition-all cursor-pointer ${
+                                  field.selectedVal === 'validation'
+                                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm ring-2 ring-blue-500/20'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-[10px] font-bold uppercase opacity-80">Validation Form:</span>
+                                  {field.selectedVal === 'validation' && <Check className="w-3.5 h-3.5 shrink-0" />}
+                                </div>
+                                <p className="font-bold mt-1 truncate">{field.validationVal || '(Empty)'}</p>
+                                <span className="text-[9px] opacity-75 block mt-0.5">Overwrite Registry with Form</span>
+                              </button>
+
+                              {/* Option 2: Adopt Clients Registry Value */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMismatchFields(prev => prev.map((f, i) => i === idx ? { ...f, selectedVal: 'client' } : f));
+                                }}
+                                className={`text-left p-2.5 rounded-xl border text-xs transition-all cursor-pointer ${
+                                  field.selectedVal === 'client'
+                                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm ring-2 ring-blue-500/20'
+                                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="text-[10px] font-bold uppercase opacity-80">Clients Registry:</span>
+                                  {field.selectedVal === 'client' && <Check className="w-3.5 h-3.5 shrink-0" />}
+                                </div>
+                                <p className="font-bold mt-1 truncate">{field.clientVal || '(Empty)'}</p>
+                                <span className="text-[9px] opacity-75 block mt-0.5">Adopt Registry into Form</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Footer Actions */}
+                <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 pt-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsReconModalOpen(false)}
+                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+                  >
+                    Close
+                  </button>
+
+                  {selectedClient && mismatchFields.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleApplyReconciliation}
+                      disabled={isApplyingRecon}
+                      className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {isApplyingRecon ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Synchronizing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>Apply & Synchronize</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         <footer className="mt-12 text-center text-gray-400 text-[10px] uppercase tracking-widest pb-8">
           &copy; {new Date().getFullYear()} Kenya Dairy Board &bull; Quality Milk for Health and Wealth
