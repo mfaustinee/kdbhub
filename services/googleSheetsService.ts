@@ -111,6 +111,27 @@ export const DATA_VALIDATION_SPREADSHEET_ID_KEY = 'kdb_data_validation_spreadshe
 export const CLIENTS_TAB_STORAGE_KEY = 'kdb_google_clients_tab';
 export const RETURNS_TAB_STORAGE_KEY = 'kdb_google_returns_tab';
 
+export interface GoogleSyncState {
+  isSyncing: boolean;
+  lastSyncTime: string | null;
+  clientsCount: number;
+  returnsCount: number;
+  status: 'idle' | 'syncing' | 'synced' | 'error';
+  errorMessage?: string;
+}
+
+let currentSyncState: GoogleSyncState = {
+  isSyncing: false,
+  lastSyncTime: null,
+  clientsCount: 0,
+  returnsCount: 0,
+  status: 'idle'
+};
+
+const syncListeners = new Set<(state: GoogleSyncState) => void>();
+let heartbeatTimer: any = null;
+let lastAutoSyncTimestamp = 0;
+
 export const GoogleSheetsService = {
   // Utility to clean raw ID or URL
   cleanSpreadsheetId(idOrUrl: string): string {
@@ -1037,6 +1058,107 @@ export const GoogleSheetsService = {
         throw new Error('Google Sheets sync timed out after 25 seconds. Please verify your internet connection or spreadsheet ID.');
       }
       throw err;
+    }
+  },
+
+  // ----------------------------------------------------------------------
+  // REAL-TIME AUTOMATIC SYNC & SUBSCRIPTION ENGINE
+  // ----------------------------------------------------------------------
+  getSyncState(): GoogleSyncState {
+    return { ...currentSyncState };
+  },
+
+  subscribeSync(listener: (state: GoogleSyncState) => void): () => void {
+    syncListeners.add(listener);
+    // Emit current state immediately to new subscriber
+    listener({ ...currentSyncState });
+    return () => {
+      syncListeners.delete(listener);
+    };
+  },
+
+  notifySyncListeners() {
+    const stateCopy = { ...currentSyncState };
+    syncListeners.forEach(listener => {
+      try {
+        listener(stateCopy);
+      } catch (err) {
+        console.warn('[GoogleSheetsService] Listener notification error:', err);
+      }
+    });
+  },
+
+  // Unified Auto Sync with live event dispatching and DB cache update
+  async triggerAutoSync(spreadsheetId?: string): Promise<{ clients: LicensedClient[]; returns: ClientReturn[]; time: string }> {
+    currentSyncState = {
+      ...currentSyncState,
+      isSyncing: true,
+      status: 'syncing',
+      errorMessage: undefined
+    };
+    this.notifySyncListeners();
+
+    try {
+      const result = await this.syncClientsAndReturns(spreadsheetId);
+
+      // Lazily persist to DBService without static circular dependencies
+      try {
+        const { DBService } = await import('./db');
+        if (result.clients && result.clients.length > 0) {
+          await DBService.saveClientsBulk(result.clients, true);
+        }
+        if (result.returns && result.returns.length > 0) {
+          await DBService.saveReturnsBulk(result.returns, true);
+        }
+        DBService.clearMemoryCache('clients');
+        DBService.clearMemoryCache('returns');
+      } catch (dbErr) {
+        console.warn('[GoogleSheetsService] Local DB persistence notice:', dbErr);
+      }
+
+      const syncTime = result.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      lastAutoSyncTimestamp = Date.now();
+
+      currentSyncState = {
+        isSyncing: false,
+        lastSyncTime: syncTime,
+        clientsCount: result.clients.length,
+        returnsCount: result.returns.length,
+        status: 'synced',
+        errorMessage: undefined
+      };
+      this.notifySyncListeners();
+
+      // Dispatch real-time global event for cross-module reactive updates
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kdb:google-sheets-synced', {
+          detail: {
+            clients: result.clients,
+            returns: result.returns,
+            time: syncTime
+          }
+        }));
+      }
+
+      return result;
+    } catch (err: any) {
+      console.warn('[GoogleSheetsService] Auto-sync notice:', err);
+      currentSyncState = {
+        ...currentSyncState,
+        isSyncing: false,
+        status: 'error',
+        errorMessage: err.message || 'Failed to sync with Google Sheets'
+      };
+      this.notifySyncListeners();
+      throw err;
+    }
+  },
+
+  // Background heartbeat disabled: one-off sync on app start and manual sync are used per requirement
+  startRealtimeHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
     }
   }
 };

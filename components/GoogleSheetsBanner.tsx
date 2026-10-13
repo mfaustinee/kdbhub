@@ -88,6 +88,22 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
 
   useEffect(() => {
     loadSheetIds();
+    const unsub = GoogleSheetsService.subscribeSync((syncState) => {
+      setIsSyncing(syncState.isSyncing);
+      if (syncState.lastSyncTime) setLastSyncTime(syncState.lastSyncTime);
+      if (syncState.status === 'synced' && syncState.clientsCount > 0) {
+        setStatusMessage({
+          text: `Live Sync Active: ${syncState.clientsCount} clients and ${syncState.returnsCount.toLocaleString()} returns synced from Sheet 1 at ${syncState.lastSyncTime}.`,
+          type: 'success'
+        });
+      } else if (syncState.status === 'error' && syncState.errorMessage) {
+        setStatusMessage({
+          text: syncState.errorMessage,
+          type: 'error'
+        });
+      }
+    });
+    return () => unsub();
   }, []);
 
   const isSheet1Connected = Boolean(sheet1Id && sheet1Id.trim());
@@ -96,36 +112,16 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
   // Headless sync for Clients & Returns (Sheet 1) - Zero Google Sign-In Required!
   const handleSyncClientsAndReturns = async () => {
     const effectiveSheet1Id = sheet1Id || GoogleSheetsService.getClientsSpreadsheetId();
-
-    setIsSyncing(true);
     setStatusMessage(null);
 
     try {
-      // Direct headless sync using backend Service Account
-      const result = await GoogleSheetsService.syncClientsAndReturns(effectiveSheet1Id || undefined);
-
-      // Save to local and Supabase DB caches with skipGoogleSheetsSync: true
-      if (result.clients && result.clients.length > 0) {
-        try {
-          await DBService.saveClientsBulk(result.clients, true);
-        } catch (_) {}
-      }
-      if (result.returns && result.returns.length > 0) {
-        try {
-          await DBService.saveReturnsBulk(result.returns, true);
-        } catch (_) {}
-      }
-
-      DBService.clearMemoryCache('clients');
-      DBService.clearMemoryCache('returns');
-
+      const result = await GoogleSheetsService.triggerAutoSync(effectiveSheet1Id || undefined);
       const now = result.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setLastSyncTime(now);
       setStatusMessage({ 
         text: `Sync complete! Successfully ingested ${result.clients.length} clients and ${result.returns.length} returns from Sheet 1 at ${now}.`, 
         type: 'success' 
       });
-
       onSyncComplete?.();
     } catch (err: any) {
       console.error('Clients & Returns sync error:', err);
@@ -133,8 +129,6 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
         text: err.message || 'Failed to sync Clients & Returns from Google Sheet 1.', 
         type: 'error' 
       });
-    } finally {
-      setIsSyncing(false);
     }
   };
 

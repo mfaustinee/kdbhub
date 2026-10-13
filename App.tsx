@@ -13,9 +13,9 @@ import { ClosureForm } from './components/ClosureForm.tsx';
 import { DboSigningPortal } from './components/DboSigningPortal.tsx';
 import { useAuth } from './src/contexts/AuthContext.tsx';
 import { AgreementData, DebtorRecord, ArrearItem, StaffConfig, ClosureNotificationData, LicensedClient } from './types.ts';
-import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp, FileSpreadsheet } from 'lucide-react';
+import { ShieldCheck, User, ClipboardList, Cloud, CloudOff, Loader2, LogOut, Lock, ClipboardCheck, ArrowUp, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import { DBService } from './services/db.ts';
-import { GoogleSheetsService } from './services/googleSheetsService.ts';
+import { GoogleSheetsService, GoogleSyncState } from './services/googleSheetsService.ts';
 import { isSupabaseDisabled } from './components/lib/supabase.ts';
 import { numberToWords } from './utils/numberToWords.ts';
 import { ScrollToTopButton } from './components/ScrollToTopButton.tsx';
@@ -34,6 +34,7 @@ const App: React.FC = () => {
   }, [agreements, closures]);
 
   const [isSyncing, setIsSyncing] = useState(false);
+  const [googleSyncState, setGoogleSyncState] = useState<GoogleSyncState>(GoogleSheetsService.getSyncState());
   const [staffConfig, setStaffConfig] = useState<StaffConfig>({
     officialSignature: '',
     enabledModules: {
@@ -46,7 +47,35 @@ const App: React.FC = () => {
 
   useEffect(() => {
     loadDatabase();
-    GoogleSheetsService.initFromBackend().catch(() => {});
+
+    // Subscribe to real-time Google Sheets sync state updates
+    const unsubscribeGoogle = GoogleSheetsService.subscribeSync((state) => {
+      setGoogleSyncState(state);
+    });
+
+    // Automatic one-off Google Sheet sync for returns and clients once the app starts!
+    GoogleSheetsService.initFromBackend().then(() => {
+      GoogleSheetsService.triggerAutoSync().then((res) => {
+        if (res.clients && res.clients.length > 0) {
+          setClients(res.clients);
+        }
+      }).catch((err) => {
+        console.warn("[App] Automatic Google Sheets initial sync notice:", err);
+      });
+    }).catch(() => {});
+
+    // Listen for real-time global event when new clients or returns arrive from sync
+    const handleGoogleSynced = (e: any) => {
+      if (e.detail?.clients && Array.isArray(e.detail.clients)) {
+        setClients(e.detail.clients);
+      }
+    };
+    window.addEventListener('kdb:google-sheets-synced', handleGoogleSynced);
+
+    return () => {
+      unsubscribeGoogle();
+      window.removeEventListener('kdb:google-sheets-synced', handleGoogleSynced);
+    };
   }, []);
 
   // Cross-device synchronization engine: Supabase Realtime channel + focus/visibility revalidation + heartbeat
@@ -462,6 +491,7 @@ const App: React.FC = () => {
 
   const isSigningPortal = location.pathname.startsWith('/sign-validation');
   const isStandaloneRoute = isSigningPortal || location.pathname === '/data-validation';
+  const isPublicPortal = ['/', '/portal', '/payment-agreement', '/closure-notice', '/scope-disclosure', '/sign-scope-disclosure', '/success'].includes(location.pathname) || isSigningPortal;
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-[#f5f5f4] text-[#1a1a1a]">
@@ -489,6 +519,50 @@ const App: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Google Sheets Sync Widget - Removed from public portal; visible only in authenticated admin views */}
+              {!isPublicPortal && isAdminAuthenticated && (
+                <div className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="font-bold text-[11px] text-slate-700">Google Sheets:</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {googleSyncState.isSyncing ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                        <RefreshCw className="w-3 h-3 text-amber-600 animate-spin" />
+                        <span>Syncing...</span>
+                      </span>
+                    ) : googleSyncState.status === 'synced' || googleSyncState.clientsCount > 0 ? (
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        <span>Synced ({googleSyncState.clientsCount} Clients • {googleSyncState.returnsCount.toLocaleString()} Returns)</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                        <span>Ready</span>
+                      </span>
+                    )}
+                    {googleSyncState.lastSyncTime && (
+                      <span className="text-[10px] text-slate-400 font-mono hidden xl:inline" title="Last synced timestamp">
+                        {googleSyncState.lastSyncTime}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        GoogleSheetsService.triggerAutoSync().catch(() => {});
+                      }}
+                      disabled={googleSyncState.isSyncing}
+                      className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-slate-200/60 rounded-md transition-colors cursor-pointer disabled:opacity-50"
+                      title="Click to sync with Google Sheets"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${googleSyncState.isSyncing ? 'animate-spin text-emerald-600' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+              )}
               
               <nav className="flex items-center space-x-1 sm:space-x-2">
                 <button 

@@ -6,6 +6,7 @@ import SignatureCanvas from 'react-signature-canvas';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase, viewPdf as sharedViewPdf, resolvePdfUrl } from './lib/supabase';
 import { DBService } from '../services/db';
+import { GoogleSheetsService, GoogleSyncState } from '../services/googleSheetsService';
 import { PreviousValidationsTracker } from './PreviousValidationsTracker';
 import { LicensedClient, ClientBranch, ClientReturn, DataValidation, ValidationDraft, formatDateToDDMMYYYY, formatPermitNumber, clampYear, AuthoritySignature, DboPremiseSignature, FieldChecklistResultStatus, TransactionReconciliationItem, ExceptionRegisterItem, ExceptionStatus, ScopeDisclosureRecord } from '../types';
 import { FieldChecklistComponent } from './FieldChecklistComponent';
@@ -21,6 +22,7 @@ import {
   ClipboardCheck, 
   BookmarkCheck,
   Database, 
+  FileSpreadsheet,
   CheckCircle2, 
   AlertCircle, 
   Loader2,
@@ -873,6 +875,7 @@ export function DataValidationModule() {
   const [selectedClient, setSelectedClient] = useState<LicensedClient | null>(null);
   const [validationPremiseMode, setValidationPremiseMode] = useState<string>('main');
   const [dboHasBranches, setDboHasBranches] = useState<boolean | null>(null);
+  const [googleSyncState, setGoogleSyncState] = useState<GoogleSyncState>(GoogleSheetsService.getSyncState());
 
   // 7-Point Reconciliation State
   const [isReconModalOpen, setIsReconModalOpen] = useState(false);
@@ -883,6 +886,7 @@ export function DataValidationModule() {
     validationVal: string;
     clientVal: string;
     selectedVal: 'validation' | 'client';
+    isMatch?: boolean;
   }>>([]);
   const [reconStatus, setReconStatus] = useState<{ type: 'match' | 'mismatch' | 'no-client'; message: string } | null>(null);
 
@@ -2678,7 +2682,7 @@ export function DataValidationModule() {
 
     // Match selected client for manual reconciliation trigger
     if (clients.length > 0) {
-      const matched = findMatchingClient(permitNo, record.dbo_name || '');
+      const matched = findMatchingClient(permitNo, record.dbo_name || '', record.premise_name || '');
       if (matched) {
         setSelectedClient(matched);
         setValidationPremiseMode('main');
@@ -2688,25 +2692,79 @@ export function DataValidationModule() {
   };
 
   const handleInputBlur = () => {
+    // Dismiss suggestions dropdown after slight delay allowing click events
+    setTimeout(() => {
+      setActiveRegistryField(null);
+    }, 250);
+
     if (clients.length === 0) return;
     
     const termPermit = (formData.permitNo || '').trim();
     const termDbo = (formData.dboName || '').trim();
+    const termPremise = (formData.premiseName || '').trim();
 
-    if (!termPermit && !termDbo) {
+    if (!termPermit && !termDbo && !termPremise) {
       setSelectedClient(null);
       setValidationPremiseMode('main');
       return;
     }
 
-    const matched = findMatchingClient(termPermit, termDbo);
+    const matched = findMatchingClient(termPermit, termDbo, termPremise);
 
     if (matched) {
       setSelectedClient(matched);
-      setValidationPremiseMode('main');
       if (dboHasBranches === null) {
         setDboHasBranches(!!(matched.branches && matched.branches.length > 0));
       }
+
+      let mappedCategory = matched.premiseCategory || '';
+      if (mappedCategory === 'Cooling Plant') {
+        mappedCategory = (matched.coolingCapacity && matched.coolingCapacity >= 5000) ? 'CP>5,000 L/D' : 'CP<5,000 L/D';
+      }
+      const expDate = formatToYYYYMMDD(matched.expiryDate || matched.endDate || '');
+
+      const cleanStr = (s: string) => (s || '').toLowerCase().trim();
+      const cleanPermit = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
+
+      // Check if premise or permit matched a specific branch
+      const matchingBranch = (matched.branches || []).find(b => {
+        const bPrem = cleanStr(b.premiseName);
+        const bPerm = cleanPermit(b.permitNumber || b.id || '');
+        return (termPremise && bPrem && (bPrem === cleanStr(termPremise) || bPrem.includes(cleanStr(termPremise)))) ||
+               (termPermit && bPerm && bPerm === cleanPermit(termPermit));
+      });
+
+      if (matchingBranch) {
+        setValidationPremiseMode(`branch-${matchingBranch.id}`);
+        setFormData(prev => ({
+          ...prev,
+          dboName: matched.clientName,
+          premiseName: matchingBranch.premiseName,
+          permitNo: matchingBranch.permitNumber || matched.permitNumber || matched.id || prev.permitNo,
+          location: matchingBranch.location || matched.location || prev.location,
+          category: matchingBranch.premiseCategory || mappedCategory || prev.category,
+          contacts: matched.tel || prev.contacts,
+          expiryDate: formatToYYYYMMDD(matchingBranch.expiryDate || expDate || prev.expiryDate),
+          county: toSentenceCase(matchingBranch.county || matched.county || prev.county || 'Kericho')
+        }));
+      } else {
+        setValidationPremiseMode('main');
+        setFormData(prev => ({
+          ...prev,
+          dboName: matched.clientName,
+          premiseName: matched.premiseName || prev.premiseName,
+          permitNo: matched.permitNumber || matched.id || prev.permitNo,
+          location: matched.location || prev.location,
+          category: mappedCategory || prev.category,
+          contacts: matched.tel || prev.contacts,
+          expiryDate: expDate || prev.expiryDate,
+          county: toSentenceCase(matched.county || prev.county || 'Kericho')
+        }));
+      }
+
+      setFailedFields(prev => prev.filter(f => ![
+        'dboName', 'premiseName', 'permitNo', 'location', 'category', 'contacts', 'expiryDate', 'county'
+      ].includes(f)));
     }
   };
 
@@ -2870,9 +2928,30 @@ export function DataValidationModule() {
     }
   }, [formData.sales, formData.intakes, formData.hasLocalSales, formData.category, formData.date, isValidationPeriodEdited]);
 
-  // Fetch clients and returns data on mount
+  // Fetch clients and returns data on mount & subscribe to real-time Google Sheets sync
   useEffect(() => {
     let isMounted = true;
+
+    // 1. Subscribe to Google Sheets live sync updates
+    const unsubscribeSync = GoogleSheetsService.subscribeSync((syncState) => {
+      if (isMounted) {
+        setGoogleSyncState(syncState);
+      }
+    });
+
+    // 2. Listen for custom event when background or header sync finishes
+    const handleGoogleSyncedEvent = (e: any) => {
+      if (!isMounted) return;
+      if (e.detail?.clients && Array.isArray(e.detail.clients)) {
+        setClients(e.detail.clients);
+      }
+      if (e.detail?.returns && Array.isArray(e.detail.returns)) {
+        setReturnsData(e.detail.returns);
+      }
+    };
+    window.addEventListener('kdb:google-sheets-synced', handleGoogleSyncedEvent);
+
+    // 3. Load from database cache and auto-trigger sync if needed
     const fetchInitialData = async () => {
       setIsLoadingClients(true);
       try {
@@ -2887,15 +2966,28 @@ export function DataValidationModule() {
         if (Array.isArray(returnsList) && returnsList.length > 0) {
           setReturnsData(returnsList);
         }
+
+        // Automatic Google Sheet sync if local registry is empty
+        if ((!cList || cList.length === 0) || (!returnsList || returnsList.length === 0)) {
+          GoogleSheetsService.triggerAutoSync().then(res => {
+            if (!isMounted) return;
+            if (res.clients && res.clients.length > 0) setClients(res.clients);
+            if (res.returns && res.returns.length > 0) setReturnsData(res.returns);
+          }).catch(() => {});
+        }
       } catch (e) {
         console.error('[DataValidationModule] Error fetching initial data:', e);
       } finally {
         if (isMounted) setIsLoadingClients(false);
       }
     };
+
     fetchInitialData();
+
     return () => {
       isMounted = false;
+      unsubscribeSync();
+      window.removeEventListener('kdb:google-sheets-synced', handleGoogleSyncedEvent);
     };
   }, []);
 
@@ -3075,30 +3167,66 @@ export function DataValidationModule() {
     ].includes(f)));
   };
 
-  const findMatchingClient = (pNo: string, name: string) => {
+  const findMatchingClient = (pNo?: string, name?: string, premise?: string) => {
     if (clients.length === 0) return null;
     const activeClients = clients.filter(c => !isClosedStatus(c.operationalStatus) && !isClosedStatus(c.permitStatus));
     const cleanStr = (s: string) => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
     const cleanPermit = (s: string) => (s || '').toLowerCase().replace(/kdb|lc/g, '').replace(/[^a-z0-9]/g, '');
 
-    const pTerm = cleanPermit(pNo);
-    const nTerm = cleanStr(name);
+    const pTerm = cleanPermit(pNo || '');
+    const nTerm = cleanStr(name || '');
+    const premTerm = cleanStr(premise || '');
 
-    if (!pTerm && !nTerm) return null;
+    if (!pTerm && !nTerm && !premTerm) return null;
 
-    // 1. Try exact permit match
+    // 1. Try exact permit match on main client or branches
     if (pTerm) {
-      const match = activeClients.find(c => cleanPermit(c.permitNumber || (c as any).permit_number || '') === pTerm);
+      const match = activeClients.find(c => {
+        const cPermit = cleanPermit(c.permitNumber || (c as any).permit_number || c.id || '');
+        if (cPermit === pTerm) return true;
+        return (c.branches || []).some(b => cleanPermit(b.permitNumber || b.id || '') === pTerm);
+      });
       if (match) return match;
     }
 
-    // 2. Try EXACT DBO name match (case-insensitive, normalized whitespace)
+    // 2. Try EXACT Premise name match on main premise or branches
+    if (premTerm) {
+      const match = activeClients.find(c => {
+        if (cleanStr(c.premiseName) === premTerm) return true;
+        return (c.branches || []).some(b => cleanStr(b.premiseName) === premTerm);
+      });
+      if (match) return match;
+    }
+
+    // 3. Try EXACT DBO name match
     if (nTerm) {
       const match = activeClients.find(c => cleanStr(c.clientName) === nTerm);
       if (match) return match;
     }
 
-    // 3. Try partial/relaxed permit match
+    // 4. Try partial Premise match (if premTerm >= 3)
+    if (premTerm && premTerm.length >= 3) {
+      const match = activeClients.find(c => {
+        const cP = cleanStr(c.premiseName);
+        if (cP && (cP.includes(premTerm) || premTerm.includes(cP))) return true;
+        return (c.branches || []).some(b => {
+          const bP = cleanStr(b.premiseName);
+          return bP && (bP.includes(premTerm) || premTerm.includes(bP));
+        });
+      });
+      if (match) return match;
+    }
+
+    // 5. Try partial DBO name match (if nTerm >= 3)
+    if (nTerm && nTerm.length >= 3) {
+      const match = activeClients.find(c => {
+        const cD = cleanStr(c.clientName);
+        return cD && (cD.includes(nTerm) || nTerm.includes(cD));
+      });
+      if (match) return match;
+    }
+
+    // 6. Try partial/relaxed permit match
     if (pTerm) {
       const match = activeClients.find(c => {
         const cP = cleanPermit(c.permitNumber || (c as any).permit_number || '');
@@ -3209,7 +3337,7 @@ export function DataValidationModule() {
   const handleOpen7PointRecon = () => {
     let targetClient: LicensedClient | null = selectedClient;
     if (!targetClient && clients.length > 0) {
-      targetClient = findMatchingClient(formData.permitNo, formData.dboName) ||
+      targetClient = findMatchingClient(formData.permitNo, formData.dboName, formData.premiseName) ||
         clients.find(c => {
           const cPrem = normStr(c.premiseName);
           const fPrem = normStr(formData.premiseName);
@@ -3252,27 +3380,31 @@ export function DataValidationModule() {
       validationVal: string;
       clientVal: string;
     }> = [
-      { key: 'dboName', label: 'Name of DBO', validationVal: (formData.dboName || '').trim(), clientVal: (targetClient.clientName || '').trim() },
-      { key: 'premiseName', label: 'Premise Name', validationVal: (formData.premiseName || '').trim(), clientVal: (expectedPremiseName || '').trim() },
-      { key: 'permitNo', label: 'Permit Number', validationVal: (formData.permitNo || '').trim(), clientVal: (expectedPermitNo || '').trim() },
-      { key: 'location', label: 'Physical Location', validationVal: (formData.location || '').trim(), clientVal: (expectedLocation || '').trim() },
-      { key: 'category', label: 'Permit Category', validationVal: (formData.category || '').trim(), clientVal: (expectedCategory || '').trim() },
-      { key: 'contacts', label: 'Contact Numbers', validationVal: (formData.contacts || '').trim(), clientVal: (expectedContacts || '').trim() },
-      { key: 'expiryDate', label: 'Permit Expiry Date', validationVal: (formData.expiryDate || '').trim(), clientVal: (expectedExpiry || '').trim() }
+      { key: 'dboName', label: '1. Name of DBO', validationVal: (formData.dboName || '').trim(), clientVal: (targetClient.clientName || '').trim() },
+      { key: 'premiseName', label: '2. Premise Name', validationVal: (formData.premiseName || '').trim(), clientVal: (expectedPremiseName || '').trim() },
+      { key: 'permitNo', label: '3. Permit Number', validationVal: (formData.permitNo || '').trim(), clientVal: (expectedPermitNo || '').trim() },
+      { key: 'location', label: '4. Physical Location', validationVal: (formData.location || '').trim(), clientVal: (expectedLocation || '').trim() },
+      { key: 'category', label: '5. Permit Category', validationVal: (formData.category || '').trim(), clientVal: (expectedCategory || '').trim() },
+      { key: 'contacts', label: '6. Contact Numbers', validationVal: (formData.contacts || '').trim(), clientVal: (expectedContacts || '').trim() },
+      { key: 'expiryDate', label: '7. Permit Expiry Date', validationVal: (formData.expiryDate || '').trim(), clientVal: (expectedExpiry || '').trim() }
     ];
 
-    const mismatches = checkPoints
-      .filter(pt => normStr(pt.validationVal) !== normStr(pt.clientVal))
-      .map(pt => ({
+    const allReconPoints = checkPoints.map(pt => {
+      const isMatch = normStr(pt.validationVal) === normStr(pt.clientVal);
+      return {
         ...pt,
+        isMatch,
         selectedVal: (pt.validationVal ? 'validation' : 'client') as 'validation' | 'client'
-      }));
+      };
+    });
 
-    setMismatchFields(mismatches);
-    if (mismatches.length === 0) {
-      setReconStatus({ type: 'match', message: 'All 7 data points match the clients registry perfectly (100% Match).' });
+    setMismatchFields(allReconPoints);
+    const diffCount = allReconPoints.filter(p => !p.isMatch).length;
+
+    if (diffCount === 0) {
+      setReconStatus({ type: 'match', message: 'All 7 data points match the clients registry (100% Match). You can review all 7 fields below and make manual adjustments if required.' });
     } else {
-      setReconStatus({ type: 'mismatch', message: `${mismatches.length} of 7 data points differ between validation form and clients registry.` });
+      setReconStatus({ type: 'mismatch', message: `${diffCount} of 7 parameters differ. Choose which value to adopt for each of the 7 fields below.` });
     }
 
     setIsReconModalOpen(true);
@@ -3536,7 +3668,11 @@ export function DataValidationModule() {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
     setFailedFields(prev => prev.filter(f => f !== name));
-    if (name === 'dboName' || name === 'premiseName') {
+    if (name === 'dboName') {
+      setActiveRegistryField('dbo');
+      setHasAutofilledDbo(false);
+    } else if (name === 'premiseName') {
+      setActiveRegistryField('premise');
       setHasAutofilledDbo(false);
     }
     if (name === 'validationPeriod') {
@@ -6273,12 +6409,39 @@ export function DataValidationModule() {
                         <p className="text-[11px] text-gray-500 font-medium">Facility profile, licensing details, and 7-point client reconciliation</p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {/* Real-time Google Sheets Live Sync Status Badge */}
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 shadow-2xs">
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span className="text-[11px] font-bold text-slate-800">Google Sheets:</span>
+                        {googleSyncState.isSyncing ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                            <RefreshCw className="w-2.5 h-2.5 text-amber-600 animate-spin" />
+                            <span>Syncing...</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            <span>Synced ({clients.length} Clients • {returnsData.length.toLocaleString()} Returns)</span>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => GoogleSheetsService.triggerAutoSync().catch(() => {})}
+                          disabled={googleSyncState.isSyncing}
+                          className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-slate-200/50 rounded transition-colors cursor-pointer disabled:opacity-50"
+                          title="Click to sync with Google Sheets"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${googleSyncState.isSyncing ? 'animate-spin text-emerald-600' : ''}`} />
+                        </button>
+                      </div>
+
+                      {/* Manual 7-Point Reconciliation Pre-Flight Trigger */}
                       <button
                         type="button"
                         onClick={handleOpen7PointRecon}
                         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs transition-all shadow-sm cursor-pointer"
-                        title="Open 7-Point Reconciliation Pre-Flight Modal"
+                        title="Open 7-Point Reconciliation Pre-Flight Modal (Manual Reconcile)"
                         id="seven-point-recon-btn"
                       >
                         <GitCompare className="w-3.5 h-3.5" />
@@ -6391,6 +6554,12 @@ export function DataValidationModule() {
                         onChange={handleChange}
                         onFocus={() => setActiveRegistryField('dbo')}
                         onBlur={handleInputBlur}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && registrySuggestions.length > 0) {
+                            e.preventDefault();
+                            handleSelectRegistrySuggestion(registrySuggestions[0]);
+                          }
+                        }}
                         className={getInputClass('dboName')}
                         placeholder="Enter DBO name (auto-populates from registry)..."
                         autoComplete="off"
@@ -6636,6 +6805,13 @@ export function DataValidationModule() {
                           value={formData.premiseName}
                           onChange={handleChange}
                           onFocus={() => setActiveRegistryField('premise')}
+                          onBlur={handleInputBlur}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && registrySuggestions.length > 0) {
+                              e.preventDefault();
+                              handleSelectRegistrySuggestion(registrySuggestions[0]);
+                            }
+                          }}
                           className={getInputClass('premiseName', 'pr-10')}
                           placeholder="Type premise name (auto-populates from registry)..."
                           autoComplete="off"
@@ -10648,14 +10824,19 @@ export function DataValidationModule() {
                     <div>
                       <h3 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
                         <span>7-Point Client Registry Reconciliation</span>
-                        {mismatchFields.length === 0 && selectedClient && (
+                        {selectedClient && mismatchFields.length === 7 && mismatchFields.every(f => f.isMatch) && (
                           <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">
                             100% Match
                           </span>
                         )}
+                        {selectedClient && mismatchFields.some(f => !f.isMatch) && (
+                          <span className="text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full font-bold">
+                            {mismatchFields.filter(f => !f.isMatch).length} Discrepanc{mismatchFields.filter(f => !f.isMatch).length > 1 ? 'ies' : 'y'}
+                          </span>
+                        )}
                       </h3>
                       <p className="text-xs text-slate-500 font-medium mt-0.5">
-                        Pre-flight cross-verification between Data Validation and Master Clients Registry
+                        Manual review across all 7 parameters between Validation Form and Master Clients Registry
                       </p>
                     </div>
                   </div>
@@ -10736,7 +10917,6 @@ export function DataValidationModule() {
                                   expiryDate: formatToYYYYMMDD(c.expiryDate || c.endDate || '')
                                 });
                                 setReconStatus(null);
-                                setMismatchFields([]);
                               }}
                               className="text-left p-2 rounded-lg bg-white border border-amber-200 hover:border-blue-400 hover:bg-blue-50/50 text-[11px] font-bold text-slate-800 flex justify-between items-center cursor-pointer"
                             >
@@ -10752,44 +10932,92 @@ export function DataValidationModule() {
                   )}
 
                   {/* Status Banner */}
-                  {selectedClient && mismatchFields.length === 0 ? (
-                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center gap-3 text-emerald-900">
+                  {selectedClient && mismatchFields.length === 7 && mismatchFields.every(f => f.isMatch) ? (
+                    <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center gap-3 text-emerald-900">
                       <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                       <div>
                         <p className="text-xs font-black">All 7 Parameters Reconciled (100% Match)</p>
                         <p className="text-[11px] text-emerald-800 mt-0.5">
-                          Name of DBO, Premise Name, Permit Number, Physical Location, Permit Category, Contact Numbers, and Permit Expiry Date match the master client record with complete fidelity.
+                          All 7 parameters match the master registry. You can still manually review and select which value to keep for each field below.
                         </p>
                       </div>
                     </div>
-                  ) : selectedClient && mismatchFields.length > 0 ? (
+                  ) : selectedClient && mismatchFields.length > 0 && mismatchFields.some(f => !f.isMatch) ? (
                     <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200 flex items-start gap-2.5 text-amber-900 text-xs">
                       <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                       <div>
                         <p className="font-bold">
-                          {mismatchFields.length} Discrepanc{mismatchFields.length > 1 ? 'ies' : 'y'} Detected
+                          {mismatchFields.filter(f => !f.isMatch).length} Discrepanc{mismatchFields.filter(f => !f.isMatch).length > 1 ? 'ies' : 'y'} Detected across 7 Parameters
                         </p>
                         <p className="text-[11px] text-amber-800 mt-0.5">
-                          Select the authoritative source of truth for each differing field below. Clicking <strong>Apply & Synchronize</strong> will overwrite both this validation form and the master client row in <code>licensed_clients</code>.
+                          Review all 7 fields below. For each field, click either <strong>Validation Form</strong> or <strong>Clients Registry</strong> to decide which value to adopt.
                         </p>
                       </div>
                     </div>
                   ) : null}
 
-                  {/* Side-by-Side Mismatch Selection Cards */}
+                  {/* Bulk Decision Quick-Actions */}
+                  {selectedClient && mismatchFields.length > 0 && (
+                    <div className="flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs">
+                      <span className="text-[11px] font-bold text-slate-700">Quick Decision:</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMismatchFields(prev => prev.map(f => ({ ...f, selectedVal: 'validation' })));
+                          }}
+                          className="px-2.5 py-1 text-[10px] font-bold bg-white text-slate-700 border border-slate-200 hover:bg-slate-100 hover:border-slate-300 rounded-lg cursor-pointer transition-all"
+                        >
+                          Keep All Form Values
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMismatchFields(prev => prev.map(f => ({ ...f, selectedVal: 'client' })));
+                          }}
+                          className="px-2.5 py-1 text-[10px] font-bold bg-white text-blue-700 border border-blue-200 hover:bg-blue-50 rounded-lg cursor-pointer transition-all"
+                        >
+                          Adopt All Registry Values
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Side-by-Side Cards for ALL 7 RECON FIELDS */}
                   {selectedClient && mismatchFields.length > 0 && (
                     <div className="space-y-3">
-                      <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                        Reconciliation Parameters ({mismatchFields.length} Differences):
-                      </p>
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                          7-Point Reconciliation Parameters ({mismatchFields.length} Fields):
+                        </p>
+                        <span className="text-[10px] font-bold text-slate-600">
+                          {mismatchFields.filter(f => f.isMatch).length} Matching • {mismatchFields.filter(f => !f.isMatch).length} Differing
+                        </span>
+                      </div>
+
                       <div className="space-y-2.5">
                         {mismatchFields.map((field, idx) => (
-                          <div key={field.key} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                          <div
+                            key={field.key}
+                            className={`p-3.5 rounded-2xl border space-y-2 transition-all ${
+                              field.isMatch
+                                ? 'bg-slate-50/70 border-slate-200'
+                                : 'bg-amber-50/50 border-amber-200'
+                            }`}
+                          >
                             <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-slate-800">{field.label}</span>
-                              <span className="text-[10px] font-bold text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-full">
-                                Needs Decision
-                              </span>
+                              <span className="text-xs font-black text-slate-900">{field.label}</span>
+                              {field.isMatch ? (
+                                <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                  <Check className="w-3 h-3 text-emerald-700" />
+                                  <span>Matching</span>
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3 text-amber-700" />
+                                  <span>Needs Decision</span>
+                                </span>
+                              )}
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -10809,8 +11037,12 @@ export function DataValidationModule() {
                                   <span className="text-[10px] font-bold uppercase opacity-80">Validation Form:</span>
                                   {field.selectedVal === 'validation' && <Check className="w-3.5 h-3.5 shrink-0" />}
                                 </div>
-                                <p className="font-bold mt-1 truncate">{field.validationVal || '(Empty)'}</p>
-                                <span className="text-[9px] opacity-75 block mt-0.5">Overwrite Registry with Form</span>
+                                <p className="font-bold mt-1 truncate" title={field.validationVal || '(Empty)'}>
+                                  {field.validationVal || '(Empty)'}
+                                </p>
+                                <span className="text-[9px] opacity-75 block mt-0.5">
+                                  {field.selectedVal === 'validation' ? '✓ Selected to Keep' : 'Click to keep Form value'}
+                                </span>
                               </button>
 
                               {/* Option 2: Adopt Clients Registry Value */}
@@ -10829,8 +11061,12 @@ export function DataValidationModule() {
                                   <span className="text-[10px] font-bold uppercase opacity-80">Clients Registry:</span>
                                   {field.selectedVal === 'client' && <Check className="w-3.5 h-3.5 shrink-0" />}
                                 </div>
-                                <p className="font-bold mt-1 truncate">{field.clientVal || '(Empty)'}</p>
-                                <span className="text-[9px] opacity-75 block mt-0.5">Adopt Registry into Form</span>
+                                <p className="font-bold mt-1 truncate" title={field.clientVal || '(Empty)'}>
+                                  {field.clientVal || '(Empty)'}
+                                </p>
+                                <span className="text-[9px] opacity-75 block mt-0.5">
+                                  {field.selectedVal === 'client' ? '✓ Selected to Adopt' : 'Click to adopt Registry value'}
+                                </span>
                               </button>
                             </div>
                           </div>
@@ -10855,7 +11091,7 @@ export function DataValidationModule() {
                       type="button"
                       onClick={handleApplyReconciliation}
                       disabled={isApplyingRecon}
-                      className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      className="px-5 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                       {isApplyingRecon ? (
                         <>
@@ -10865,7 +11101,7 @@ export function DataValidationModule() {
                       ) : (
                         <>
                           <CheckCheck className="w-3.5 h-3.5" />
-                          <span>Apply & Synchronize</span>
+                          <span>Apply Manual Reconciliation & Synchronize</span>
                         </>
                       )}
                     </button>
