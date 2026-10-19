@@ -187,22 +187,6 @@ export const COMMON_INSTITUTIONAL_CHECKLIST_ITEMS: FieldChecklistItem[] = [
     ]
   },
   {
-    ref: 'CA03',
-    subGroup: 'Permit & Regulatory Compliance',
-    dataItem: 'County Single Business Permit',
-    primarySource: 'County Permit Issued',
-    validationTest: 'Confirm licence exists and belongs to same operator/premises, Compare licence period to KDB permit period',
-    evidenceDetail: 'Licence Evidence/Dates',
-    title: 'County Single Business Permit',
-    description: 'Confirm licence exists and belongs to same operator/premises, Compare licence period to KDB permit period',
-    statusOptions: [
-      'Available & Valid',
-      'Available (Discrepancies)',
-      'Expired / Invalid',
-      'Not Available / Missing'
-    ]
-  },
-  {
     ref: 'CA04',
     subGroup: 'Permit & Regulatory Compliance',
     dataItem: 'Permit Fee Assessment',
@@ -1988,9 +1972,9 @@ export const getActiveChecklistSections = (clientCategory?: string): FieldCheckl
     ? clientCategory.trim()
     : (targetSec?.shortName || 'All Categories');
 
-  // Split Section 1 into Part I (CA01–CA05) and Part II (CA06–CA13)
-  const part1Items = commonSec.items.filter(item => ['CA01', 'CA02', 'CA03', 'CA04', 'CA05'].includes(item.ref));
-  const part2Items = commonSec.items.filter(item => !['CA01', 'CA02', 'CA03', 'CA04', 'CA05'].includes(item.ref));
+  // Split Section 1 into Part I (CA01–CA05 excluding removed CA03) and Part II (CA06–CA13)
+  const part1Items = commonSec.items.filter(item => ['CA01', 'CA02', 'CA04', 'CA05'].includes(item.ref));
+  const part2Items = commonSec.items.filter(item => !['CA01', 'CA02', 'CA04', 'CA05'].includes(item.ref));
 
   const sections: FieldChecklistSection[] = [
     {

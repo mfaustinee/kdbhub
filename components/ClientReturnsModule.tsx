@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DBService } from '../services/db';
 import { LicensedClient, ClientReturn, DebtorRecord, Installment, ArrearItem, formatDateToDDMMYYYY } from '../types';
@@ -74,18 +74,82 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
   const [loading, setLoading] = useState<boolean>(propLoading !== undefined ? propLoading : (standalone || !propClients || !propReturns));
   const [activeSubTab, setActiveSubTab] = useState<'registry' | 'debtors'>(debtorsOnly ? 'debtors' : (defaultSubTab === 'debtors' ? 'debtors' : 'registry'));
 
+  // Search & Filter state for returns registry
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [filterYear, setFilterYear] = useState<string>('All');
+  const [filterMonth, setFilterMonth] = useState<string>('All');
+  const [filterStatus, setFilterStatus] = useState<string>('All');
+
+  // Batching & Pagination states for Returns filings list (10, 25, 50 & 100 batch options)
+  const [batchSize, setBatchSize] = useState<10 | 25 | 50 | 100>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalReturnsCount, setTotalReturnsCount] = useState<number>(0);
+  const [totalReturnsPages, setTotalReturnsPages] = useState<number>(1);
+  const [registryView, setRegistryView] = useState<'returns-list' | 'client-summaries'>('returns-list');
+  const [returnsSummary, setReturnsSummary] = useState<{
+    totalQty: number;
+    totalInvoicedAmt: number;
+    totalPaidAmt: number;
+    totalLessCFAmt: number;
+    totalOutstanding: number;
+  }>({ totalQty: 0, totalInvoicedAmt: 0, totalPaidAmt: 0, totalLessCFAmt: 0, totalOutstanding: 0 });
+
+  const fetchReturnsBatch = useCallback(async (page: number = currentPage, size: 10 | 25 | 50 | 100 = batchSize) => {
+    setLoading(true);
+    try {
+      const res = await DBService.getReturnsPaginated({
+        page,
+        pageSize: size,
+        search: searchQuery,
+        year: filterYear,
+        month: filterMonth,
+        status: filterStatus
+      });
+
+      setReturns(res.data);
+      const total = res.count ?? res.totalCount ?? res.data.length;
+      setTotalReturnsCount(total);
+      setTotalReturnsPages(res.totalPages || Math.ceil(total / size) || 1);
+      setCurrentPage(page);
+      if (res.summary) {
+        setReturnsSummary(res.summary);
+      }
+    } catch (error) {
+      console.error("Error fetching returns batch:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPage, batchSize, searchQuery, filterYear, filterMonth, filterStatus, onReturnsChange]);
+
   // Sync state when props update
   useEffect(() => {
-    if (propClients !== undefined) {
+    if (propClients !== undefined && propClients.length > 0) {
       setClients(propClients);
     }
   }, [propClients]);
 
   useEffect(() => {
-    if (propReturns !== undefined) {
+    if (Array.isArray(propReturns)) {
       setReturns(propReturns);
+      setTotalReturnsCount(propReturns.length);
+      setTotalReturnsPages(Math.ceil(propReturns.length / batchSize) || 1);
+      setLoading(false);
+    } else {
+      fetchReturnsBatch(1, batchSize);
     }
-  }, [propReturns]);
+  }, [propReturns, batchSize, fetchReturnsBatch]);
+
+  useEffect(() => {
+    const handleCleared = () => {
+      setReturns([]);
+      setTotalReturnsCount(0);
+      setTotalReturnsPages(1);
+    };
+    window.addEventListener('kdb:returns-cache-cleared', handleCleared);
+    return () => {
+      window.removeEventListener('kdb:returns-cache-cleared', handleCleared);
+    };
+  }, []);
 
   useEffect(() => {
     if (propLoading !== undefined) {
@@ -100,12 +164,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
       setActiveSubTab(defaultSubTab);
     }
   }, [defaultSubTab, debtorsOnly]);
-
-  // Search & Filter state for returns registry
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [filterYear, setFilterYear] = useState<string>('All');
-  const [filterMonth, setFilterMonth] = useState<string>('All');
-  const [filterStatus, setFilterStatus] = useState<string>('All');
 
   // New/Edit Return modal state
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -192,49 +250,6 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     );
   };
 
-  // Batching & Pagination states for Returns filings list (10, 25, 50 & 100 batch options)
-  const [batchSize, setBatchSize] = useState<10 | 25 | 50 | 100>(25);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [totalReturnsCount, setTotalReturnsCount] = useState<number>(0);
-  const [totalReturnsPages, setTotalReturnsPages] = useState<number>(1);
-  const [registryView, setRegistryView] = useState<'returns-list' | 'client-summaries'>('returns-list');
-  const [returnsSummary, setReturnsSummary] = useState<{
-    totalQty: number;
-    totalInvoicedAmt: number;
-    totalPaidAmt: number;
-    totalLessCFAmt: number;
-    totalOutstanding: number;
-  }>({ totalQty: 0, totalInvoicedAmt: 0, totalPaidAmt: 0, totalLessCFAmt: 0, totalOutstanding: 0 });
-
-  const fetchReturnsBatch = useCallback(async (page: number = currentPage, size: 10 | 25 | 50 | 100 = batchSize) => {
-    setLoading(true);
-    try {
-      const res = await DBService.getReturnsPaginated({
-        page,
-        pageSize: size,
-        search: searchQuery,
-        year: filterYear,
-        month: filterMonth,
-        status: filterStatus
-      });
-
-      setReturns(res.data);
-      const total = res.count ?? res.totalCount ?? res.data.length;
-      setTotalReturnsCount(total);
-      setTotalReturnsPages(res.totalPages || Math.ceil(total / size) || 1);
-      setCurrentPage(page);
-      if (res.summary) {
-        setReturnsSummary(res.summary);
-      }
-      onReturnsChange?.(res.data);
-      onRefresh?.();
-    } catch (error) {
-      console.error("Error fetching returns batch:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentPage, batchSize, searchQuery, filterYear, filterMonth, filterStatus, onReturnsChange, onRefresh]);
-
   // Load supporting clients and debtors in the background without blocking returns loading
   useEffect(() => {
     let isMounted = true;
@@ -261,24 +276,69 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     return () => { isMounted = false; };
   }, [clients.length, localDebtors.length, onClientsChange]);
 
-  // Fetch only the selected batch on filter/batch changes
+  // Fetch only the selected batch on filter/batch changes when parent didn't provide full dataset
   useEffect(() => {
+    if (propReturns && propReturns.length > 0) {
+      return;
+    }
     const timer = setTimeout(() => {
       fetchReturnsBatch(1, batchSize);
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery, filterYear, filterMonth, filterStatus, batchSize]);
+  }, [searchQuery, filterYear, filterMonth, filterStatus, batchSize, propReturns]);
+
+  // In-memory filtering and pagination when parent passes full returns dataset
+  const filteredReturns = useMemo(() => {
+    return returns.filter(ret => {
+      if (!ret) return false;
+      const qSafe = String(searchQuery || '').trim().toLowerCase();
+      const matchesSearch = !qSafe ||
+        searchMatches(ret.clientName, qSafe) ||
+        searchMatches(ret.txnRef, qSafe) ||
+        searchMatches(ret.comments, qSafe) ||
+        searchMatches(ret.period, qSafe) ||
+        searchMatches(String(ret.year), qSafe);
+      
+      const matchesYear = filterYear === 'All' || String(ret.year).trim() === filterYear.trim();
+      const mTarget = (filterMonth || '').trim().toLowerCase();
+      const pPeriod = (ret.period || '').trim().toLowerCase();
+      const matchesMonth = filterMonth === 'All' || pPeriod === mTarget || pPeriod.startsWith(mTarget) || pPeriod.includes(mTarget);
+      const matchesStatus = filterStatus === 'All' || (
+        filterStatus === 'Fully Paid'
+          ? (ret.paymentStatus === 'Fully Paid' || ret.paymentStatus === 'Paid')
+          : ret.paymentStatus === filterStatus
+      );
+
+      return matchesSearch && matchesYear && matchesMonth && matchesStatus;
+    });
+  }, [returns, searchQuery, filterYear, filterMonth, filterStatus]);
+
+  const isLocalPagination = returns.length > batchSize;
+  const effectiveTotalReturns = isLocalPagination ? filteredReturns.length : (totalReturnsCount || filteredReturns.length);
+  const effectiveTotalPages = Math.max(1, Math.ceil(effectiveTotalReturns / batchSize));
+
+  const paginatedReturns = useMemo(() => {
+    if (isLocalPagination) {
+      const from = (currentPage - 1) * batchSize;
+      return filteredReturns.slice(from, from + batchSize);
+    }
+    return filteredReturns;
+  }, [filteredReturns, isLocalPagination, currentPage, batchSize]);
 
   const handleBatchSizeChange = (newSize: 10 | 25 | 50 | 100) => {
     setBatchSize(newSize);
     setCurrentPage(1);
-    fetchReturnsBatch(1, newSize);
+    if (!isLocalPagination) {
+      fetchReturnsBatch(1, newSize);
+    }
   };
 
   const handlePageChange = (newPage: number) => {
-    const validPage = Math.max(1, Math.min(newPage, totalReturnsPages));
+    const validPage = Math.max(1, Math.min(newPage, effectiveTotalPages));
     setCurrentPage(validPage);
-    fetchReturnsBatch(validPage, batchSize);
+    if (!isLocalPagination) {
+      fetchReturnsBatch(validPage, batchSize);
+    }
   };
 
   const fetchData = async () => {
@@ -333,8 +393,9 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     const calculatedOutstanding = ret.invoiceAmount - ret.paymentAmount - ret.lessCF;
     if (calculatedOutstanding > 0 && calculatedOutstanding < 100) {
       const defaultStatus = ret.paymentAmount > 0 ? 'Partially Paid' : 'Unpaid';
-      if (ret.paymentStatus !== defaultStatus) {
-        setOverrideStatus(ret.paymentStatus);
+      const statusToOverride = ret.paymentStatus === 'Paid' ? 'Fully Paid' : ret.paymentStatus;
+      if (statusToOverride !== defaultStatus) {
+        setOverrideStatus(statusToOverride as 'Fully Paid' | 'Partially Paid' | 'Unpaid');
         const match = ret.comments.match(/\[Override Reason: (.*?)\]/);
         setOverrideReason(match ? match[1] : '');
       } else {
@@ -1088,31 +1149,15 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
     });
   };
 
-  // Filter returns for general display table
-  const filteredReturns = returns.filter(ret => {
-    if (!ret) return false;
-    const qSafe = String(searchQuery || '').trim().toLowerCase();
-    const matchesSearch = !qSafe ||
-      searchMatches(ret.clientName, qSafe) ||
-      searchMatches(ret.txnRef, qSafe) ||
-      searchMatches(ret.comments, qSafe) ||
-      searchMatches(ret.period, qSafe) ||
-      searchMatches(String(ret.year), qSafe);
-    
-    const matchesYear = filterYear === 'All' || String(ret.year).trim() === filterYear.trim();
-    const matchesMonth = filterMonth === 'All' || (ret.period || '').trim().toLowerCase() === filterMonth.trim().toLowerCase();
-    const matchesStatus = filterStatus === 'All' || ret.paymentStatus === filterStatus;
-
-    return matchesSearch && matchesYear && matchesMonth && matchesStatus;
-  });
-
   // Group returns by client for the single-entry Returns Registry view
   const clientSummaries = clients.map(client => {
     const clientReturns = returns.filter(ret => {
       const isClientMatch = ret.clientId === client.id || areNamesMatching(ret.clientName, client.clientName);
       if (!isClientMatch) return false;
       const matchesYear = filterYear === 'All' || String(ret.year).trim() === filterYear.trim();
-      const matchesMonth = filterMonth === 'All' || (ret.period || '').trim().toLowerCase() === filterMonth.trim().toLowerCase();
+      const mTarget = (filterMonth || '').trim().toLowerCase();
+      const pPeriod = (ret.period || '').trim().toLowerCase();
+      const matchesMonth = filterMonth === 'All' || pPeriod === mTarget || pPeriod.startsWith(mTarget) || pPeriod.includes(mTarget);
       return matchesYear && matchesMonth;
     });
 
@@ -1890,7 +1935,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                           : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                       }`}
                     >
-                      Returns List ({returns.length})
+                      Returns List ({effectiveTotalReturns.toLocaleString()})
                     </button>
                     <button
                       type="button"
@@ -1907,13 +1952,13 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
 
                   <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200/60 font-bold">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span>Limited Egress: Batch {currentPage} of {totalReturnsPages} (range: {totalReturnsCount === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, totalReturnsCount)})</span>
+                    <span>Registry Batch {currentPage} of {effectiveTotalPages} (range: {effectiveTotalReturns === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, effectiveTotalReturns)})</span>
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between sm:justify-end gap-3">
                   <span className="text-[11px] text-slate-500 font-semibold">
-                    Showing <span className="font-bold text-slate-900">{totalReturnsCount === 0 ? 0 : (currentPage - 1) * batchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(currentPage * batchSize, totalReturnsCount)}</span> of <span className="font-bold text-slate-900">{totalReturnsCount.toLocaleString()}</span>
+                    Showing <span className="font-bold text-slate-900">{effectiveTotalReturns === 0 ? 0 : (currentPage - 1) * batchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(currentPage * batchSize, effectiveTotalReturns)}</span> of <span className="font-bold text-slate-900">{effectiveTotalReturns.toLocaleString()}</span>
                   </span>
 
                   <div className="flex items-center gap-1">
@@ -1927,12 +1972,12 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       <ChevronLeft size={14} />
                     </button>
                     <span className="text-[11px] font-bold text-slate-700 px-2">
-                      Page {currentPage} of {totalReturnsPages}
+                      Page {currentPage} of {effectiveTotalPages}
                     </span>
                     <button
                       type="button"
                       onClick={() => handlePageChange(currentPage + 1)}
-                      disabled={currentPage >= totalReturnsPages || loading}
+                      disabled={currentPage >= effectiveTotalPages || loading}
                       className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
                       title="Next batch"
                     >
@@ -1946,7 +1991,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
               <div className="bg-white rounded-none sm:rounded-2xl md:rounded-3xl border-y sm:border border-slate-100 shadow-xl overflow-hidden">
                 {registryView === 'returns-list' ? (
                   /* Returns Filings List View */
-                  returns.length === 0 ? (
+                  paginatedReturns.length === 0 ? (
                     <div className="p-20 text-center space-y-4">
                       <FileSpreadsheet className="w-12 h-12 text-slate-300 mx-auto" />
                       <p className="text-slate-400 font-bold uppercase tracking-wider text-xs">No return filings found in this batch.</p>
@@ -1968,8 +2013,8 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                          {returns.map((ret) => (
-                            <tr key={ret.id} className="hover:bg-slate-50/50 transition-colors">
+                          {paginatedReturns.map((ret, idx) => (
+                            <tr key={ret.id || `ret-row-${ret.year}-${ret.period}-${idx}`} className="hover:bg-slate-50/50 transition-colors">
                               <td className="px-6 py-4.5">
                                 <div className="text-slate-900 font-black">{ret.clientName}</div>
                                 <div className="text-[10px] text-slate-400 flex items-center gap-1.5 mt-0.5">
@@ -2141,7 +2186,7 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                       </select>
                       <span className="text-slate-600 font-semibold text-xs">entries</span>
                       <span className="text-[11px] text-slate-400 ml-1 font-medium hidden sm:inline">
-                        (Showing {totalReturnsCount === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, totalReturnsCount)} of {totalReturnsCount.toLocaleString()} returns)
+                        (Showing {effectiveTotalReturns === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, effectiveTotalReturns)} of {effectiveTotalReturns.toLocaleString()} returns)
                       </span>
                     </div>
 
@@ -2163,20 +2208,20 @@ export const ClientReturnsModule: React.FC<ClientReturnsModuleProps> = ({
                         <ChevronLeft size={13} /> Prev
                       </button>
                       <span className="px-3 py-1 rounded-lg bg-slate-100 text-slate-900 text-[11px] font-black">
-                        {currentPage} / {totalReturnsPages}
+                        {currentPage} / {effectiveTotalPages}
                       </span>
                       <button
                         type="button"
                         onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage >= totalReturnsPages || loading}
+                        disabled={currentPage >= effectiveTotalPages || loading}
                         className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
                       >
                         Next <ChevronRight size={13} />
                       </button>
                       <button
                         type="button"
-                        onClick={() => handlePageChange(totalReturnsPages)}
-                        disabled={currentPage >= totalReturnsPages || loading}
+                        onClick={() => handlePageChange(effectiveTotalPages)}
+                        disabled={currentPage >= effectiveTotalPages || loading}
                         className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
                       >
                         Last

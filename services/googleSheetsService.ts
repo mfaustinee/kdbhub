@@ -118,6 +118,8 @@ export interface GoogleSyncState {
   returnsCount: number;
   status: 'idle' | 'syncing' | 'synced' | 'error';
   errorMessage?: string;
+  progress?: number;
+  phase?: string;
 }
 
 let currentSyncState: GoogleSyncState = {
@@ -125,10 +127,13 @@ let currentSyncState: GoogleSyncState = {
   lastSyncTime: null,
   clientsCount: 0,
   returnsCount: 0,
-  status: 'idle'
+  status: 'idle',
+  progress: 0,
+  phase: ''
 };
 
 const syncListeners = new Set<(state: GoogleSyncState) => void>();
+let inFlightSyncPromise: Promise<{ clients: LicensedClient[]; returns: ClientReturn[]; time: string }> | null = null;
 let heartbeatTimer: any = null;
 let lastAutoSyncTimestamp = 0;
 
@@ -1088,70 +1093,120 @@ export const GoogleSheetsService = {
     });
   },
 
-  // Unified Auto Sync with live event dispatching and DB cache update
+  // Unified Auto Sync with live percentage progress, single-flight deduplication, and deterministic completion
   async triggerAutoSync(spreadsheetId?: string): Promise<{ clients: LicensedClient[]; returns: ClientReturn[]; time: string }> {
-    currentSyncState = {
-      ...currentSyncState,
-      isSyncing: true,
-      status: 'syncing',
-      errorMessage: undefined
-    };
-    this.notifySyncListeners();
+    // If a sync is already running, return the existing active sync promise rather than spawning duplicate sync loops
+    if (inFlightSyncPromise) {
+      return inFlightSyncPromise;
+    }
 
-    try {
-      const result = await this.syncClientsAndReturns(spreadsheetId);
+    let progressTimer: any = null;
 
-      // Lazily persist to DBService without static circular dependencies
-      try {
-        const { DBService } = await import('./db');
-        if (result.clients && result.clients.length > 0) {
-          await DBService.saveClientsBulk(result.clients, true);
-        }
-        if (result.returns && result.returns.length > 0) {
-          await DBService.saveReturnsBulk(result.returns, true);
-        }
-        DBService.clearMemoryCache('clients');
-        DBService.clearMemoryCache('returns');
-      } catch (dbErr) {
-        console.warn('[GoogleSheetsService] Local DB persistence notice:', dbErr);
-      }
-
-      const syncTime = result.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      lastAutoSyncTimestamp = Date.now();
-
+    inFlightSyncPromise = (async () => {
       currentSyncState = {
-        isSyncing: false,
-        lastSyncTime: syncTime,
-        clientsCount: result.clients.length,
-        returnsCount: result.returns.length,
-        status: 'synced',
+        ...currentSyncState,
+        isSyncing: true,
+        status: 'syncing',
+        progress: 12,
+        phase: 'Connecting to Google Sheets...',
         errorMessage: undefined
       };
       this.notifySyncListeners();
 
-      // Dispatch real-time global event for cross-module reactive updates
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('kdb:google-sheets-synced', {
-          detail: {
-            clients: result.clients,
-            returns: result.returns,
-            time: syncTime
-          }
-        }));
-      }
+      // Progressive percentage ticker during network ingest
+      let currentPct = 12;
+      progressTimer = setInterval(() => {
+        if (currentPct < 88) {
+          currentPct += Math.floor(Math.random() * 8) + 4;
+          if (currentPct > 88) currentPct = 88;
+          const phase = currentPct < 40 
+            ? 'Reading Clients tab...' 
+            : currentPct < 75 
+            ? 'Ingesting Returns registry...' 
+            : 'Parsing records...';
+          currentSyncState = {
+            ...currentSyncState,
+            progress: currentPct,
+            phase
+          };
+          this.notifySyncListeners();
+        }
+      }, 350);
 
-      return result;
-    } catch (err: any) {
-      console.warn('[GoogleSheetsService] Auto-sync notice:', err);
-      currentSyncState = {
-        ...currentSyncState,
-        isSyncing: false,
-        status: 'error',
-        errorMessage: err.message || 'Failed to sync with Google Sheets'
-      };
-      this.notifySyncListeners();
-      throw err;
-    }
+      try {
+        const result = await this.syncClientsAndReturns(spreadsheetId);
+
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
+
+        const syncTime = result.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        lastAutoSyncTimestamp = Date.now();
+
+        // Reached 100% - Fully completed and stopped!
+        currentSyncState = {
+          isSyncing: false,
+          lastSyncTime: syncTime,
+          clientsCount: result.clients.length,
+          returnsCount: result.returns.length,
+          status: 'synced',
+          progress: 100,
+          phase: 'Synced',
+          errorMessage: undefined
+        };
+        this.notifySyncListeners();
+
+        // Hydrate DBService memory and storage asynchronously without blocking UI completion
+        import('./db').then(({ DBService }) => {
+          if (result.clients && result.clients.length > 0) {
+            DBService.setClientsMemoryCache(result.clients);
+          }
+          if (result.returns && result.returns.length > 0) {
+            DBService.setReturnsMemoryCache(result.returns);
+          }
+        }).catch(dbErr => {
+          console.warn('[GoogleSheetsService] Cache hydration notice:', dbErr);
+        });
+
+        // Dispatch real-time global event for cross-module reactive updates
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('kdb:google-sheets-synced', {
+            detail: {
+              clients: result.clients,
+              returns: result.returns,
+              time: syncTime
+            }
+          }));
+        }
+
+        return result;
+      } catch (err: any) {
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
+        console.warn('[GoogleSheetsService] Auto-sync notice:', err);
+        currentSyncState = {
+          ...currentSyncState,
+          isSyncing: false,
+          status: 'error',
+          progress: 0,
+          phase: 'Sync failed',
+          errorMessage: err.message || 'Failed to sync with Google Sheets'
+        };
+        this.notifySyncListeners();
+        throw err;
+      } finally {
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
+        inFlightSyncPromise = null;
+      }
+    })();
+
+    return inFlightSyncPromise;
   },
 
   // Background heartbeat disabled: one-off sync on app start and manual sync are used per requirement

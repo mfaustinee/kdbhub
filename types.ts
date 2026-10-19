@@ -319,7 +319,7 @@ export interface ClientReturn {
   lessCF: number;
   outstandingBalance: number;
   agingDays: number;
-  paymentStatus: 'Fully Paid' | 'Partially Paid' | 'Unpaid';
+  paymentStatus: 'Fully Paid' | 'Paid' | 'Partially Paid' | 'Unpaid';
   comments: string;
 }
 

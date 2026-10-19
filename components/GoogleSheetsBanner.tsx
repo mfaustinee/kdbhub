@@ -8,7 +8,9 @@ import {
   Check, 
   Settings, 
   X,
-  Database
+  Database,
+  Trash2,
+  Copy
 } from 'lucide-react';
 import { GoogleSheetsService } from '../services/googleSheetsService';
 import { DBService } from '../services/db';
@@ -51,6 +53,8 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
   const [editSheet1Input, setEditSheet1Input] = useState('');
   const [editSheet2Input, setEditSheet2Input] = useState('');
 
+  const [syncPct, setSyncPct] = useState(0);
+
   // Load sheet IDs on mount
   const loadSheetIds = async () => {
     // 1. Check local storage / service
@@ -90,6 +94,7 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
     loadSheetIds();
     const unsub = GoogleSheetsService.subscribeSync((syncState) => {
       setIsSyncing(syncState.isSyncing);
+      if (syncState.progress !== undefined) setSyncPct(syncState.progress);
       if (syncState.lastSyncTime) setLastSyncTime(syncState.lastSyncTime);
       if (syncState.status === 'synced' && syncState.clientsCount > 0) {
         setStatusMessage({
@@ -130,6 +135,24 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
         type: 'error' 
       });
     }
+  };
+
+  const [copiedEmail, setCopiedEmail] = useState(false);
+  const serviceAccountEmail = 'data-validation-sync@data-validation-488118.iam.gserviceaccount.com';
+
+  const handleCopyEmail = () => {
+    navigator.clipboard?.writeText(serviceAccountEmail);
+    setCopiedEmail(true);
+    setTimeout(() => setCopiedEmail(false), 3000);
+  };
+
+  const handleResetReturnsCache = () => {
+    DBService.clearReturnsCache();
+    setStatusMessage({
+      text: 'Outdated returns cache has been cleared. The system will now only display records synced from Google Sheet 1.',
+      type: 'success'
+    });
+    onSyncComplete?.();
   };
 
   const handleOpenSheet1 = () => {
@@ -252,7 +275,19 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
             className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-xs transition-all cursor-pointer disabled:opacity-40"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>{isSyncing ? 'Syncing...' : 'Sync Clients & Returns'}</span>
+            <span>{isSyncing ? `Syncing ${Math.max(1, Math.round(syncPct))}%...` : 'Sync Clients & Returns'}</span>
+          </button>
+
+          {/* Reset Returns Cache */}
+          <button
+            type="button"
+            onClick={handleResetReturnsCache}
+            disabled={isSyncing}
+            className="inline-flex items-center gap-1.5 px-3 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-2xs"
+            title="Reset and clear outdated returns cache to ensure only Google Sheet 1 data is displayed"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-amber-600" />
+            <span>Reset Cache</span>
           </button>
 
           {/* Open Sheet 1 */}
@@ -330,6 +365,29 @@ export const GoogleSheetsBanner: React.FC<GoogleSheetsBannerProps> = ({ onSyncCo
               >
                 <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Service Account Share Box */}
+            <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-3.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-emerald-950 uppercase tracking-wider">
+                  Automated Google Sheets Sync Access
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyEmail}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-emerald-100/60 border border-emerald-200 rounded-lg text-[10px] font-bold text-emerald-900 transition-colors cursor-pointer"
+                >
+                  {copiedEmail ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-emerald-700" />}
+                  <span>{copiedEmail ? 'Copied' : 'Copy Email'}</span>
+                </button>
+              </div>
+              <p className="text-xs text-emerald-900/90 leading-relaxed">
+                To sync data directly without personal Google login, share Sheet 1 (and Sheet 2) with this Service Account email as <span className="font-bold underline">Viewer</span> or <span className="font-bold underline">Editor</span>:
+              </p>
+              <div className="bg-white/90 px-3 py-1.5 rounded-xl border border-emerald-200/90 font-mono text-[11px] text-emerald-950 select-all break-all">
+                {serviceAccountEmail}
+              </div>
             </div>
 
             <form onSubmit={handleSaveConfig} className="space-y-4">

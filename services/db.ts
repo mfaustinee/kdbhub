@@ -457,10 +457,46 @@ let returnsMemoryCache: ClientReturn[] | null = null;
 let returnsCacheTimestamp = 0;
 let returnsInFlightPromise: Promise<ClientReturn[]> | null = null;
 
+// One-time automatic reset of outdated legacy kdb_returns_cache (purges outdated 816 returns)
+if (typeof window !== 'undefined') {
+  try {
+    const isCleared = localStorage.getItem('kdb_returns_cleared_v2');
+    if (!isCleared) {
+      localStorage.removeItem('kdb_returns_cache');
+      localStorage.setItem('kdb_returns_cleared_v2', 'true');
+      console.log('[DBService] Outdated kdb_returns_cache cleared for Google Sheet 1 synchronization.');
+    }
+  } catch (_) {}
+}
+
 export const DBService = {
   // Export Supabase client promise for realtime listeners across devices
   getSupabaseClient(): Promise<SupabaseClient | null> {
     return getSupabase();
+  },
+
+  // Reset and clear outdated returns cache to enforce Google Sheet 1 as source of truth
+  clearReturnsCache(): void {
+    returnsMemoryCache = [];
+    returnsCacheTimestamp = 0;
+    returnsInFlightPromise = null;
+    try {
+      localStorage.removeItem('kdb_returns_cache');
+      localStorage.removeItem('kdb_returns_cache_timestamp');
+      localStorage.setItem('kdb_returns_cleared_v2', 'true');
+    } catch (_) {}
+    // Call server to reset returns.json file as well
+    fetch('/api/returns/clear', { method: 'POST' }).catch(() => {});
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kdb:returns-cache-cleared'));
+      window.dispatchEvent(new CustomEvent('kdb:google-sheets-synced', {
+        detail: {
+          clients: clientsMemoryCache || [],
+          returns: [],
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        }
+      }));
+    }
   },
 
   // Invalidate in-memory caches to guarantee fresh cross-device data
@@ -489,6 +525,9 @@ export const DBService = {
       returnsMemoryCache = null;
       returnsCacheTimestamp = 0;
       returnsInFlightPromise = null;
+      try {
+        localStorage.removeItem('kdb_returns_cache');
+      } catch (_) {}
     }
     if (!table || table === 'debtors') {
       debtorsMemoryCache = null;
@@ -498,6 +537,22 @@ export const DBService = {
     if (!table || table === 'validations') {
       validationsMemoryCache = null;
       validationsCacheTimestamp = 0;
+    }
+  },
+
+  setClientsMemoryCache(clients: LicensedClient[]): void {
+    if (Array.isArray(clients) && clients.length > 0) {
+      clientsMemoryCache = clients;
+      clientsCacheTimestamp = Date.now();
+      safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
+    }
+  },
+
+  setReturnsMemoryCache(returns: ClientReturn[]): void {
+    if (Array.isArray(returns)) {
+      returnsMemoryCache = returns;
+      returnsCacheTimestamp = Date.now();
+      safeSetLocalStorage('kdb_returns_cache', JSON.stringify(returns));
     }
   },
 
@@ -2116,13 +2171,16 @@ export const DBService = {
   async getClients(forceFresh: boolean = false): Promise<LicensedClient[]> {
     const deduplicateClients = (list: LicensedClient[]): LicensedClient[] => {
       const unique: LicensedClient[] = [];
-      const seenIds = new Set<string>();
+      const seenKeys = new Set<string>();
 
       for (const client of list) {
         if (!client) continue;
-        const id = String(client.id || client.permitNumber || '').trim();
-        if (id && seenIds.has(id)) continue;
-        if (id) seenIds.add(id);
+        const cId = String(client.id || '').trim();
+        const cName = String(client.clientName || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+        const pName = String(client.premiseName || '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+        const key = cId || (cName && pName ? `${cName}::${pName}` : '');
+        if (key && seenKeys.has(key)) continue;
+        if (key) seenKeys.add(key);
         unique.push(client);
       }
       return unique;
@@ -2138,74 +2196,26 @@ export const DBService = {
     }
 
     const fetchFreshPromise = (async (): Promise<LicensedClient[]> => {
-      const fetchLocal = async () => {
-        try {
-          const response = await fetch('/api/clients');
-          if (response.ok) {
-            const data = await response.json();
-            if (Array.isArray(data) && data.length > 0) {
-              const clients = deduplicateClients(data);
-              clientsMemoryCache = clients;
-              clientsCacheTimestamp = Date.now();
-              safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
-              return clients;
-            }
-          }
-        } catch (e) {
-          console.warn("[DBService] Local API clients fetch error:", e);
-        }
-        const local = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
-        const deduplicated = deduplicateClients(local);
-        clientsMemoryCache = deduplicated;
-        clientsCacheTimestamp = Date.now();
-        return deduplicated;
-      };
-
       try {
-        const client = await getSupabase();
-        if (client) {
-          let allClientsData: any[] = [];
-          let from = 0;
-          const pageSize = 1000;
-          while (true) {
-            const pageQuery = client
-              .from('licensed_clients')
-              .select('*')
-              .order('clientname', { ascending: true })
-              .order('id', { ascending: true })
-              .range(from, from + pageSize - 1);
-
-            const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
-              setTimeout(() => reject(new Error('Supabase getClients timeout')), 3500)
-            );
-            const { data, error } = await Promise.race([pageQuery, timeoutPromise]);
-
-            if (error) {
-              console.warn("[DBService] Supabase getClients page error:", error);
-              break;
-            }
-            if (!data || data.length === 0) break;
-            allClientsData.push(...data);
-            if (data.length < pageSize) break;
-            from += pageSize;
-          }
-
-          if (allClientsData.length > 0) {
-            const clients = deduplicateClients(allClientsData.map(c => clientFromDb(c)));
+        const response = await fetch('/api/clients');
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            const clients = deduplicateClients(data);
             clientsMemoryCache = clients;
             clientsCacheTimestamp = Date.now();
             safeSetLocalStorage('kdb_clients_cache', JSON.stringify(clients));
             return clients;
           }
         }
-        
-        return await fetchLocal();
       } catch (e) {
-        console.warn("[DBService] Fresh clients fetch error, falling back to local:", e);
-        return await fetchLocal();
-      } finally {
-        clientsInFlightPromise = null;
+        console.warn("[DBService] API clients fetch error:", e);
       }
+      const local = getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
+      const deduplicated = deduplicateClients(local);
+      clientsMemoryCache = deduplicated;
+      clientsCacheTimestamp = Date.now();
+      return deduplicated;
     })();
 
     clientsInFlightPromise = fetchFreshPromise;
@@ -2218,56 +2228,65 @@ export const DBService = {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    const client = await getSupabase();
-    if (client) {
-      try {
-        let query = client.from('licensed_clients').select('*', { count: 'exact' });
+    // 1. If clients memory or localStorage cache is warm, serve zero-latency filtered pagination
+    const inMemClients = (clientsMemoryCache && clientsMemoryCache.length > 0)
+      ? clientsMemoryCache
+      : getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
 
-        if (params.search && params.search.trim()) {
-          const term = `%${params.search.trim()}%`;
-          query = query.or(`clientname.ilike.${term},premisename.ilike.${term},permitnumber.ilike.${term},location.ilike.${term},county.ilike.${term}`);
-        }
+    if (inMemClients && inMemClients.length > 0) {
+      let filtered = inMemClients;
 
-        if (params.category && params.category !== 'All') {
-          query = query.ilike('premisecategory', `%${params.category}%`);
-        }
-
-        if (params.levyInfo && params.levyInfo !== 'All') {
-          query = query.eq('levyinfo', params.levyInfo);
-        }
-
-        if (params.status === 'operating') {
-          query = query.eq('operationalstatus', 'operating');
-        } else if (params.status === 'closed') {
-          query = query.eq('operationalstatus', 'closed');
-        }
-
-        const sortColumn = params.sortBy === 'permitNumber' ? 'permitnumber' : 'clientname';
-        query = query.order(sortColumn, { ascending: params.sortOrder !== 'desc' });
-        query = query.order('id', { ascending: true });
-        query = query.range(from, to);
-
-        const timeoutPromise = new Promise<{ data: any; count: any; error: any }>((_, reject) =>
-          setTimeout(() => reject(new Error('Supabase getClientsPaginated timeout')), 3000)
+      if (params.search && params.search.trim()) {
+        const term = params.search.trim().toLowerCase();
+        filtered = filtered.filter(c =>
+          String(c.customerNumber || '').toLowerCase().includes(term) ||
+          String(c.clientName || '').toLowerCase().includes(term) ||
+          String(c.premiseName || '').toLowerCase().includes(term) ||
+          String(c.permitNumber || '').toLowerCase().includes(term) ||
+          String(c.location || '').toLowerCase().includes(term) ||
+          String(c.county || '').toLowerCase().includes(term) ||
+          String(c.contactPerson || '').toLowerCase().includes(term) ||
+          String(c.tel || '').toLowerCase().includes(term)
         );
-        const { data, count, error } = await Promise.race([query, timeoutPromise]);
-        if (!error && data && data.length > 0) {
-          const total = count ?? data.length;
-          return {
-            data: data.map(c => clientFromDb(c)),
-            count: total,
-            totalCount: total,
-            page,
-            pageSize,
-            totalPages: Math.ceil(total / pageSize) || 1
-          };
-        }
-      } catch (err) {
-        console.warn("[DBService] Supabase getClientsPaginated error:", err);
       }
+
+      if (params.category && params.category !== 'All') {
+        filtered = filtered.filter(c => 
+          String(c.premiseCategory || '').toLowerCase().includes(params.category!.toLowerCase())
+        );
+      }
+
+      if (params.levyInfo && params.levyInfo !== 'All') {
+        filtered = filtered.filter(c => c.levyInfo === params.levyInfo);
+      }
+
+      if (params.status === 'operating') {
+        filtered = filtered.filter(c => c.operationalStatus === 'operating');
+      } else if (params.status === 'closed') {
+        filtered = filtered.filter(c => c.operationalStatus === 'closed');
+      }
+
+      const isAsc = params.sortOrder !== 'desc';
+      filtered.sort((a, b) => {
+        const valA = String(params.sortBy === 'permitNumber' ? a.permitNumber : a.clientName || '');
+        const valB = String(params.sortBy === 'permitNumber' ? b.permitNumber : b.clientName || '');
+        return isAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      });
+
+      const total = filtered.length;
+      const sliced = filtered.slice(from, from + pageSize);
+
+      return {
+        data: sliced,
+        count: total,
+        totalCount: total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize) || 1
+      };
     }
 
-    // Call local backend with exact batch parameters to limit egress
+    // 2. Fetch from local backend endpoint (kept in sync via Google Sheet 1)
     try {
       const qParams = new URLSearchParams();
       qParams.set('page', String(page));
@@ -2283,56 +2302,23 @@ export const DBService = {
       if (res.ok) {
         const paginatedData = await res.json();
         if (paginatedData && Array.isArray(paginatedData.data)) {
-          return paginatedData;
+          return {
+            ...paginatedData,
+            data: paginatedData.data.map((c: any) => clientFromDb(c))
+          };
         }
       }
     } catch (e) {
-      console.warn("[DBService] Local API getClientsPaginated error:", e);
+      console.warn("[DBService] Local API getClientsPaginated notice:", e);
     }
-
-    // Fallback to local / memory filtered pagination if network is unavailable
-    const all = clientsMemoryCache && Array.isArray(clientsMemoryCache) 
-      ? clientsMemoryCache 
-      : getArrayFromLocalStorage<LicensedClient>('kdb_clients_cache');
-    let filtered = all;
-
-    if (params.search && params.search.trim()) {
-      filtered = filtered.filter(c => 
-        searchMatches(c.customerNumber, params.search) ||
-        searchMatches(c.clientName, params.search) ||
-        searchMatches(c.premiseName, params.search) ||
-        searchMatches(c.permitNumber, params.search) ||
-        searchMatches(c.location, params.search) ||
-        searchMatches(c.county, params.search)
-      );
-    }
-
-    if (params.category && params.category !== 'All') {
-      filtered = filtered.filter(c => 
-        String(c.premiseCategory || '').toLowerCase().includes(params.category!.toLowerCase())
-      );
-    }
-
-    if (params.levyInfo && params.levyInfo !== 'All') {
-      filtered = filtered.filter(c => c.levyInfo === params.levyInfo);
-    }
-
-    if (params.status === 'operating') {
-      filtered = filtered.filter(c => c.operationalStatus === 'operating');
-    } else if (params.status === 'closed') {
-      filtered = filtered.filter(c => c.operationalStatus === 'closed');
-    }
-
-    const total = filtered.length;
-    const paged = filtered.slice(from, from + pageSize);
 
     return {
-      data: paged,
-      count: total,
-      totalCount: total,
+      data: [],
+      count: 0,
+      totalCount: 0,
       page,
       pageSize,
-      totalPages: Math.ceil(total / pageSize) || 1
+      totalPages: 1
     };
   },
 
@@ -2611,69 +2597,23 @@ export const DBService = {
     }
 
     const fetchReturnsPromise = (async (): Promise<ClientReturn[]> => {
-      const fetchLocal = async () => {
-        const data = await safeFetchJson<any[]>('/api/returns');
-        if (data && Array.isArray(data) && data.length > 0) {
+      try {
+        const data = await safeFetchJson<any[]>('/api/returns', undefined, 15000);
+        if (data && Array.isArray(data)) {
           const mapped = data.map(r => returnFromDb(r));
           returnsMemoryCache = mapped;
           returnsCacheTimestamp = Date.now();
           safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
           return mapped;
         }
-        const local = getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
-        const mapped = local.map(r => returnFromDb(r));
-        returnsMemoryCache = mapped;
-        returnsCacheTimestamp = Date.now();
-        return mapped;
-      };
-
-      const client = await getSupabase();
-      if (!client) {
-        return await fetchLocal();
-      }
-
-      try {
-        let allReturnsData: any[] = [];
-        let from = 0;
-        const pageSize = 1000;
-        while (true) {
-          const pageQuery = client
-            .from('client_returns')
-            .select('*')
-            .order('year', { ascending: false })
-            .order('id', { ascending: true })
-            .range(from, from + pageSize - 1);
-          
-          const timeoutPromise = new Promise<{ data: any; error: any }>((_, reject) =>
-            setTimeout(() => reject(new Error('Supabase getReturns timeout')), 3500)
-          );
-          const { data, error } = await Promise.race([pageQuery, timeoutPromise]);
-
-          if (error) {
-            console.warn("[DBService] Supabase getReturns page failed:", error);
-            break;
-          }
-          if (!data || data.length === 0) break;
-          allReturnsData.push(...data);
-          if (data.length < pageSize) break;
-          from += pageSize;
-        }
-
-        if (allReturnsData.length > 0) {
-          const mapped = allReturnsData.map(r => returnFromDb(r));
-          returnsMemoryCache = mapped;
-          returnsCacheTimestamp = Date.now();
-          safeSetLocalStorage('kdb_returns_cache', JSON.stringify(mapped));
-          return mapped;
-        }
-
-        return await fetchLocal();
       } catch (e) {
-        console.warn("[DBService] Supabase getReturns exception, falling back to local. Error:", e);
-        return await fetchLocal();
-      } finally {
-        returnsInFlightPromise = null;
+        console.warn("[DBService] API getReturns error:", e);
       }
+      const local = getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
+      const mapped = (local || []).map(r => returnFromDb(r));
+      returnsMemoryCache = mapped;
+      returnsCacheTimestamp = Date.now();
+      return mapped;
     })();
 
     returnsInFlightPromise = fetchReturnsPromise;
@@ -2686,59 +2626,72 @@ export const DBService = {
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
-    const client = await getSupabase();
-    if (client) {
-      try {
-        let query = client.from('client_returns').select('*', { count: 'exact' });
+    // 1. If returns memory or localStorage cache is warm, serve zero-latency filtered pagination
+    const inMemReturns = (returnsMemoryCache && returnsMemoryCache.length > 0)
+      ? returnsMemoryCache
+      : getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
 
-        if (params.clientId) {
-          query = query.eq('clientid', params.clientId);
-        }
+    if (inMemReturns && inMemReturns.length > 0) {
+      let filtered = inMemReturns;
 
-        if (params.year && params.year !== 'All') {
-          query = query.eq('year', Number(params.year));
-        }
-
-        if (params.month && params.month !== 'All') {
-          query = query.ilike('period', params.month.trim());
-        }
-
-        if (params.status && params.status !== 'All') {
-          query = query.eq('paymentstatus', params.status);
-        }
-
-        if (params.search && params.search.trim()) {
-          const term = `%${params.search.trim()}%`;
-          query = query.or(`clientname.ilike.${term},txnref.ilike.${term},comments.ilike.${term}`);
-        }
-
-        const sortColumn = params.sortBy === 'returndate' ? 'returndate' : 'year';
-        query = query.order(sortColumn, { ascending: params.sortOrder === 'asc' });
-        query = query.order('id', { ascending: true });
-        query = query.range(from, to);
-
-        const timeoutPromise = new Promise<{ data: any; count: any; error: any }>((_, reject) =>
-          setTimeout(() => reject(new Error('Supabase getReturnsPaginated timeout')), 3000)
-        );
-        const { data, count, error } = await Promise.race([query, timeoutPromise]);
-        if (!error && data && data.length > 0) {
-          const total = count ?? data.length;
-          const mapped = data.map(r => returnFromDb(r));
-          return {
-            data: mapped,
-            count: total,
-            totalCount: total,
-            page,
-            pageSize,
-            totalPages: Math.ceil(total / pageSize) || 1
-          };
-        }
-      } catch (err) {
-        console.warn("[DBService] Supabase getReturnsPaginated error:", err);
+      if (params.clientId) {
+        filtered = filtered.filter(r => r.clientId === params.clientId);
       }
+      if (params.year && params.year !== 'All') {
+        filtered = filtered.filter(r => String(r.year) === String(params.year));
+      }
+      if (params.month && params.month !== 'All') {
+        const mLower = params.month.trim().toLowerCase();
+        filtered = filtered.filter(r => {
+          const pLower = (r.period || '').trim().toLowerCase();
+          return pLower === mLower || pLower.startsWith(mLower) || pLower.includes(mLower);
+        });
+      }
+      if (params.status && params.status !== 'All') {
+        filtered = filtered.filter(r => r.paymentStatus === params.status);
+      }
+      if (params.search && params.search.trim()) {
+        const term = params.search.trim().toLowerCase();
+        filtered = filtered.filter(r => 
+          String(r.clientName || '').toLowerCase().includes(term) ||
+          String(r.txnRef || '').toLowerCase().includes(term) ||
+          String(r.comments || '').toLowerCase().includes(term)
+        );
+      }
+
+      const isAsc = params.sortOrder === 'asc';
+      filtered.sort((a, b) => {
+        const valA = String(params.sortBy === 'returndate' ? a.returnDate : a.year || '');
+        const valB = String(params.sortBy === 'returndate' ? b.returnDate : b.year || '');
+        return isAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      });
+
+      const total = filtered.length;
+      const sliced = filtered.slice(from, from + pageSize);
+      const totalQty = filtered.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+      const totalInvoicedAmt = filtered.reduce((sum, r) => sum + (Number(r.invoiceAmount) || 0), 0);
+      const totalPaidAmt = filtered.reduce((sum, r) => sum + (Number(r.paymentAmount) || 0), 0);
+      const totalLessCFAmt = filtered.reduce((sum, r) => sum + (Number(r.lessCF) || 0), 0);
+      const totalOutstanding = filtered.reduce((sum, r) => sum + (Number(r.outstandingBalance) || 0), 0);
+
+      return {
+        data: sliced,
+        count: total,
+        totalCount: total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize) || 1,
+        summary: {
+          totalQty,
+          totalInvoicedAmt,
+          totalPaidAmt,
+          totalLessCFAmt,
+          totalOutstanding
+        }
+      };
     }
 
-    // Call local backend with exact batch parameters to limit egress
+    // 2. Fetch from local backend endpoint (kept in sync via Google Sheet 1)
     try {
       const qParams = new URLSearchParams();
       qParams.set('page', String(page));
@@ -2755,53 +2708,23 @@ export const DBService = {
       if (res.ok) {
         const paginatedData = await res.json();
         if (paginatedData && Array.isArray(paginatedData.data)) {
-          return paginatedData;
+          return {
+            ...paginatedData,
+            data: paginatedData.data.map((r: any) => returnFromDb(r))
+          };
         }
       }
     } catch (e) {
-      console.warn("[DBService] Local API getReturnsPaginated error:", e);
+      console.warn("[DBService] Local API getReturnsPaginated notice:", e);
     }
-
-    // Fallback to local / memory filtered pagination
-    const all = returnsMemoryCache && Array.isArray(returnsMemoryCache)
-      ? returnsMemoryCache
-      : getArrayFromLocalStorage<ClientReturn>('kdb_returns_cache');
-    let filtered = all;
-
-    if (params.clientId) {
-      filtered = filtered.filter(r => r.clientId === params.clientId);
-    }
-
-    if (params.year && params.year !== 'All') {
-      filtered = filtered.filter(r => String(r.year) === String(params.year));
-    }
-
-    if (params.month && params.month !== 'All') {
-      filtered = filtered.filter(r => (r.period || '').trim().toLowerCase() === params.month!.trim().toLowerCase());
-    }
-
-    if (params.status && params.status !== 'All') {
-      filtered = filtered.filter(r => r.paymentStatus === params.status);
-    }
-
-    if (params.search && params.search.trim()) {
-      filtered = filtered.filter(r => 
-        searchMatches(r.clientName, params.search) ||
-        searchMatches(r.txnRef, params.search) ||
-        searchMatches(r.comments, params.search)
-      );
-    }
-
-    const total = filtered.length;
-    const paged = filtered.slice(from, from + pageSize);
 
     return {
-      data: paged,
-      count: total,
-      totalCount: total,
+      data: [],
+      count: 0,
+      totalCount: 0,
       page,
       pageSize,
-      totalPages: Math.ceil(total / pageSize) || 1
+      totalPages: 1
     };
   },
 
@@ -2829,36 +2752,6 @@ export const DBService = {
         return await res.json();
       }
     } catch {}
-
-    const client = await getSupabase();
-    if (client) {
-      try {
-        const timeoutPromise = new Promise<any>((_, reject) =>
-          setTimeout(() => reject(new Error('Supabase getHubMetrics timeout')), 2500)
-        );
-        const [clientsCountRes, operatingClientsRes, returnsCountRes] = await Promise.race([
-          Promise.all([
-            client.from('licensed_clients').select('*', { count: 'exact', head: true }),
-            client.from('licensed_clients').select('*', { count: 'exact', head: true }).eq('operationalstatus', 'operating'),
-            client.from('client_returns').select('*', { count: 'exact', head: true })
-          ]),
-          timeoutPromise
-        ]);
-        const totalClients = clientsCountRes?.count ?? 0;
-        const operatingClients = operatingClientsRes?.count ?? 0;
-        const totalReturns = returnsCountRes?.count ?? 0;
-
-        return {
-          totalClients,
-          operatingClients,
-          totalReturns,
-          totalVolume: 0,
-          totalOutstanding: 0
-        };
-      } catch (err) {
-        console.warn("[DBService] Supabase getHubMetrics error:", err);
-      }
-    }
 
     return {
       totalClients: localClients.length,

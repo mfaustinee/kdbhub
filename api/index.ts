@@ -869,7 +869,23 @@ Allow: /cessations
         });
       } catch (err: any) {
         logToFile(`[API] Error during Service Account Sync: ${err.message}`);
-        res.status(500).json({ error: "Failed to sync clients and returns from Google Sheets", details: err.message });
+        let helpfulMessage = err.message || "Failed to sync clients and returns from Google Sheets";
+        if (err.code === 404 || String(err.message || '').includes('Requested entity was not found')) {
+          helpfulMessage = `Google Sheet 1 (ID: ${spreadsheetId}) was not found or has not been shared with the service account. Please share the spreadsheet with: data-validation-sync@data-validation-488118.iam.gserviceaccount.com as Viewer or Editor.`;
+        }
+        res.status(500).json({ error: "Failed to sync clients and returns from Google Sheets", details: helpfulMessage });
+      }
+    });
+
+    app.post("/api/returns/clear", async (req, res) => {
+      try {
+        logToFile("[API] Received request to clear returns data");
+        await fs.promises.writeFile(RETURNS_FILE, JSON.stringify([], null, 2), "utf-8");
+        logToFile("[API] Returns data cleared successfully");
+        res.json({ success: true, count: 0 });
+      } catch (error: any) {
+        logToFile(`[API] Error clearing returns: ${error.message}`);
+        res.status(500).json({ error: "Failed to clear returns", details: error.message });
       }
     });
 
@@ -1101,7 +1117,14 @@ Allow: /cessations
     logToFile("[Server] Registering clients routes...");
     app.get("/api/clients", async (req, res) => {
       try {
-        const clients = await readJsonArrayFile(CLIENTS_FILE);
+        const rawClients = await readJsonArrayFile(CLIENTS_FILE);
+        const clients = rawClients.map((c: any, idx: number) => ({
+          ...c,
+          id: c.id || (c.permitNumber ? `CLI-${String(c.permitNumber).replace(/[^a-zA-Z0-9]/g, '-')}` : `CLI-ROW-${idx}-${String(c.clientName || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20)}`),
+          clientName: c.clientName || c.clientname || '',
+          premiseName: c.premiseName || c.premisename || c.clientName || '',
+          permitNumber: c.permitNumber || c.permitnumber || ''
+        }));
         const { page, pageSize, search, category, status, levyInfo, sortBy, sortOrder } = req.query;
 
         if (page !== undefined || pageSize !== undefined) {
@@ -1273,7 +1296,20 @@ Allow: /cessations
     logToFile("[Server] Registering returns routes...");
     app.get("/api/returns", async (req, res) => {
       try {
-        const returnsList = await readJsonArrayFile(RETURNS_FILE);
+        const rawReturns = await readJsonArrayFile(RETURNS_FILE);
+        const returnsList = rawReturns.map((r: any, idx: number) => ({
+          ...r,
+          id: r.id || `RET-${r.year || 2026}-${String(r.period || 'Jan').toLowerCase().replace(/[^a-z0-9]/g, '')}-${idx}-${String(r.clientName || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20)}`,
+          clientName: r.clientName || r.clientname || '',
+          period: r.period || 'January',
+          year: Number(r.year || 2026),
+          qty: Number(r.qty || 0),
+          invoiceAmount: Number(r.invoiceAmount ?? r.invoiceamount ?? 0),
+          paymentAmount: Number(r.paymentAmount ?? r.paymentamount ?? 0),
+          outstandingBalance: Number(r.outstandingBalance ?? r.outstandingbalance ?? 0),
+          lessCF: Number(r.lessCF ?? r.lesscf ?? 0),
+          paymentStatus: r.paymentStatus || r.paymentstatus || 'Unpaid'
+        }));
         const { page, pageSize, search, clientId, year, month, status, sortBy, sortOrder } = req.query;
 
         if (page !== undefined || pageSize !== undefined) {
@@ -1292,7 +1328,11 @@ Allow: /cessations
           }
 
           if (month && month !== 'All') {
-            filtered = filtered.filter((r: any) => String(r.period || '').trim().toLowerCase() === String(month).trim().toLowerCase());
+            const mLower = String(month).trim().toLowerCase();
+            filtered = filtered.filter((r: any) => {
+              const pLower = String(r.period || '').trim().toLowerCase();
+              return pLower === mLower || pLower.startsWith(mLower) || pLower.includes(mLower);
+            });
           }
 
           if (status && status !== 'All') {

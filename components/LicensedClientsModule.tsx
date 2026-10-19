@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { LicensedClient, ClientBranch, formatDateToDDMMYYYY, formatPermitNumber, isSameCategory, getClientCategory, parseDDMMYYYY } from '../types';
 import { DBService } from '../services/db';
 import { areNamesMatching, searchMatches, normalizeAlphanumeric, cleanPermitNumber } from './lib/nameMatching';
@@ -53,12 +53,46 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
   const [levyFilter, setLevyFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
 
+  // Batching & Pagination states (10, 25, 50 & 100 batch options)
+  const [batchSize, setBatchSize] = useState<10 | 25 | 50 | 100>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalRecords, setTotalRecords] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
+
+  const fetchClientsBatch = useCallback(async (page: number = currentPage, size: 10 | 25 | 50 | 100 = batchSize) => {
+    setLoading(true);
+    try {
+      const res = await DBService.getClientsPaginated({
+        page,
+        pageSize: size,
+        search: searchTerm,
+        category: categoryFilter,
+        status: statusFilter,
+        levyInfo: levyFilter
+      });
+      setClients(res.data);
+      const total = res.count ?? res.totalCount ?? res.data.length;
+      setTotalRecords(total);
+      setTotalPages(res.totalPages || Math.ceil(total / size) || 1);
+      setCurrentPage(page);
+    } catch (error) {
+      console.error('Error fetching clients batch:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPage, batchSize, searchTerm, categoryFilter, statusFilter, levyFilter]);
+
   // Synchronize with parent props when passed
   useEffect(() => {
-    if (propClients !== undefined) {
+    if (propClients !== undefined && propClients.length > 0) {
       setClients(propClients);
+      setTotalRecords(propClients.length);
+      setTotalPages(Math.ceil(propClients.length / batchSize) || 1);
+      setLoading(false);
+    } else if (!propClients || propClients.length === 0) {
+      fetchClientsBatch(1, batchSize);
     }
-  }, [propClients]);
+  }, [propClients, batchSize, fetchClientsBatch]);
 
   useEffect(() => {
     if (propLoading !== undefined) {
@@ -130,53 +164,31 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
     'July', 'August', 'September', 'October', 'November', 'December'
   ];
 
-  // Batching & Pagination states (10, 25, 50 & 100 batch options)
-  const [batchSize, setBatchSize] = useState<10 | 25 | 50 | 100>(25);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [totalRecords, setTotalRecords] = useState<number>(0);
-  const [totalPages, setTotalPages] = useState<number>(1);
-
-  const fetchClientsBatch = useCallback(async (page: number = currentPage, size: 10 | 25 | 50 | 100 = batchSize) => {
-    setLoading(true);
-    try {
-      const res = await DBService.getClientsPaginated({
-        page,
-        pageSize: size,
-        search: searchTerm,
-        category: categoryFilter,
-        status: statusFilter,
-        levyInfo: levyFilter
-      });
-      setClients(res.data);
-      const total = res.count ?? res.totalCount ?? res.data.length;
-      setTotalRecords(total);
-      setTotalPages(res.totalPages || Math.ceil(total / size) || 1);
-      setCurrentPage(page);
-    } catch (error) {
-      console.error('Error fetching clients batch:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [currentPage, batchSize, searchTerm, categoryFilter, statusFilter, levyFilter]);
-
-  // Fetch only the selected batch when filters or batch size change
+  // Fetch only the selected batch when filters or batch size change and parent didn't provide full dataset
   useEffect(() => {
+    if (propClients && propClients.length > 0) {
+      return;
+    }
     const timer = setTimeout(() => {
       fetchClientsBatch(1, batchSize);
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchTerm, categoryFilter, levyFilter, statusFilter, batchSize]);
+  }, [searchTerm, categoryFilter, levyFilter, statusFilter, batchSize, propClients]);
 
   const handleBatchSizeChange = (newSize: 10 | 25 | 50 | 100) => {
     setBatchSize(newSize);
     setCurrentPage(1);
-    fetchClientsBatch(1, newSize);
+    if (!propClients || propClients.length === 0) {
+      fetchClientsBatch(1, newSize);
+    }
   };
 
   const handlePageChange = (newPage: number) => {
-    const validPage = Math.max(1, Math.min(newPage, totalPages));
+    const validPage = Math.max(1, Math.min(newPage, effectiveTotalPages || totalPages));
     setCurrentPage(validPage);
-    fetchClientsBatch(validPage, batchSize);
+    if (!isLocalPagination) {
+      fetchClientsBatch(validPage, batchSize);
+    }
   };
 
   const fetchClients = async () => {
@@ -936,11 +948,57 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
     }
   };
 
-  // Clients are queried, filtered, and batched server-side to limit egress
-  const filteredClients = clients;
+  // Apply search, category, status and levy filters
+  const processedClients = useMemo(() => {
+    let list = clients;
+    if (searchTerm && searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      list = list.filter(c =>
+        String(c.customerNumber || '').toLowerCase().includes(term) ||
+        String(c.clientName || '').toLowerCase().includes(term) ||
+        String(c.premiseName || '').toLowerCase().includes(term) ||
+        String(c.permitNumber || '').toLowerCase().includes(term) ||
+        String(c.location || '').toLowerCase().includes(term) ||
+        String(c.county || '').toLowerCase().includes(term) ||
+        String(c.contactPerson || '').toLowerCase().includes(term) ||
+        String(c.tel || '').toLowerCase().includes(term)
+      );
+    }
+    if (categoryFilter && categoryFilter !== 'All') {
+      list = list.filter(c => isSameCategory(getClientCategory(c), categoryFilter));
+    }
+    if (levyFilter && levyFilter !== 'All') {
+      list = list.filter(c => c.levyInfo === levyFilter);
+    }
+    if (statusFilter && statusFilter !== 'All') {
+      const sf = statusFilter.toLowerCase();
+      if (sf === 'operating') {
+        list = list.filter(c => String(c.operationalStatus || '').toLowerCase() === 'operating');
+      } else if (sf === 'closed') {
+        list = list.filter(c => String(c.operationalStatus || '').toLowerCase() === 'closed');
+      } else if (sf === 'active') {
+        list = list.filter(c => String(c.permitStatus || '').toLowerCase() === 'valid' || String(c.permitStatus || '').toLowerCase() === 'active');
+      } else if (sf === 'expired') {
+        list = list.filter(c => String(c.permitStatus || '').toLowerCase() === 'expired');
+      }
+    }
+    return list;
+  }, [clients, searchTerm, categoryFilter, levyFilter, statusFilter]);
+
+  const isLocalPagination = clients.length > batchSize;
+  const effectiveTotal = isLocalPagination ? processedClients.length : (totalRecords || processedClients.length);
+  const effectiveTotalPages = Math.max(1, Math.ceil(effectiveTotal / batchSize));
+
+  const filteredClients = useMemo(() => {
+    if (isLocalPagination) {
+      const from = (currentPage - 1) * batchSize;
+      return processedClients.slice(from, from + batchSize);
+    }
+    return processedClients;
+  }, [processedClients, isLocalPagination, currentPage, batchSize]);
 
   // Calculate high-level stats
-  const totalCount = totalRecords || clients.length;
+  const totalCount = effectiveTotal;
   const totalQFR = clients.filter(c => c.levyInfo === 'QFR').length;
   const totalDNQR = clients.filter(c => c.levyInfo === 'DNQ-R').length;
 
@@ -1079,13 +1137,13 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
 
             <div className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200/60 font-bold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span>Batch {currentPage} of {totalPages} (records {totalRecords === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, totalRecords)})</span>
+              <span>Batch {currentPage} of {effectiveTotalPages} (records {effectiveTotal === 0 ? 0 : (currentPage - 1) * batchSize + 1}–{Math.min(currentPage * batchSize, effectiveTotal)})</span>
             </div>
           </div>
 
           <div className="flex items-center justify-between sm:justify-end gap-3">
             <span className="text-[11px] text-slate-500 font-semibold">
-              Showing <span className="font-bold text-slate-900">{totalRecords === 0 ? 0 : (currentPage - 1) * batchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(currentPage * batchSize, totalRecords)}</span> of <span className="font-bold text-slate-900">{totalRecords.toLocaleString()}</span>
+              Showing <span className="font-bold text-slate-900">{effectiveTotal === 0 ? 0 : (currentPage - 1) * batchSize + 1}</span>–<span className="font-bold text-slate-900">{Math.min(currentPage * batchSize, effectiveTotal)}</span> of <span className="font-bold text-slate-900">{effectiveTotal.toLocaleString()}</span>
             </span>
 
             <div className="flex items-center gap-1">
@@ -1099,12 +1157,12 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
                 <ChevronLeft size={14} />
               </button>
               <span className="text-[11px] font-bold text-slate-700 px-2">
-                Page {currentPage} of {totalPages}
+                Page {currentPage} of {effectiveTotalPages}
               </span>
               <button
                 type="button"
                 onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage >= totalPages || loading}
+                disabled={currentPage >= effectiveTotalPages || loading}
                 className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 transition-all cursor-pointer"
                 title="Next batch"
               >
@@ -1140,8 +1198,8 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                {filteredClients.map(client => (
-                  <React.Fragment key={client.id}>
+                {filteredClients.map((client, idx) => (
+                  <React.Fragment key={client.id || `cli-${client.permitNumber || idx}`}>
                     <tr className="hover:bg-slate-50/30 transition-colors">
                       <td className="px-6 py-4 space-y-1">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -1336,20 +1394,20 @@ export const LicensedClientsModule: React.FC<LicensedClientsModuleProps> = ({
                 <ChevronLeft size={13} /> Prev
               </button>
               <span className="px-3 py-1 rounded-lg bg-slate-100 text-slate-900 text-[11px] font-black">
-                {currentPage} / {totalPages}
+                {currentPage} / {effectiveTotalPages}
               </span>
               <button
                 type="button"
                 onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage >= totalPages || loading}
+                disabled={currentPage >= effectiveTotalPages || loading}
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
               >
                 Next <ChevronRight size={13} />
               </button>
               <button
                 type="button"
-                onClick={() => handlePageChange(totalPages)}
-                disabled={currentPage >= totalPages || loading}
+                onClick={() => handlePageChange(effectiveTotalPages)}
+                disabled={currentPage >= effectiveTotalPages || loading}
                 className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed text-slate-700 text-[11px] font-bold cursor-pointer"
               >
                 Last

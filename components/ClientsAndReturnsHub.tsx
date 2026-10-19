@@ -9,7 +9,9 @@ import {
   Database, 
   AlertTriangle, 
   BarChart3,
-  RefreshCw 
+  RefreshCw,
+  Trash2,
+  Check
 } from 'lucide-react';
 
 export type ClientsAndReturnsTab = 'clients' | 'returns' | 'debtors' | 'analysis';
@@ -66,19 +68,35 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
     }
 
     try {
+      // Fetch each resource with resilient fallback
+      const metricsPromise = DBService.getHubMetrics().catch(() => ({
+        totalClients: 0,
+        operatingClients: 0,
+        totalReturns: 0,
+        totalVolume: 0,
+        totalOutstanding: 0
+      }));
+      const debtorsPromise = DBService.getDebtors(forceFresh).catch(() => []);
+      const clientsPromise = DBService.getClients(forceFresh).catch(() => []);
+      const returnsPromise = DBService.getReturns(forceFresh).catch(() => []);
+
       const [metrics, fetchedDebtors, fetchedClients, fetchedReturns] = await Promise.all([
-        DBService.getHubMetrics(),
-        DBService.getDebtors(forceFresh),
-        DBService.getClients(forceFresh),
-        DBService.getReturns(forceFresh)
+        metricsPromise,
+        debtorsPromise,
+        clientsPromise,
+        returnsPromise
       ]);
 
-      setHubMetrics(metrics);
-      setLocalDebtors(fetchedDebtors);
-      if (fetchedClients && Array.isArray(fetchedClients)) {
+      if (metrics) {
+        setHubMetrics(metrics);
+      }
+      if (Array.isArray(fetchedDebtors)) {
+        setLocalDebtors(fetchedDebtors);
+      }
+      if (Array.isArray(fetchedClients)) {
         setClients(fetchedClients);
       }
-      if (fetchedReturns && Array.isArray(fetchedReturns)) {
+      if (Array.isArray(fetchedReturns)) {
         setReturns(fetchedReturns);
       }
       setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
@@ -90,8 +108,48 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
     }
   }, []);
 
+  const [cacheResetNotice, setCacheResetNotice] = useState<string | null>(null);
+
+  const handleClearReturnsCache = async () => {
+    setIsRefreshing(true);
+    DBService.clearReturnsCache();
+    setReturns([]);
+    setHubMetrics(prev => ({ ...prev, totalReturns: 0, totalVolume: 0, totalOutstanding: 0 }));
+    setCacheResetNotice("Outdated returns cache cleared. Only Google Sheet 1 synced data will be used.");
+    setTimeout(() => setCacheResetNotice(null), 5000);
+    await loadData(true);
+  };
+
   useEffect(() => {
     loadData(false);
+
+    // Reactive listener for Google Sheets sync completion
+    const handleGoogleSynced = (e: any) => {
+      if (e.detail?.clients && Array.isArray(e.detail.clients)) {
+        setClients(e.detail.clients);
+      }
+      if (e.detail?.returns && Array.isArray(e.detail.returns)) {
+        setReturns(e.detail.returns);
+      }
+      DBService.getHubMetrics().then(m => {
+        if (m) setHubMetrics(m);
+      }).catch(() => {});
+      setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    };
+
+    const handleReturnsCleared = () => {
+      setReturns([]);
+      DBService.getHubMetrics().then(m => {
+        if (m) setHubMetrics(m);
+      }).catch(() => {});
+    };
+
+    window.addEventListener('kdb:google-sheets-synced', handleGoogleSynced);
+    window.addEventListener('kdb:returns-cache-cleared', handleReturnsCleared);
+    return () => {
+      window.removeEventListener('kdb:google-sheets-synced', handleGoogleSynced);
+      window.removeEventListener('kdb:returns-cache-cleared', handleReturnsCleared);
+    };
   }, [loadData]);
 
   const handleManualRefresh = async () => {
@@ -136,12 +194,22 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 flex-wrap shrink-0">
             {lastSynced && (
               <span className="text-[11px] text-slate-400 font-medium hidden sm:inline-block">
                 Last synced at {lastSynced}
               </span>
             )}
+            <button
+              type="button"
+              onClick={handleClearReturnsCache}
+              disabled={isRefreshing || loading}
+              title="Reset and clear outdated returns cache to ensure only Google Sheet 1 data is used"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold border border-amber-200 transition-all disabled:opacity-50 cursor-pointer shadow-2xs"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-amber-600" />
+              <span>Reset Returns Cache</span>
+            </button>
             <button
               type="button"
               onClick={handleManualRefresh}
@@ -154,6 +222,14 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Cache Reset Notification */}
+        {cacheResetNotice && (
+          <div className="px-5 py-2.5 bg-emerald-50 border-b border-emerald-100 flex items-center gap-2 text-xs font-semibold text-emerald-800 animate-in fade-in">
+            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{cacheResetNotice}</span>
+          </div>
+        )}
 
         {/* Clean, Modern Segmented Tabs */}
         <div className="px-4 sm:px-6 py-2.5 bg-white flex items-center gap-1.5 overflow-x-auto">
@@ -232,21 +308,26 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
       <div className="transition-all duration-200">
         <div className={activeTab === 'clients' ? 'block animate-in fade-in duration-200' : 'hidden'}>
           <LicensedClientsModule 
+            clients={clients}
+            loading={loading}
             onClientsChange={setClients}
             onRefresh={handleManualRefresh}
-            standalone={true}
+            standalone={false}
           />
         </div>
 
         <div className={activeTab === 'returns' || activeTab === 'debtors' ? 'block animate-in fade-in duration-200' : 'hidden'}>
           <ClientReturnsModule 
+            clients={clients}
+            returns={returns}
+            loading={loading}
             debtors={effectiveDebtors}
             onDebtorUpdate={onDebtorUpdate}
             onReturnsChange={setReturns}
             onClientsChange={setClients}
             onRefresh={handleManualRefresh}
             defaultSubTab={activeTab === 'debtors' ? 'debtors' : 'registry'}
-            standalone={true}
+            standalone={false}
             hideNavigationHeader={true}
           />
         </div>

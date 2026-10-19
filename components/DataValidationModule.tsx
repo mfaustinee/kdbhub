@@ -5957,19 +5957,10 @@ export function DataValidationModule() {
         {/* Desktop / Tablet Full Header Banner (hidden on mobile, visible on sm and up) */}
         <div className="mb-4 hidden sm:flex bg-white rounded-xl p-3 md:p-4 shadow-sm border border-black/5 items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-              <div>
-                <p className="text-xs font-semibold text-gray-900">Google Sheets Sync</p>
-                <p className="text-[10px] text-gray-500">{isConnected ? 'Service Account Active' : 'Credentials Missing (Configure in Settings)'}</p>
-              </div>
+            <div>
+              <p className="text-xs font-bold text-gray-900 uppercase tracking-wider">Data Validation Form</p>
+              <p className="text-[10px] text-gray-500 font-medium">Dairy regulatory field verification and compliance record</p>
             </div>
-            {isConnected && (
-              <div className="flex items-center gap-1.5 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
-                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Ready to Sync</span>
-              </div>
-            )}
           </div>
           <div className="flex items-center gap-2 justify-end flex-wrap">
             {draftLastSaved && (
@@ -6410,31 +6401,6 @@ export function DataValidationModule() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      {/* Real-time Google Sheets Live Sync Status Badge */}
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 shadow-2xs">
-                        <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        <span className="text-[11px] font-bold text-slate-800">Google Sheets:</span>
-                        {googleSyncState.isSyncing ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                            <RefreshCw className="w-2.5 h-2.5 text-amber-600 animate-spin" />
-                            <span>Syncing...</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            <span>Synced ({clients.length} Clients • {returnsData.length.toLocaleString()} Returns)</span>
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => GoogleSheetsService.triggerAutoSync().catch(() => {})}
-                          disabled={googleSyncState.isSyncing}
-                          className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-slate-200/50 rounded transition-colors cursor-pointer disabled:opacity-50"
-                          title="Click to sync with Google Sheets"
-                        >
-                          <RefreshCw className={`w-3 h-3 ${googleSyncState.isSyncing ? 'animate-spin text-emerald-600' : ''}`} />
-                        </button>
-                      </div>
 
                       {/* Manual 7-Point Reconciliation Pre-Flight Trigger */}
                       <button
@@ -7758,16 +7724,18 @@ export function DataValidationModule() {
                       </div>
                       {formData.hasLocalSales && (
                         <div className="flex items-center gap-2.5 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={handleManualIngestReturns}
-                            className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
-                            title="Ingest monthly return figures from Returns Registry for current premise and selected months"
-                            id="ingest-returns-btn"
-                          >
-                            <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
-                            <span>Ingest Returns</span>
-                          </button>
+                          {!isBranchFacility && validationPremiseMode === 'main' && (
+                            <button
+                              type="button"
+                              onClick={handleManualIngestReturns}
+                              className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                              title="Ingest monthly return figures from Returns Registry for current premise and selected months"
+                              id="ingest-returns-btn"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+                              <span>Ingest Returns</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {

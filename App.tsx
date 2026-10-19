@@ -506,14 +506,10 @@ const App: React.FC = () => {
                 <div className="hidden sm:block">
                   <div className="flex items-center space-x-2">
                     <span className="font-bold text-xs uppercase tracking-wider text-slate-800">KDB Hub</span>
-                    <div className={`flex items-center space-x-1 px-2 py-0.5 rounded-full border ${isSyncing ? 'bg-amber-50 border-amber-100' : 'bg-emerald-50 border-emerald-100'}`}>
-                      {isSyncing ? (
-                        <Loader2 className="w-2.5 h-2.5 text-amber-500 animate-spin" />
-                      ) : (
-                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                      )}
-                      <span className={`text-[9px] font-bold uppercase tracking-tight ${isSyncing ? 'text-amber-600' : 'text-emerald-600'}`}>
-                        {isSyncing ? 'Syncing...' : 'Connected'}
+                    <div className="flex items-center space-x-1 px-2 py-0.5 rounded-full border bg-emerald-50 border-emerald-100">
+                      <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                      <span className="text-[9px] font-bold uppercase tracking-tight text-emerald-600">
+                        Connected
                       </span>
                     </div>
                   </div>
@@ -529,9 +525,9 @@ const App: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-1.5">
                     {googleSyncState.isSyncing ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200" title={googleSyncState.phase || 'Syncing from Google Sheets...'}>
                         <RefreshCw className="w-3 h-3 text-amber-600 animate-spin" />
-                        <span>Syncing...</span>
+                        <span>Syncing {googleSyncState.progress ? `${Math.round(googleSyncState.progress)}%` : '0%'}</span>
                       </span>
                     ) : googleSyncState.status === 'synced' || googleSyncState.clientsCount > 0 ? (
                       <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
