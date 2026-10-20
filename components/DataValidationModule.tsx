@@ -5959,7 +5959,6 @@ export function DataValidationModule() {
           <div className="flex items-center gap-3">
             <div>
               <p className="text-xs font-bold text-gray-900 uppercase tracking-wider">Data Validation Form</p>
-              <p className="text-[10px] text-gray-500 font-medium">Dairy regulatory field verification and compliance record</p>
             </div>
           </div>
           <div className="flex items-center gap-2 justify-end flex-wrap">

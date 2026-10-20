@@ -1729,6 +1729,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {tab === 'clients_and_returns' && (
         <div className="space-y-6 animate-in fade-in duration-300">
           <ClientsAndReturnsHub 
+            debtors={debtors}
             onSyncComplete={onRefresh}
             onDebtorUpdate={onDebtorUpdate}
           />
@@ -1739,6 +1740,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="space-y-6 animate-in fade-in duration-300">
           <ClientsAndReturnsHub 
             defaultTab="debtors"
+            debtors={debtors}
             onSyncComplete={onRefresh}
             onDebtorUpdate={onDebtorUpdate}
           />

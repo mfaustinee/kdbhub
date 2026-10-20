@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { LicensedClient, ClientReturn, DebtorRecord } from '../types';
 import { DBService } from '../services/db';
 import { LicensedClientsModule } from './LicensedClientsModule';
 import { ClientReturnsModule } from './ClientReturnsModule';
 import { AnalysisModule } from './AnalysisModule';
+import { integrateUnpaidReturnsIntoDebtors } from '../utils/debtorUtils';
 import { 
   Building2, 
   Database, 
@@ -170,8 +171,10 @@ export const ClientsAndReturnsHub: React.FC<ClientsAndReturnsHubProps> = ({
     }
   };
 
-  // High-level shared aggregate statistics from server-calculated metrics
-  const effectiveDebtors = propDebtors || localDebtors;
+  // High-level shared aggregate statistics from server-calculated metrics & unpaid returns integration
+  const effectiveDebtors = useMemo(() => {
+    return integrateUnpaidReturnsIntoDebtors(propDebtors || localDebtors, returns, clients);
+  }, [propDebtors, localDebtors, returns, clients]);
   const totalClientsCount = hubMetrics.totalClients || clients.length;
   const totalFilingsCount = hubMetrics.totalReturns || returns.length;
 
