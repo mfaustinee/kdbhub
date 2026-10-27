@@ -915,6 +915,77 @@ export function DataValidationModule() {
     validationPremiseMode === 'new'
   );
 
+  // Branch identification: Identify all branches belonging to the active DBO
+  // by checking whether records share the same name of DBO, with different premise names.
+  const identifiedBranches = useMemo<ClientBranch[]>(() => {
+    const currentDbo = (formData.dboName || selectedClient?.clientName || '').trim();
+    if (!currentDbo) return [];
+
+    const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const currentDboNorm = norm(currentDbo);
+    const mainPremiseNorm = norm(selectedClient?.premiseName || formData.premiseName || '');
+
+    const branchesMap = new Map<string, ClientBranch>();
+
+    // 1. Check explicit branches on selectedClient if present
+    if (selectedClient && Array.isArray(selectedClient.branches)) {
+      selectedClient.branches.forEach(b => {
+        const bKey = norm(b.premiseName);
+        if (bKey && bKey !== mainPremiseNorm && !branchesMap.has(bKey)) {
+          branchesMap.set(bKey, {
+            ...b,
+            id: b.id || `br-${bKey}`
+          });
+        }
+      });
+    }
+
+    // 2. Scan all licensed clients: check whether they share the same name of DBO with a different premise name
+    clients.forEach(c => {
+      if (!c) return;
+      const cDboNorm = norm(c.clientName);
+      if (cDboNorm && cDboNorm === currentDboNorm) {
+        const cPremNorm = norm(c.premiseName);
+        if (cPremNorm && cPremNorm !== mainPremiseNorm && !branchesMap.has(cPremNorm)) {
+          branchesMap.set(cPremNorm, {
+            id: c.id || `br-${cPremNorm}`,
+            premiseName: c.premiseName,
+            permitNumber: c.permitNumber || c.id || '',
+            location: c.location || '',
+            county: c.county || 'Kericho',
+            premiseCategory: c.premiseCategory || 'Milk Bar',
+            expiryDate: c.expiryDate || c.endDate || '',
+            operationalStatus: c.operationalStatus === 'closed' ? 'closed' : 'operating',
+            permitStatus: c.permitStatus || 'active'
+          });
+        }
+
+        // Also check if this client record has explicit sub-branches
+        if (Array.isArray(c.branches)) {
+          c.branches.forEach(b => {
+            const bKey = norm(b.premiseName);
+            if (bKey && bKey !== mainPremiseNorm && !branchesMap.has(bKey)) {
+              branchesMap.set(bKey, {
+                ...b,
+                id: b.id || `br-${bKey}`,
+                operationalStatus: b.operationalStatus || 'operating'
+              });
+            }
+          });
+        }
+      }
+    });
+
+    return Array.from(branchesMap.values());
+  }, [formData.dboName, selectedClient, formData.premiseName, clients]);
+
+  // When branches are identified for this DBO and user hasn't made an explicit choice, auto-select yes-has branches
+  useEffect(() => {
+    if (identifiedBranches.length > 0 && dboHasBranches === null) {
+      setDboHasBranches(true);
+    }
+  }, [identifiedBranches.length, dboHasBranches]);
+
   const [returnsData, setReturnsData] = useState<ClientReturn[]>([]);
   const [activeAuditTool, setActiveAuditTool] = useState<'checklist' | 'exceptions' | 'all'>('all');
 
@@ -2788,39 +2859,47 @@ export function DataValidationModule() {
 
   const handlePremiseModeChange = (mode: string) => {
     setValidationPremiseMode(mode);
-    if (!selectedClient) return;
+
+    // If a branch exists and is selected: automatically select the Yes — Has Branches option
+    if (mode.startsWith('branch-') || mode === 'new') {
+      setDboHasBranches(true);
+    }
 
     if (mode === 'main') {
-      const clientExpiry = formatToYYYYMMDD((selectedClient as any).expiryDate || (selectedClient as any).expiry_date || '');
+      const clientExpiry = formatToYYYYMMDD((selectedClient as any)?.expiryDate || (selectedClient as any)?.expiry_date || '');
       // Revert form fields to main client profile
       setFormData(prev => ({
         ...prev,
-        premiseName: selectedClient.premiseName || '',
-        permitNo: selectedClient.permitNumber || (selectedClient as any).permit_number || '',
-        category: selectedClient.premiseCategory || 'Milk Bar',
-        location: selectedClient.location || '',
-        county: toSentenceCase(selectedClient.county || 'Kericho'),
-        expiryDate: clientExpiry
+        premiseName: selectedClient?.premiseName || prev.premiseName,
+        permitNo: selectedClient?.permitNumber || (selectedClient as any)?.permit_number || prev.permitNo,
+        category: selectedClient?.premiseCategory || prev.category || 'Milk Bar',
+        location: selectedClient?.location || prev.location,
+        county: toSentenceCase(selectedClient?.county || prev.county || 'Kericho'),
+        expiryDate: clientExpiry || prev.expiryDate
       }));
     } else if (mode.startsWith('branch-')) {
-      // Find branch
       const branchId = mode.replace('branch-', '');
-      const branch = (selectedClient.branches || []).find(b => b.id === branchId);
+      // Find branch in identifiedBranches or selectedClient.branches
+      const branch = identifiedBranches.find(b => b.id === branchId || `branch-${b.id}` === mode) ||
+                     (selectedClient?.branches || []).find(b => b.id === branchId);
       if (branch) {
+        setDboHasBranches(true);
         setFormData(prev => ({
           ...prev,
           premiseName: branch.premiseName,
-          permitNo: branch.permitNumber,
-          category: branch.premiseCategory,
-          location: branch.location,
-          county: toSentenceCase(branch.county || 'Kericho'),
+          permitNo: branch.permitNumber || prev.permitNo,
+          category: branch.premiseCategory || prev.category,
+          location: branch.location || prev.location,
+          county: toSentenceCase(branch.county || prev.county || 'Kericho'),
           expiryDate: formatToYYYYMMDD(branch.expiryDate || ''),
+          // Ensure that the local sales section does not record the quantity declared
           sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '' })),
           nonCompliance: []
         }));
       }
     } else if (mode === 'new') {
-      // It's a new branch, clear fields or keep them so they can edit
+      setDboHasBranches(true);
+      // It's a new branch, ensure local sales section does not record quantity declared
       setFormData(prev => ({
         ...prev,
         sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '' })),
@@ -3148,11 +3227,20 @@ export function DataValidationModule() {
     }));
 
     setSelectedClient(client);
-    setDboHasBranches(!!(client.branches && client.branches.length > 0));
     if (isBranch && branch) {
+      setDboHasBranches(true);
       setValidationPremiseMode(`branch-${branch.id}`);
+      setFormData(prev => ({
+        ...prev,
+        // Ensure that the local sales section does not record the quantity declared
+        sales: prev.sales.map(s => ({ ...s, qtyDeclared: '', underDeclared: '' })),
+        nonCompliance: []
+      }));
     } else {
       setValidationPremiseMode('main');
+      if (client.branches && client.branches.length > 0) {
+        setDboHasBranches(true);
+      }
     }
 
     setActiveRegistryField(null);
@@ -6696,18 +6784,43 @@ export function DataValidationModule() {
                           </button>
                         </div>
 
-                        {dboHasBranches === false && (
+                        {identifiedBranches.length > 0 && dboHasBranches !== true && (
+                          <div className="p-3 bg-amber-50/90 text-amber-900 border border-amber-200/90 rounded-xl text-[11px] font-semibold flex items-center justify-between gap-2 shadow-2xs">
+                            <div className="flex items-center gap-2">
+                              <GitBranch className="w-4 h-4 text-amber-600 shrink-0" />
+                              <span>
+                                <strong>Branch Identification:</strong> Found {identifiedBranches.length} branch {identifiedBranches.length === 1 ? 'premise' : 'premises'} sharing DBO name <em>'{formData.dboName || selectedClient?.clientName}'</em> with distinct premise names.
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleBranchPromptChange(true)}
+                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider shrink-0 transition-all cursor-pointer shadow-2xs"
+                            >
+                              Select Facility
+                            </button>
+                          </div>
+                        )}
+
+                        {dboHasBranches === false && identifiedBranches.length === 0 && (
                           <div className="p-2.5 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-xl text-[10px] font-bold flex items-center gap-2">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                             <span>Single Standalone Premise: Validating as a direct primary facility with standard monthly return declarations.</span>
                           </div>
                         )}
 
-                        {dboHasBranches === true && (
+                        {(dboHasBranches === true || identifiedBranches.length > 0) && (
                           <div className="pt-2 border-t border-slate-200/70 space-y-2.5">
-                            <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block">
-                              Select Which Facility Is Being Validated:
-                            </label>
+                            <div className="flex items-center justify-between">
+                              <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block">
+                                Select Which Facility Is Being Validated:
+                              </label>
+                              {identifiedBranches.length > 0 && (
+                                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                                  {identifiedBranches.length} {identifiedBranches.length === 1 ? 'Branch' : 'Branches'} Identified
+                                </span>
+                              )}
+                            </div>
                             
                             <div className="relative">
                               <select
@@ -6718,9 +6831,9 @@ export function DataValidationModule() {
                                 <option value="main">
                                   🏢 Main Premise / HQ ({selectedClient?.premiseName || formData.premiseName || 'Primary Facility'})
                                 </option>
-                                {selectedClient?.branches && selectedClient.branches.map(br => (
+                                {identifiedBranches.map(br => (
                                   <option key={br.id} value={`branch-${br.id}`}>
-                                    🏪 Branch: {br.premiseName} ({br.location}, Permit: {br.permitNumber})
+                                    🏪 Branch: {br.premiseName} ({br.location || 'Location N/A'}{br.permitNumber ? `, Permit: ${br.permitNumber}` : ''})
                                   </option>
                                 ))}
                                 <option value="new">➕ Register / Validate as a NEW Branch under this DBO</option>
@@ -7906,22 +8019,34 @@ export function DataValidationModule() {
                         <p className="text-sm text-gray-500 italic">Local sales section is locked/disabled for this entity.</p>
                       </div>
                     ) : (
-                      formData.sales.map((sale, idx) => {
-                        const isBranchValidation = dboHasBranches === true && validationPremiseMode !== 'main';
-                        const rowsToDisplay = isBranchValidation ? [
-                          { label: 'Witnessed Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                          { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
-                          { label: 'Projected Quantity', name: 'projectedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                          { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                        ] : [
-                          { label: 'Quantity Declared', name: 'qtyDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                          { label: 'Witnessed/Verified Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                          { label: 'Projected Quantity for Month', name: 'projectedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                          { label: 'Under Declared Volume (Auto)', name: 'underDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs', readOnly: true },
-                          { label: 'Buying Price (Per Records)', name: 'buyingPrice', unit: 'Kshs' },
-                          { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
-                          { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
-                        ];
+                      <div className="space-y-4">
+                        {(isBranchFacility || (dboHasBranches === true && validationPremiseMode !== 'main')) && (
+                          <div className="p-3.5 bg-blue-50/90 text-blue-900 border border-blue-200/90 rounded-2xl text-xs font-semibold flex items-center gap-3 shadow-2xs">
+                            <Info className="w-5 h-5 text-blue-600 shrink-0" />
+                            <div>
+                              <p className="font-black uppercase tracking-wider text-[11px] text-blue-950">Branch Facility Validation Active</p>
+                              <p className="text-[11px] text-blue-800 font-medium leading-relaxed">
+                                Local Sales <strong>Quantity Declared is not recorded</strong> for branch facilities. Local operational sales are witnessed and verified on-site; declared levy return quantities and payment reconciliations are consolidated at the Main Premise / HQ.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                        {formData.sales.map((sale, idx) => {
+                          const isBranchValidation = isBranchFacility || (dboHasBranches === true && validationPremiseMode !== 'main');
+                          const rowsToDisplay = isBranchValidation ? [
+                            { label: 'Witnessed Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                            { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
+                            { label: 'Projected Quantity', name: 'projectedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                            { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                          ] : [
+                            { label: 'Quantity Declared', name: 'qtyDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                            { label: 'Witnessed/Verified Quantity', name: 'verifiedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                            { label: 'Projected Quantity for Month', name: 'projectedQty', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                            { label: 'Under Declared Volume (Auto)', name: 'underDeclared', unit: globalUnit === 'L' ? 'Litres' : 'Kgs', readOnly: true },
+                            { label: 'Buying Price (Per Records)', name: 'buyingPrice', unit: 'Kshs' },
+                            { label: 'Selling Price (Per Records)', name: 'sellingPrice', unit: 'Kshs' },
+                            { label: 'Avg Volume per Day', name: 'avgVolPerDay', unit: globalUnit === 'L' ? 'Litres' : 'Kgs' },
+                          ];
 
                         return (
                         <div key={idx} className="p-6 bg-white rounded-2xl border border-gray-200 space-y-4 relative shadow-sm">
@@ -8118,8 +8243,10 @@ export function DataValidationModule() {
                         </div>
                       </div>
                     );
-                  }))}
+                  })}
                   </div>
+                )}
+              </div>
 
                   {/* Distribution Details Section (Mini Dairy and Cottage Industry only) */}
                   {(formData.category === 'Mini Dairy' || formData.category === 'Cottage Industry') && (
